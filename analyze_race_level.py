@@ -218,7 +218,7 @@ def load_and_process_data(input_path):
 
     # レース回数3回以上の馬のみを抽出
     race_counts = sec_df['馬名'].value_counts()
-    horses_with_3_or_more = race_counts[race_counts >= 3].index
+    horses_with_3_or_more = race_counts[race_counts >= 6].index
     sec_df = sec_df[sec_df['馬名'].isin(horses_with_3_or_more)]
     print(f"- レース回数3回以上の馬の総レコード数: {len(sec_df)}")
     
