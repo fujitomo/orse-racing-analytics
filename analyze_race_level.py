@@ -42,6 +42,75 @@ RACE_TYPE_CODES = {
     99: "その他"
 }
 
+def determine_grade_by_prize(row):
+    """
+    1着賞金からグレードを判定する関数
+    """
+    prize = row["1着賞金"] if pd.notna(row["1着賞金"]) else None
+    
+    # 賞金が欠損している場合はNoneを返す
+    if prize is None:
+        return None
+        
+    # 賞金によるグレード判定（単位：万円）
+    if prize >= 10000:  # 1億円以上
+        return 1  # G1相当
+    elif prize >= 7000:  # 7000万円以上
+        return 2  # G2相当
+    elif prize >= 4500:  # 4500万円以上
+        return 3  # G3相当
+    elif prize >= 3500:  # 3500万円以上
+        return 4  # 重賞相当
+    elif prize >= 2000:  # 2000万円以上
+        return 6  # L相当
+    else:
+        return 5  # 特別・一般
+
+def determine_grade(row):
+    """
+    レース名と種別コードからグレードを判定する
+    """
+    race_name = str(row["レース名"]) if pd.notna(row["レース名"]) else ""
+    race_type = row["種別"] if pd.notna(row["種別"]) else 99
+
+    # レース名からグレードを判定
+    if "G1" in race_name or "Ｇ１" in race_name:
+        return 1
+    elif "G2" in race_name or "Ｇ２" in race_name:
+        return 2
+    elif "G3" in race_name or "Ｇ３" in race_name:
+        return 3
+    elif "重賞" in race_name:
+        return 4
+    elif "L" in race_name or "Ｌ" in race_name:
+        return 6
+    
+    # 賞金からグレードを判定（1着賞金カラムが存在する場合）
+    if "1着賞金" in row.index:
+        prize_grade = determine_grade_by_prize(row)
+        if prize_grade is not None:
+            return prize_grade
+    
+    # 種別コードに基づく判定
+    if race_type in [11, 12]:  # 2歳・3歳戦
+        return 5  # 特別
+    elif race_type in [13, 14]:  # 3歳以上・4歳以上
+        if "特別" in race_name:
+            return 5
+        else:
+            return 5  # デフォルトは特別扱い
+    elif race_type == 20:  # 障害
+        if "J.G1" in race_name:
+            return 1
+        elif "J.G2" in race_name:
+            return 2
+        elif "J.G3" in race_name:
+            return 3
+        else:
+            return 5
+    else:  # その他
+        return 5
+
 def load_and_process_data(input_path):
     """
     CSVファイルを読み込んで処理します。
@@ -51,46 +120,6 @@ def load_and_process_data(input_path):
     sec_dfs = []
     total_files = 0
     processed_files = 0
-
-    # 種別からグレードを判定する関数（グレード列が存在しない場合のバックアップ）
-    def determine_grade(row):
-        """
-        レース名と種別コードからグレードを判定する
-        """
-        race_name = str(row["レース名"]) if pd.notna(row["レース名"]) else ""
-        race_type = row["種別"] if pd.notna(row["種別"]) else 99
-
-        # レース名からグレードを判定
-        if "G1" in race_name or "Ｇ１" in race_name:
-            return 1
-        elif "G2" in race_name or "Ｇ２" in race_name:
-            return 2
-        elif "G3" in race_name or "Ｇ３" in race_name:
-            return 3
-        elif "重賞" in race_name:
-            return 4
-        elif "L" in race_name or "Ｌ" in race_name:
-            return 6
-        
-        # 種別コードに基づく判定
-        if race_type in [11, 12]:  # 2歳・3歳戦
-            return 5  # 特別
-        elif race_type in [13, 14]:  # 3歳以上・4歳以上
-            if "特別" in race_name:
-                return 5
-            else:
-                return 5  # デフォルトは特別扱い
-        elif race_type == 20:  # 障害
-            if "J.G1" in race_name:
-                return 1
-            elif "J.G2" in race_name:
-                return 2
-            elif "J.G3" in race_name:
-                return 3
-            else:
-                return 5
-        else:  # その他
-            return 5
 
     if input_path.is_file():
         # 単一のCSVファイルの場合
@@ -111,10 +140,6 @@ def load_and_process_data(input_path):
                     # マッピング前の値の確認
                     print(f"マッピング前の芝ダ障害コードの分布:\n{df['芝ダ障害コード'].value_counts()}")
                     
-                    # 芝レースのみをフィルタリング
-                    df = df[df["芝ダ障害コード"] == "芝"]
-                    print(f"芝レースの数: {len(df)}")
-                    
                     if len(df) > 0:
                         sec_dfs.append(df)
                         processed_files += 1
@@ -122,12 +147,12 @@ def load_and_process_data(input_path):
                 print(f"エラー - ファイル {input_path.name} の処理中: {str(e)}")
     elif input_path.is_dir():
         # ディレクトリ内のすべてのCSVファイルを検索
-        csv_files = list(input_path.rglob("*_formatted.csv"))
+        csv_files = list(input_path.glob("**/*.csv"))  # サブディレクトリも含めて検索
         total_files = len(csv_files)
         print(f"\n検出されたCSVファイル数: {total_files}")
         
         if total_files == 0:
-            raise ValueError(f"指定されたディレクトリ '{input_path}' に_formatted.csvファイルが見つかりません。")
+            raise ValueError(f"指定されたディレクトリ '{input_path}' にCSVファイルが見つかりません。")
         
         # 各ファイルを処理
         for file in csv_files:
@@ -140,6 +165,12 @@ def load_and_process_data(input_path):
                 # データの基本チェック
                 if len(df) == 0:
                     print(f"警告: {file.name} は空のファイルです")
+                    continue
+                
+                # 必要なカラムが存在するかチェック
+                required_columns = ["芝ダ障害コード", "馬名", "着順"]
+                if not all(col in df.columns for col in required_columns):
+                    print(f"警告: {file.name} に必要なカラムが不足しています")
                     continue
                 
                 # デバッグ情報の表示
@@ -156,7 +187,7 @@ def load_and_process_data(input_path):
                 if len(df) > 0:
                     required_columns = [
                         "場コード", "年", "回", "日", "R", "馬名", "距離", "着順",
-                        "レース名", "種別", "芝ダ障害コード", "馬番", "騎手名", "調教師名", "グレード"
+                        "レース名", "種別", "芝ダ障害コード", "馬番", "騎手名", "調教師名", "グレード", "1着賞金"
                     ]
                     
                     missing_cols = [col for col in required_columns if col not in df.columns]
@@ -184,11 +215,17 @@ def load_and_process_data(input_path):
     # すべてのデータフレームを結合
     sec_df = pd.concat(sec_dfs, ignore_index=True)
     print(f"- 総レコード数: {len(sec_df)}")
+
+    # レース回数3回以上の馬のみを抽出
+    race_counts = sec_df['馬名'].value_counts()
+    horses_with_3_or_more = race_counts[race_counts >= 3].index
+    sec_df = sec_df[sec_df['馬名'].isin(horses_with_3_or_more)]
+    print(f"- レース回数3回以上の馬の総レコード数: {len(sec_df)}")
     
     # 必要な列の抽出
     required_columns = [
         "場コード", "年", "回", "日", "R", "馬名", "距離", "着順",
-        "レース名", "種別", "芝ダ障害コード", "馬番", "騎手名", "調教師名", "グレード"
+        "レース名", "種別", "芝ダ障害コード", "馬番", "騎手名", "調教師名", "グレード", "1着賞金"
     ]
     sec_df = sec_df[required_columns]
     
@@ -209,11 +246,16 @@ def load_and_process_data(input_path):
             print(f"- {col}: {count}件")
             # グレードの欠損値を種別とレース名から補完
             if col == "グレード":
-                print("グレードの欠損値をレース名と種別から補完します")
+                print("グレードの欠損値をレース名、1着賞金、種別から補完します")
                 mask = sec_df["グレード"].isnull()
                 if mask.any():
                     print(f"グレードの欠損値: {mask.sum()}件")
                     sec_df.loc[mask, "グレード"] = sec_df[mask].apply(determine_grade, axis=1)
+                    
+                    # 補完後の確認
+                    remaining_nulls = sec_df["グレード"].isnull().sum()
+                    if remaining_nulls > 0:
+                        print(f"補完後も残っているグレードの欠損値: {remaining_nulls}件")
     
     return sec_df
 
@@ -284,12 +326,15 @@ def analyze_win_rates(df):
     # カラム名の整理
     horse_stats.columns = ["馬名", "最高レベル", "平均レベル", "勝利数", "複勝数", "出走回数", "主戦グレード"]
     
+    # レース回数が3回以上の馬のみをフィルタリング
+    horse_stats = horse_stats[horse_stats["出走回数"] >= 6]
+    
     # 勝率と複勝率の計算
     horse_stats["win_rate"] = horse_stats["勝利数"] / horse_stats["出走回数"]
     horse_stats["place_rate"] = horse_stats["複勝数"] / horse_stats["出走回数"]
     
-    # グレード別の統計
-    grade_stats = df.groupby("グレード").agg({
+    # グレード別の統計（フィルタリング後のデータを使用）
+    grade_stats = df[df["馬名"].isin(horse_stats["馬名"])].groupby("グレード").agg({
         "is_win": ["mean", "count"],
         "is_placed": "mean",
         "race_level": ["mean", "std"]
@@ -359,170 +404,151 @@ def visualize_results(horse_stats, grade_stats, output_dir):
     plt.savefig(output_dir / "grade_level_analysis.png", dpi=300, bbox_inches='tight')
     plt.close()
 
-def perform_regression_analysis(df):
-    """
-    重回帰分析を実行します。
-    """
-    # 説明変数の準備
-    features = ['距離', '馬番']
-    # ダミー変数の作成
-    df_dummy = pd.get_dummies(df, columns=['芝ダ障害コード', '種別'])
+    # 4. 外れ値の確認（レースレベル別）
+    plt.figure(figsize=(15, 10))
     
-    # 説明変数の選択
-    X = df_dummy[[col for col in df_dummy.columns if 
-                  col.startswith(('距離', '馬番', '芝ダ障害コード_', '種別_'))]].copy()
-    y = df_dummy['着順']
+    # サブプロット1: 箱ひげ図（外れ値あり）
+    plt.subplot(2, 1, 1)
+    horse_stats['レースレベル区分'] = np.round(horse_stats['最高レベル']).astype(int)
+    sns.boxplot(
+        data=horse_stats,
+        x='レースレベル区分',
+        y='win_rate',
+        color='lightblue',
+        showfliers=True  # 外れ値を表示
+    )
+    plt.title("レースレベル別の勝率分布（外れ値を含む）")
+    plt.xlabel("最高レースレベル")
+    plt.ylabel("勝率")
+    plt.grid(True, alpha=0.3)
 
-    # 欠損値の処理
-    X = X.fillna(X.mean())
-    y = y.fillna(y.mean())
+    # サブプロット2: バイオリンプロット
+    plt.subplot(2, 1, 2)
+    sns.violinplot(
+        data=horse_stats,
+        x='レースレベル区分',
+        y='win_rate',
+        color='lightgreen'
+    )
+    plt.title("レースレベル別の勝率分布（確率密度）")
+    plt.xlabel("最高レースレベル")
+    plt.ylabel("勝率")
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / "race_level_outliers.png", dpi=300, bbox_inches='tight')
+    plt.close()
 
-    # データの分割
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    # 5. 外れ値の確認（グレード別）
+    plt.figure(figsize=(15, 10))
+    
+    # サブプロット1: 箱ひげ図（外れ値あり）
+    plt.subplot(2, 1, 1)
+    sns.boxplot(
+        data=horse_stats,
+        x='主戦グレード',
+        y='win_rate',
+        color='lightblue',
+        showfliers=True  # 外れ値を表示
+    )
+    plt.title("グレード別の勝率分布（外れ値を含む）")
+    plt.xlabel("主戦グレード")
+    plt.ylabel("勝率")
+    plt.xticks(range(len(GRADE_LEVELS)), [GRADE_LEVELS[g]['name'] for g in sorted(GRADE_LEVELS.keys())])
+    plt.grid(True, alpha=0.3)
 
-    # スケーリング
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
+    # サブプロット2: バイオリンプロット
+    plt.subplot(2, 1, 2)
+    sns.violinplot(
+        data=horse_stats,
+        x='主戦グレード',
+        y='win_rate',
+        color='lightgreen'
+    )
+    plt.title("グレード別の勝率分布（確率密度）")
+    plt.xlabel("主戦グレード")
+    plt.ylabel("勝率")
+    plt.xticks(range(len(GRADE_LEVELS)), [GRADE_LEVELS[g]['name'] for g in sorted(GRADE_LEVELS.keys())])
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / "grade_outliers.png", dpi=300, bbox_inches='tight')
+    plt.close()
 
-    # モデルの学習
+    # 6. 外れ値の詳細情報
+    # 各レースレベル区分での外れ値を特定
+    outliers_info = []
+    for level in horse_stats['レースレベル区分'].unique():
+        level_data = horse_stats[horse_stats['レースレベル区分'] == level]['win_rate']
+        Q1 = level_data.quantile(0.25)
+        Q3 = level_data.quantile(0.75)
+        IQR = Q3 - Q1
+        outliers = horse_stats[
+            (horse_stats['レースレベル区分'] == level) & 
+            ((horse_stats['win_rate'] < (Q1 - 1.5 * IQR)) | 
+             (horse_stats['win_rate'] > (Q3 + 1.5 * IQR)))
+        ]
+        if not outliers.empty:
+            outliers_info.append({
+                'レースレベル': level,
+                '外れ値の数': len(outliers),
+                '最小外れ値': outliers['win_rate'].min(),
+                '最大外れ値': outliers['win_rate'].max(),
+                'Q1': Q1,
+                'Q3': Q3,
+                'IQR': IQR
+            })
+    
+    # 外れ値情報をDataFrameに変換してCSVに保存
+    if outliers_info:
+        outliers_df = pd.DataFrame(outliers_info)
+        outliers_df.to_csv(output_dir / "outliers_analysis.csv", index=False, encoding="utf-8")
+
+def perform_correlation_analysis(df, horse_stats):
+    """
+    勝率とレースレベルの相関分析を行います。
+    """
+    # 相関係数の計算
+    correlation = np.corrcoef(horse_stats['最高レベル'], horse_stats['win_rate'])[0, 1]
+    
+    # 単回帰分析
+    X = horse_stats['最高レベル'].values.reshape(-1, 1)
+    y = horse_stats['win_rate'].values
+    
+    # 線形回帰モデルの作成と学習
     model = LinearRegression()
-    model.fit(X_train_scaled, y_train)
-
-    # 予測と評価
-    y_pred = model.predict(X_test_scaled)
-    r2 = r2_score(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-
-    # 係数の取得
-    coef_df = pd.DataFrame({
-        'feature': X.columns,
-        'coefficient': model.coef_
-    }).sort_values('coefficient', ascending=False)
-
-    return coef_df, r2, rmse
-
-def perform_multivariate_analysis(df):
-    """
-    多変量解析を実行します。
-    """
-    # 相関分析用のデータ準備
-    numeric_cols = ['距離', '着順', '馬番', 'race_level']
-    correlation_data = df[numeric_cols].copy()
+    model.fit(X, y)
     
-    # 相関行列の計算
-    correlation_matrix = correlation_data.corr()
+    # R2スコアの計算
+    r2 = r2_score(y, model.predict(X))
     
-    # 基本統計量の計算
-    descriptive_stats = correlation_data.describe()
+    return correlation, model, r2
+
+def visualize_correlation_results(horse_stats, correlation, model, r2, output_dir):
+    """
+    相関分析の結果を可視化します。
+    """
+    plt.figure(figsize=(15, 8))
     
-    return correlation_matrix, descriptive_stats
-
-def visualize_multivariate_results(correlation_matrix, coef_df, r2, rmse, output_dir):
-    """
-    多変量解析の結果を可視化します。
-    """
-    # 相関行列のヒートマップ
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', center=0)
-    plt.title('変数間の相関行列')
-    plt.tight_layout()
-    plt.savefig(output_dir / 'correlation_matrix.png', dpi=300, bbox_inches='tight')
-    plt.close()
-
-    # 回帰係数のプロット
-    plt.figure(figsize=(12, 6))
-    sns.barplot(data=coef_df.head(10), x='coefficient', y='feature')
-    plt.title(f'重回帰分析の係数（上位10項目）\nR² = {r2:.3f}, RMSE = {rmse:.3f}')
-    plt.xlabel('係数')
-    plt.ylabel('特徴量')
-    plt.tight_layout()
-    plt.savefig(output_dir / 'regression_coefficients.png', dpi=300, bbox_inches='tight')
-    plt.close()
-
-def perform_logistic_regression(df):
-    """
-    ロジスティック回帰による勝利予測を実行します。
-    """
-    # 説明変数の準備
-    features = ['距離', '馬番']
+    # 散布図
+    scatter = plt.scatter(horse_stats["最高レベル"], horse_stats["win_rate"], 
+                         s=horse_stats["出走回数"]*20, alpha=0.5,
+                         c=horse_stats["主戦グレード"], cmap='viridis')
     
-    # 目的変数（1:勝利, 0:非勝利）
-    y = (df['着順'] == 1).astype(int)
+    # 回帰直線
+    X_plot = np.linspace(horse_stats["最高レベル"].min(), horse_stats["最高レベル"].max(), 100).reshape(-1, 1)
+    y_plot = model.predict(X_plot)
+    plt.plot(X_plot, y_plot, color='red', linestyle='--', 
+             label=f'回帰直線 (R² = {r2:.3f})')
     
-    # 説明変数の選択
-    X = df[features].copy()
-
-    # データの分割
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    # スケーリング
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-
-    # モデルの学習
-    model = LogisticRegression(random_state=42)
-    model.fit(X_train_scaled, y_train)
-
-    # 予測
-    y_pred = model.predict(X_test_scaled)
-    y_pred_proba = model.predict_proba(X_test_scaled)[:, 1]
-
-    # 評価指標の計算
-    accuracy = accuracy_score(y_test, y_pred)
-    conf_matrix = confusion_matrix(y_test, y_pred)
-    class_report = classification_report(y_test, y_pred)
-
-    # 係数の取得
-    coef_df = pd.DataFrame({
-        'feature': features,
-        'coefficient': model.coef_[0]
-    }).sort_values('coefficient', ascending=False)
-
-    return coef_df, accuracy, conf_matrix, class_report, y_test, y_pred_proba
-
-def visualize_logistic_results(coef_df, conf_matrix, y_test, y_pred_proba, output_dir):
-    """
-    ロジスティック回帰の結果を可視化します。
-    """
-    # 1. 係数のプロット
-    plt.figure(figsize=(10, 6))
-    sns.barplot(data=coef_df, x='coefficient', y='feature')
-    plt.title('ロジスティック回帰の係数')
-    plt.xlabel('係数')
-    plt.ylabel('特徴量')
-    plt.tight_layout()
-    plt.savefig(output_dir / 'logistic_coefficients.png', dpi=300, bbox_inches='tight')
-    plt.close()
-
-    # 2. 混同行列のヒートマップ
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues')
-    plt.title('混同行列')
-    plt.xlabel('予測値')
-    plt.ylabel('実際の値')
-    plt.tight_layout()
-    plt.savefig(output_dir / 'confusion_matrix.png', dpi=300, bbox_inches='tight')
-    plt.close()
-
-    # 3. ROC曲線
-    from sklearn.metrics import roc_curve, auc
-    fpr, tpr, _ = roc_curve(y_test, y_pred_proba)
-    roc_auc = auc(fpr, tpr)
-
-    plt.figure(figsize=(8, 6))
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC曲線 (AUC = {roc_auc:.2f})')
-    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('偽陽性率')
-    plt.ylabel('真陽性率')
-    plt.title('ROC曲線')
-    plt.legend(loc="lower right")
+    plt.title(f"レースレベルと勝率の関係\n相関係数: {correlation:.3f}")
+    plt.xlabel("最高レースレベル")
+    plt.ylabel("勝率")
+    plt.colorbar(scatter, label="主戦グレード")
+    plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(output_dir / 'roc_curve.png', dpi=300, bbox_inches='tight')
+    plt.savefig(output_dir / "race_level_correlation.png", dpi=300, bbox_inches='tight')
     plt.close()
 
 def main():
@@ -556,50 +582,37 @@ def main():
     # 勝率の分析
     horse_stats, grade_stats = analyze_win_rates(df)
     
-    # 重回帰分析の実行
-    coef_df, r2, rmse = perform_regression_analysis(df)
-    
-    # 多変量解析の実行
-    correlation_matrix, descriptive_stats = perform_multivariate_analysis(df)
-    
-    # ロジスティック回帰分析の実行
-    log_coef_df, accuracy, conf_matrix, class_report, y_test, y_pred_proba = perform_logistic_regression(df)
+    # 相関分析の実行
+    correlation, model, r2 = perform_correlation_analysis(df, horse_stats)
     
     # 結果の可視化
     visualize_results(horse_stats, grade_stats, output_dir)
-    visualize_multivariate_results(correlation_matrix, coef_df, r2, rmse, output_dir)
-    visualize_logistic_results(log_coef_df, conf_matrix, y_test, y_pred_proba, output_dir)
+    visualize_correlation_results(horse_stats, correlation, model, r2, output_dir)
     
     # 結果の保存
     horse_stats.to_csv(output_dir / f"horse_stats_turf_{date_str}.csv", index=False, encoding="utf-8")
     grade_stats.to_csv(output_dir / f"grade_stats_turf_{date_str}.csv", index=False, encoding="utf-8")
-    coef_df.to_csv(output_dir / f"regression_coefficients_turf_{date_str}.csv", index=False, encoding="utf-8")
-    correlation_matrix.to_csv(output_dir / f"correlation_matrix_turf_{date_str}.csv", encoding="utf-8")
-    descriptive_stats.to_csv(output_dir / f"descriptive_stats_turf_{date_str}.csv", encoding="utf-8")
-    log_coef_df.to_csv(output_dir / f"logistic_coefficients_turf_{date_str}.csv", index=False, encoding="utf-8")
+    
+    # 相関分析結果の保存
+    correlation_results = pd.DataFrame({
+        '分析項目': ['相関係数', '決定係数', '回帰係数', '切片'],
+        '値': [correlation, r2, model.coef_[0], model.intercept_]
+    })
+    correlation_results.to_csv(output_dir / f"correlation_analysis_turf_{date_str}.csv", 
+                             index=False, encoding="utf-8")
     
     print(f"\n芝レースの分析が完了しました。結果は {output_dir} に保存されています：")
     print(f"- {output_dir}/horse_stats_turf_{date_str}.csv: 馬ごとの統計")
     print(f"- {output_dir}/grade_stats_turf_{date_str}.csv: グレードごとの統計")
-    print(f"- {output_dir}/regression_coefficients_turf_{date_str}.csv: 重回帰分析の係数")
-    print(f"- {output_dir}/correlation_matrix_turf_{date_str}.csv: 相関行列")
-    print(f"- {output_dir}/descriptive_stats_turf_{date_str}.csv: 基本統計量")
+    print(f"- {output_dir}/correlation_analysis_turf_{date_str}.csv: 相関分析結果")
     print(f"- {output_dir}/grade_win_rate.png: グレード別勝率")
-    print(f"- {output_dir}/race_level_analysis.png: レースレベルと勝率の散布図")
+    print(f"- {output_dir}/race_level_correlation.png: レースレベルと勝率の相関分析")
     print(f"- {output_dir}/grade_level_analysis.png: グレード別平均レースレベル")
-    print(f"- {output_dir}/correlation_matrix.png: 相関行列のヒートマップ")
-    print(f"- {output_dir}/regression_coefficients.png: 重回帰分析の係数プロット")
-    print(f"- {output_dir}/logistic_coefficients_turf_{date_str}.csv: ロジスティック回帰の係数")
-    print(f"- {output_dir}/logistic_coefficients.png: ロジスティック回帰の係数プロット")
-    print(f"- {output_dir}/confusion_matrix.png: 混同行列")
-    print(f"- {output_dir}/roc_curve.png: ROC曲線")
-    print(f"\n重回帰分析の結果：")
-    print(f"R² score: {r2:.3f}")
-    print(f"RMSE: {rmse:.3f}")
-    print("\nロジスティック回帰の結果：")
-    print(f"Accuracy: {accuracy:.3f}")
-    print("\n分類レポート:")
-    print(class_report)
+    print(f"\n相関分析の結果：")
+    print(f"相関係数: {correlation:.3f}")
+    print(f"決定係数 (R²): {r2:.3f}")
+    print(f"回帰係数: {model.coef_[0]:.3f}")
+    print(f"切片: {model.intercept_:.3f}")
 
 if __name__ == "__main__":
     main() 
