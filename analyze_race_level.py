@@ -42,6 +42,13 @@ RACE_TYPE_CODES = {
     99: "その他"
 }
 
+# レースレベル計算の重み付け定義
+RACE_LEVEL_WEIGHTS = {
+    "grade_weight": 0.45,      # グレードの重み
+    "prize_weight": 0.30,      # 賞金の重み
+    "field_weight": 0.25,      # 出走頭数の重み
+}
+
 def determine_grade_by_prize(row):
     """
     1着賞金からグレードを判定する関数
@@ -262,23 +269,38 @@ def load_and_process_data(input_path):
 def calculate_race_level(df):
     """
     より詳細なレースレベルの計算を行います。
-    賞金による重み付けを追加。
+    賞金、出走頭数を考慮。
     """
     # 基本設定
-    df["race_level"] = 0
+    df["race_level"] = 0.0
     df["is_win"] = df["着順"] == 1
     df["is_placed"] = df["着順"] <= 3
 
-    # 1. グレードによる重み付け
-    for grade, values in GRADE_LEVELS.items():
-        mask = df["グレード"] == grade
-        df.loc[mask, "race_level"] += values["base_level"]
-        # 勝利時のボーナス
-        df.loc[mask & df["is_win"], "race_level"] += values["weight"]
-        # 複勝時のボーナス（勝利の半分）
-        df.loc[mask & df["is_placed"] & ~df["is_win"], "race_level"] += values["weight"] * 0.5
+    # 1. グレードによる基本レベル計算
+    grade_level = calculate_grade_level(df)
+    
+    # 2. 賞金によるレベル計算
+    prize_level = calculate_prize_level(df)
+    
+    # 3. 出走頭数によるレベル計算
+    field_level = calculate_field_size_level(df)
+    
+    # 各要素の重み付け合算
+    df["race_level"] = (
+        grade_level * RACE_LEVEL_WEIGHTS["grade_weight"] +
+        prize_level * RACE_LEVEL_WEIGHTS["prize_weight"] +
+        field_level * RACE_LEVEL_WEIGHTS["field_weight"]
+    )
 
-    # 2. 距離帯による重み付け
+    # レースレベルの正規化（0-10のスケールに）
+    df["race_level"] = normalize_level(df["race_level"])
+    
+    # 連続好走のボーナス
+    df["prev_placed"] = df.groupby("馬名")["is_placed"].shift(1).fillna(False)
+    df["consecutive_placed"] = df.groupby("馬名")["prev_placed"].cumsum()
+    df.loc[df["consecutive_placed"] >= 2, "race_level"] += 0.5
+    
+    # 距離帯による補正
     distance_weights = {
         (0, 1400): 1.0,      # スプリント
         (1401, 1800): 1.2,   # マイル
@@ -290,24 +312,59 @@ def calculate_race_level(df):
     for (min_dist, max_dist), weight in distance_weights.items():
         mask = (df["距離"] >= min_dist) & (df["距離"] <= max_dist)
         df.loc[mask, "race_level"] *= weight
-
-    # 3. 2000m特別ボーナス（重要な距離帯）
+    
+    # 2000m特別ボーナス
     mask_2000m = (df["距離"] >= 1900) & (df["距離"] <= 2100)
     df.loc[mask_2000m, "race_level"] *= 1.2
-
-    # 4. 連続好走のボーナス
-    df["prev_placed"] = df.groupby("馬名")["is_placed"].shift(1).fillna(False)
-    df["consecutive_placed"] = df.groupby("馬名")["prev_placed"].cumsum()
-    df.loc[df["consecutive_placed"] >= 2, "race_level"] += 0.5
-
-    # 5. 馬番による補正（内枠有利を考慮）
-    df["post_position_factor"] = 1 - (df["馬番"] - 1) * 0.01
-    df["race_level"] *= df["post_position_factor"]
-
-    # 6. レースレベルの正規化（0-10のスケールに）
-    df["race_level"] = (df["race_level"] - df["race_level"].min()) / (df["race_level"].max() - df["race_level"].min()) * 10
-
+    
+    # 最終的な正規化
+    df["race_level"] = normalize_level(df["race_level"])
+    
     return df
+
+def calculate_grade_level(df):
+    """
+    グレードに基づくレベルを計算
+    """
+    grade_level = df["グレード"].map(lambda x: GRADE_LEVELS[x]["base_level"] if pd.notna(x) else 5.0)
+    
+    # 勝利・複勝のボーナス
+    for grade, values in GRADE_LEVELS.items():
+        mask = df["グレード"] == grade
+        # 勝利時のボーナス
+        grade_level.loc[mask & df["is_win"]] += values["weight"]
+        # 複勝時のボーナス
+        grade_level.loc[mask & df["is_placed"] & ~df["is_win"]] += values["weight"] * 0.5
+    
+    return normalize_level(grade_level)
+
+def calculate_prize_level(df):
+    """
+    賞金に基づくレベルを計算
+    """
+    # 賞金の対数変換でスケールを調整
+    prize_level = np.log1p(df["1着賞金"]) / np.log1p(df["1着賞金"].max()) * 10
+    return normalize_level(prize_level)
+
+def calculate_field_size_level(df):
+    """
+    出走頭数に基づくレベルを計算
+    """
+    # レースごとの出走頭数を計算
+    race_size = df.groupby(["年", "回", "日", "R"]).size()
+    field_level = df.apply(lambda x: race_size.get((x["年"], x["回"], x["日"], x["R"]), 0), axis=1)
+    
+    # 頭数が多いほどレベルが高くなるように調整
+    field_level = field_level / field_level.max() * 10
+    return normalize_level(field_level)
+
+def normalize_level(series):
+    """
+    数値を0-10のスケールに正規化
+    """
+    if series.max() == series.min():
+        return series.map(lambda x: 5.0)
+    return (series - series.min()) / (series.max() - series.min()) * 10
 
 def analyze_win_rates(df):
     """
@@ -507,22 +564,40 @@ def visualize_results(horse_stats, grade_stats, output_dir):
 def perform_correlation_analysis(df, horse_stats):
     """
     勝率とレースレベルの相関分析を行います。
+    欠損値を適切に処理します。
     """
-    # 相関係数の計算
-    correlation = np.corrcoef(horse_stats['最高レベル'], horse_stats['win_rate'])[0, 1]
-    
-    # 単回帰分析
-    X = horse_stats['最高レベル'].values.reshape(-1, 1)
-    y = horse_stats['win_rate'].values
-    
-    # 線形回帰モデルの作成と学習
-    model = LinearRegression()
-    model.fit(X, y)
-    
-    # R2スコアの計算
-    r2 = r2_score(y, model.predict(X))
-    
-    return correlation, model, r2
+    try:
+        # 欠損値の確認と出力
+        print("\n相関分析前の欠損値確認:")
+        print(horse_stats[['最高レベル', 'win_rate']].isnull().sum())
+        
+        # 欠損値を含む行を除外
+        analysis_data = horse_stats.dropna(subset=['最高レベル', 'win_rate'])
+        print(f"\n分析対象データ数: {len(analysis_data)}")
+        
+        if len(analysis_data) == 0:
+            print("警告: 有効なデータがありません")
+            return None, None, None
+        
+        # 相関係数の計算
+        correlation = np.corrcoef(analysis_data['最高レベル'], analysis_data['win_rate'])[0, 1]
+        
+        # 単回帰分析
+        X = analysis_data['最高レベル'].values.reshape(-1, 1)
+        y = analysis_data['win_rate'].values
+        
+        # 線形回帰モデルの作成と学習
+        model = LinearRegression()
+        model.fit(X, y)
+        
+        # R2スコアの計算
+        r2 = r2_score(y, model.predict(X))
+        
+        return correlation, model, r2
+        
+    except Exception as e:
+        print(f"\n相関分析中にエラーが発生しました: {str(e)}")
+        return None, None, None
 
 def visualize_correlation_results(horse_stats, correlation, model, r2, output_dir):
     """
@@ -550,6 +625,70 @@ def visualize_correlation_results(horse_stats, correlation, model, r2, output_di
     plt.tight_layout()
     plt.savefig(output_dir / "race_level_correlation.png", dpi=300, bbox_inches='tight')
     plt.close()
+
+def analyze_win_level_distribution(df, output_dir, date_str):
+    """
+    勝利時のレースレベルの分布を分析します。
+    """
+    # 勝利時のレースレベル分布
+    win_races = df[df["is_win"] == True]
+    
+    plt.figure(figsize=(15, 8))
+    sns.histplot(data=win_races, x="race_level", bins=30, kde=True)
+    plt.title("勝利時のレースレベル分布")
+    plt.xlabel("レースレベル")
+    plt.ylabel("勝利回数")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_dir / "win_level_distribution.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 基本統計量の計算
+    win_level_stats = win_races["race_level"].describe()
+    print("\n勝利時のレースレベル統計:")
+    print(win_level_stats)
+    win_level_stats.to_csv(output_dir / f"win_level_stats_{date_str}.csv", encoding="utf-8")
+
+def analyze_grade_win_trends(df, output_dir):
+    """
+    レースグレード別の勝率傾向を分析します。
+    """
+    # グレード別・年別の勝率推移
+    grade_year_stats = df.groupby(["グレード", "年"])["is_win"].agg(["count", "mean"]).reset_index()
+    grade_year_stats.columns = ["グレード", "年", "レース数", "勝率"]
+    
+    # グレード別の勝率トレンド
+    plt.figure(figsize=(15, 8))
+    for grade in sorted(df["グレード"].unique()):
+        grade_data = grade_year_stats[grade_year_stats["グレード"] == grade]
+        plt.plot(grade_data["年"], grade_data["勝率"], 
+                marker='o', label=f"{GRADE_LEVELS[grade]['name']}")
+    
+    plt.title("グレード別の勝率推移")
+    plt.xlabel("年")
+    plt.ylabel("勝率")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_dir / "grade_win_trends.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # グレード別の勝率分布（箱ひげ図）
+    plt.figure(figsize=(15, 8))
+    sns.boxplot(data=df, x="グレード", y="is_win", 
+                order=sorted(df["グレード"].unique()))
+    plt.title("グレード別の勝率分布")
+    plt.xlabel("グレード")
+    plt.ylabel("勝率")
+    plt.xticks(range(len(GRADE_LEVELS)), 
+               [GRADE_LEVELS[g]['name'] for g in sorted(GRADE_LEVELS.keys())])
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_dir / "grade_win_distribution.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 統計情報の保存
+    grade_year_stats.to_csv(output_dir / "grade_win_trends.csv", index=False, encoding="utf-8")
 
 def main():
     # コマンドライン引数の解析
@@ -582,24 +721,55 @@ def main():
     # 勝率の分析
     horse_stats, grade_stats = analyze_win_rates(df)
     
+    # 基本統計量の表示と保存
+    print("\n基本統計量:")
+    stats_columns = ['最高レベル', '平均レベル', '勝利数', '複勝数', '出走回数', 'win_rate', 'place_rate']
+    stats_df = horse_stats[stats_columns].describe()
+    print("\n馬ごとの統計量:")
+    print(stats_df)
+    
+    # グレード別の基本統計量
+    print("\nグレード別の統計量:")
+    grade_stats_columns = ['勝率', 'レース数', '複勝率', '平均レベル', 'レベル標準偏差']
+    grade_stats_df = grade_stats[grade_stats_columns].describe()
+    print(grade_stats_df)
+    
+    # 統計量をCSVに保存
+    stats_df.to_csv(output_dir / f"basic_stats_turf_{date_str}.csv", encoding="utf-8")
+    grade_stats_df.to_csv(output_dir / f"grade_basic_stats_turf_{date_str}.csv", encoding="utf-8")
+    
+    # 勝利時のレースレベル分布の分析
+    analyze_win_level_distribution(df, output_dir, date_str)
+    
+    # グレード別の勝率傾向の分析
+    analyze_grade_win_trends(df, output_dir)
+    
     # 相関分析の実行
     correlation, model, r2 = perform_correlation_analysis(df, horse_stats)
     
-    # 結果の可視化
-    visualize_results(horse_stats, grade_stats, output_dir)
-    visualize_correlation_results(horse_stats, correlation, model, r2, output_dir)
+    # 結果の可視化と保存
+    if correlation is not None and model is not None and r2 is not None:
+        visualize_correlation_results(horse_stats, correlation, model, r2, output_dir)
+        
+        # 相関分析結果の保存
+        correlation_results = pd.DataFrame({
+            '分析項目': ['相関係数', '決定係数', '回帰係数', '切片'],
+            '値': [correlation, r2, model.coef_[0], model.intercept_]
+        })
+        correlation_results.to_csv(output_dir / f"correlation_analysis_turf_{date_str}.csv", 
+                                index=False, encoding="utf-8")
+        
+        print(f"\n相関分析の結果：")
+        print(f"相関係数: {correlation:.3f}")
+        print(f"決定係数 (R²): {r2:.3f}")
+        print(f"回帰係数: {model.coef_[0]:.3f}")
+        print(f"切片: {model.intercept_:.3f}")
+    else:
+        print("\n警告: 相関分析を完了できませんでした。")
     
     # 結果の保存
     horse_stats.to_csv(output_dir / f"horse_stats_turf_{date_str}.csv", index=False, encoding="utf-8")
     grade_stats.to_csv(output_dir / f"grade_stats_turf_{date_str}.csv", index=False, encoding="utf-8")
-    
-    # 相関分析結果の保存
-    correlation_results = pd.DataFrame({
-        '分析項目': ['相関係数', '決定係数', '回帰係数', '切片'],
-        '値': [correlation, r2, model.coef_[0], model.intercept_]
-    })
-    correlation_results.to_csv(output_dir / f"correlation_analysis_turf_{date_str}.csv", 
-                             index=False, encoding="utf-8")
     
     print(f"\n芝レースの分析が完了しました。結果は {output_dir} に保存されています：")
     print(f"- {output_dir}/horse_stats_turf_{date_str}.csv: 馬ごとの統計")
@@ -608,11 +778,11 @@ def main():
     print(f"- {output_dir}/grade_win_rate.png: グレード別勝率")
     print(f"- {output_dir}/race_level_correlation.png: レースレベルと勝率の相関分析")
     print(f"- {output_dir}/grade_level_analysis.png: グレード別平均レースレベル")
-    print(f"\n相関分析の結果：")
-    print(f"相関係数: {correlation:.3f}")
-    print(f"決定係数 (R²): {r2:.3f}")
-    print(f"回帰係数: {model.coef_[0]:.3f}")
-    print(f"切片: {model.intercept_:.3f}")
+    print(f"- {output_dir}/win_level_distribution.png: 勝利時のレースレベル分布")
+    print(f"- {output_dir}/grade_win_trends.png: グレード別の勝率推移")
+    print(f"- {output_dir}/grade_win_distribution.png: グレード別の勝率分布")
+    print(f"- {output_dir}/win_level_stats_{date_str}.csv: 勝利時のレースレベル統計")
+    print(f"- {output_dir}/grade_win_trends.csv: グレード別の勝率推移データ")
 
 if __name__ == "__main__":
     main() 
