@@ -44,9 +44,8 @@ RACE_TYPE_CODES = {
 
 # レースレベル計算の重み付け定義
 RACE_LEVEL_WEIGHTS = {
-    "grade_weight": 0.45,      # グレードの重み
-    "prize_weight": 0.30,      # 賞金の重み
-    "field_weight": 0.25,      # 出走頭数の重み
+    "grade_weight": 0.60,      # グレードの重み
+    "prize_weight": 0.40,      # 賞金の重み
 }
 
 def determine_grade_by_prize(row):
@@ -229,10 +228,10 @@ def load_and_process_data(input_path):
     sec_df = sec_df[sec_df['馬名'].isin(horses_with_3_or_more)]
     print(f"- レース回数3回以上の馬の総レコード数: {len(sec_df)}")
     
-    # 必要な列の抽出
+    # 必要な列の抽出（騎手名と調教師名を除外）
     required_columns = [
         "場コード", "年", "回", "日", "R", "馬名", "距離", "着順",
-        "レース名", "種別", "芝ダ障害コード", "馬番", "騎手名", "調教師名", "グレード", "1着賞金"
+        "レース名", "種別", "芝ダ障害コード", "馬番", "グレード", "1着賞金"
     ]
     sec_df = sec_df[required_columns]
     
@@ -269,7 +268,7 @@ def load_and_process_data(input_path):
 def calculate_race_level(df):
     """
     より詳細なレースレベルの計算を行います。
-    賞金、出走頭数を考慮。
+    賞金、出走頭数などを考慮。
     """
     # 基本設定
     df["race_level"] = 0.0
@@ -282,31 +281,22 @@ def calculate_race_level(df):
     # 2. 賞金によるレベル計算
     prize_level = calculate_prize_level(df)
     
-    # 3. 出走頭数によるレベル計算
-    field_level = calculate_field_size_level(df)
-    
     # 各要素の重み付け合算
     df["race_level"] = (
         grade_level * RACE_LEVEL_WEIGHTS["grade_weight"] +
-        prize_level * RACE_LEVEL_WEIGHTS["prize_weight"] +
-        field_level * RACE_LEVEL_WEIGHTS["field_weight"]
+        prize_level * RACE_LEVEL_WEIGHTS["prize_weight"]
     )
 
     # レースレベルの正規化（0-10のスケールに）
     df["race_level"] = normalize_level(df["race_level"])
     
-    # 連続好走のボーナス
-    df["prev_placed"] = df.groupby("馬名")["is_placed"].shift(1).fillna(False)
-    df["consecutive_placed"] = df.groupby("馬名")["prev_placed"].cumsum()
-    df.loc[df["consecutive_placed"] >= 2, "race_level"] += 0.5
-    
     # 距離帯による補正
     distance_weights = {
         (0, 1400): 1.0,      # スプリント
-        (1401, 1800): 1.2,   # マイル
-        (1801, 2000): 1.5,   # 中距離
-        (2001, 2400): 1.8,   # 中長距離
-        (2401, 9999): 1.2,   # 長距離
+        (1401, 1800): 1.1,   # マイル
+        (1801, 2000): 1.3,   # 中距離
+        (2001, 2400): 1.4,   # 中長距離
+        (2401, 9999): 1.1,   # 長距離
     }
     
     for (min_dist, max_dist), weight in distance_weights.items():
@@ -315,7 +305,7 @@ def calculate_race_level(df):
     
     # 2000m特別ボーナス
     mask_2000m = (df["距離"] >= 1900) & (df["距離"] <= 2100)
-    df.loc[mask_2000m, "race_level"] *= 1.2
+    df.loc[mask_2000m, "race_level"] *= 1.1
     
     # 最終的な正規化
     df["race_level"] = normalize_level(df["race_level"])
@@ -346,18 +336,6 @@ def calculate_prize_level(df):
     prize_level = np.log1p(df["1着賞金"]) / np.log1p(df["1着賞金"].max()) * 10
     return normalize_level(prize_level)
 
-def calculate_field_size_level(df):
-    """
-    出走頭数に基づくレベルを計算
-    """
-    # レースごとの出走頭数を計算
-    race_size = df.groupby(["年", "回", "日", "R"]).size()
-    field_level = df.apply(lambda x: race_size.get((x["年"], x["回"], x["日"], x["R"]), 0), axis=1)
-    
-    # 頭数が多いほどレベルが高くなるように調整
-    field_level = field_level / field_level.max() * 10
-    return normalize_level(field_level)
-
 def normalize_level(series):
     """
     数値を0-10のスケールに正規化
@@ -371,13 +349,13 @@ def analyze_win_rates(df):
     より詳細な勝率分析を行います。
     グレード別の分析を追加。
     """
-    # 馬ごとの基本統計
+    # 馬ごとの基本統計（騎手と調教師の統計を除外）
     horse_stats = df.groupby("馬名").agg({
         "race_level": ["max", "mean"],
         "is_win": "sum",
         "is_placed": "sum",
         "着順": "count",
-        "グレード": lambda x: x.value_counts().index[0] if len(x) > 0 else None  # 最も多く出走したグレード
+        "グレード": lambda x: x.value_counts().index[0] if len(x) > 0 else None
     }).reset_index()
 
     # カラム名の整理
