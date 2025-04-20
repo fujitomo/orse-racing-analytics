@@ -324,11 +324,11 @@ def calculate_race_level(df):
     
     # 距離帯による補正（微調整）
     distance_weights = {
-        (0, 1400): 1.0,      # スプリント
-        (1401, 1800): 1.1,   # マイル
-        (1801, 2000): 1.25,  # 中距離（1.3から1.25に調整）
-        (2001, 2400): 1.35,  # 中長距離（1.4から1.35に調整）
-        (2401, 9999): 1.1,   # 長距離
+        (0, 1400): 1.02,     # スプリント（1.0から1.02に調整）
+        (1401, 1800): 1.12,  # マイル（1.1から1.12に調整）
+        (1801, 2000): 1.27,  # 中距離（1.25から1.27に調整）
+        (2001, 2400): 1.37,  # 中長距離（1.35から1.37に調整）
+        (2401, 9999): 1.12,  # 長距離（1.1から1.12に調整）
     }
     
     for (min_dist, max_dist), weight in distance_weights.items():
@@ -337,7 +337,7 @@ def calculate_race_level(df):
     
     # 2000m特別ボーナス（微調整）
     mask_2000m = (df["距離"] >= 1900) & (df["距離"] <= 2100)
-    df.loc[mask_2000m, "race_level"] *= 1.08  # 1.1から1.08に微調整
+    df.loc[mask_2000m, "race_level"] *= 1.09  # 1.08から1.09に微調整
     
     # 最終的な正規化
     df["race_level"] = normalize_level(df["race_level"])
@@ -381,7 +381,7 @@ def calculate_prize_level(df):
     賞金に基づくレベルを計算（微調整）
     """
     # 賞金の対数変換でスケールを調整
-    prize_level = np.log1p(df["1着賞金"]) / np.log1p(df["1着賞金"].max()) * 9.9  # 10から9.9に微調整
+    prize_level = np.log1p(df["1着賞金"]) / np.log1p(df["1着賞金"].max()) * 9.95  # 9.9から9.95に微調整
     return normalize_level(prize_level)
 
 def calculate_grade_level(df):
