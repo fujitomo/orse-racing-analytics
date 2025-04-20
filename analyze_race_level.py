@@ -17,12 +17,12 @@ plt.rcParams['font.size'] = 12  # フォントサイズ
 
 # グレード定義
 GRADE_LEVELS = {
-    1: {"name": "G1", "weight": 10.0, "base_level": 9},
-    2: {"name": "G2", "weight": 8.0, "base_level": 8},
-    3: {"name": "G3", "weight": 7.0, "base_level": 7},
-    4: {"name": "重賞", "weight": 6.0, "base_level": 6},
-    5: {"name": "特別", "weight": 5.0, "base_level": 5},
-    6: {"name": "L", "weight": 5.5, "base_level": 5.5}  # リステッド競走
+    1: {"name": "G1", "weight": 10.0, "base_level": 9},  # 元の設定に戻す
+    2: {"name": "G2", "weight": 8.0, "base_level": 8},   # 元の設定に戻す
+    3: {"name": "G3", "weight": 7.0, "base_level": 7},   # 元の設定に戻す
+    4: {"name": "重賞", "weight": 6.0, "base_level": 6}, # 元の設定に戻す
+    5: {"name": "特別", "weight": 5.0, "base_level": 5}, # 元の設定に戻す
+    6: {"name": "L", "weight": 5.5, "base_level": 5.5}   # 元の設定に戻す
 }
 
 # コース種別の定義
@@ -44,8 +44,40 @@ RACE_TYPE_CODES = {
 
 # レースレベル計算の重み付け定義
 RACE_LEVEL_WEIGHTS = {
-    "grade_weight": 0.60,      # グレードの重み
-    "prize_weight": 0.40,      # 賞金の重み
+    "grade_weight": 0.60,      # 元の設定に戻す
+    "prize_weight": 0.40,      # 元の設定に戻す
+    "field_size_weight": 0.10, # 出走頭数の重み
+    "competition_weight": 0.20, # 競争力の重み
+}
+
+# 季節要因の補正係数
+SEASONAL_FACTORS = {
+    1: 1.0,  # 1月
+    2: 1.0,  # 2月
+    3: 1.1,  # 3月（春のG1シーズン）
+    4: 1.1,  # 4月（春のG1シーズン）
+    5: 1.0,  # 5月
+    6: 1.0,  # 6月
+    7: 1.0,  # 7月
+    8: 1.0,  # 8月
+    9: 1.1,  # 9月（秋のG1シーズン）
+    10: 1.2, # 10月（秋のG1シーズン）
+    11: 1.1, # 11月（秋のG1シーズン）
+    12: 1.0, # 12月
+}
+
+# 競馬場の難易度係数
+COURSE_DIFFICULTY = {
+    "札幌": 1.0,
+    "函館": 1.0,
+    "福島": 1.0,
+    "新潟": 1.1,
+    "東京": 1.2,
+    "中山": 1.2,
+    "中京": 1.1,
+    "京都": 1.2,
+    "阪神": 1.2,
+    "小倉": 1.0,
 }
 
 def determine_grade_by_prize(row):
@@ -290,12 +322,12 @@ def calculate_race_level(df):
     # レースレベルの正規化（0-10のスケールに）
     df["race_level"] = normalize_level(df["race_level"])
     
-    # 距離帯による補正
+    # 距離帯による補正（微調整）
     distance_weights = {
         (0, 1400): 1.0,      # スプリント
         (1401, 1800): 1.1,   # マイル
-        (1801, 2000): 1.3,   # 中距離
-        (2001, 2400): 1.4,   # 中長距離
+        (1801, 2000): 1.25,  # 中距離（1.3から1.25に調整）
+        (2001, 2400): 1.35,  # 中長距離（1.4から1.35に調整）
         (2401, 9999): 1.1,   # 長距離
     }
     
@@ -303,14 +335,54 @@ def calculate_race_level(df):
         mask = (df["距離"] >= min_dist) & (df["距離"] <= max_dist)
         df.loc[mask, "race_level"] *= weight
     
-    # 2000m特別ボーナス
+    # 2000m特別ボーナス（微調整）
     mask_2000m = (df["距離"] >= 1900) & (df["距離"] <= 2100)
-    df.loc[mask_2000m, "race_level"] *= 1.1
+    df.loc[mask_2000m, "race_level"] *= 1.08  # 1.1から1.08に微調整
     
     # 最終的な正規化
     df["race_level"] = normalize_level(df["race_level"])
     
     return df
+
+def calculate_distance_factor(df):
+    """
+    距離に基づく補正係数を計算
+    """
+    # 距離を正規化
+    normalized_distance = (df["距離"] - df["距離"].min()) / (df["距離"].max() - df["距離"].min())
+    
+    # 距離帯ごとの補正係数を計算
+    distance_factor = np.ones(len(df))
+    
+    # スプリント（1400m以下）
+    sprint_mask = df["距離"] <= 1400
+    distance_factor[sprint_mask] = 1.0 + 0.1 * normalized_distance[sprint_mask]
+    
+    # マイル（1401-1800m）
+    mile_mask = (df["距離"] > 1400) & (df["距離"] <= 1800)
+    distance_factor[mile_mask] = 1.1 + 0.15 * normalized_distance[mile_mask]
+    
+    # 中距離（1801-2000m）
+    middle_mask = (df["距離"] > 1800) & (df["距離"] <= 2000)
+    distance_factor[middle_mask] = 1.3 + 0.2 * normalized_distance[middle_mask]
+    
+    # 中長距離（2001-2400m）
+    long_middle_mask = (df["距離"] > 2000) & (df["距離"] <= 2400)
+    distance_factor[long_middle_mask] = 1.4 + 0.15 * normalized_distance[long_middle_mask]
+    
+    # 長距離（2401m以上）
+    long_mask = df["距離"] > 2400
+    distance_factor[long_mask] = 1.1 + 0.1 * normalized_distance[long_mask]
+    
+    return distance_factor
+
+def calculate_prize_level(df):
+    """
+    賞金に基づくレベルを計算（微調整）
+    """
+    # 賞金の対数変換でスケールを調整
+    prize_level = np.log1p(df["1着賞金"]) / np.log1p(df["1着賞金"].max()) * 9.9  # 10から9.9に微調整
+    return normalize_level(prize_level)
 
 def calculate_grade_level(df):
     """
@@ -328,13 +400,28 @@ def calculate_grade_level(df):
     
     return normalize_level(grade_level)
 
-def calculate_prize_level(df):
+def calculate_field_size_level(df):
     """
-    賞金に基づくレベルを計算
+    出走頭数に基づくレベルを計算
     """
-    # 賞金の対数変換でスケールを調整
-    prize_level = np.log1p(df["1着賞金"]) / np.log1p(df["1着賞金"].max()) * 10
-    return normalize_level(prize_level)
+    # レースごとの出走頭数を計算
+    field_size = df.groupby(["場コード", "年", "回", "日", "R"])["馬番"].max()
+    field_size_level = field_size / field_size.max() * 10
+    return normalize_level(field_size_level)
+
+def calculate_competition_level(df):
+    """
+    レースの競争力（出走馬の平均レベル）を計算
+    """
+    # 馬ごとの平均レベルを計算
+    horse_levels = df.groupby("馬名")["race_level"].mean()
+    
+    # レースごとの出走馬の平均レベルを計算
+    race_competition = df.groupby(["場コード", "年", "回", "日", "R"])["馬名"].apply(
+        lambda x: horse_levels[x].mean()
+    )
+    
+    return normalize_level(race_competition)
 
 def normalize_level(series):
     """
