@@ -306,7 +306,7 @@ def calculate_race_level(df):
         (1401, 1800): 1.2,   # マイル
         (1801, 2000): 1.5,   # 中距離
         (2001, 2400): 1.8,   # 中長距離
-        (2401, 9999): 2.0,   # 長距離
+        (2401, 9999): 1.2,   # 長距離
     }
     
     for (min_dist, max_dist), weight in distance_weights.items():
