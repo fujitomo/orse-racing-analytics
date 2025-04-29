@@ -10,6 +10,19 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_squared_error, accuracy_score, classification_report, confusion_matrix
 from scipy import stats  # スピアマン相関用に追加
+from datetime import datetime
+from horse_racing.base.analyzer import AnalysisConfig
+from horse_racing.analyzers.race_level_analyzer import RaceLevelAnalyzer
+from horse_racing.data.loader import RaceDataLoader
+import logging
+
+# メインロガーの設定
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# データローダーのログレベルを調整
+loader_logger = logging.getLogger('horse_racing.data.loader')
+loader_logger.setLevel(logging.WARNING)
 
 # 日本語フォントの設定
 plt.rcParams['font.family'] = 'MS Gothic'  # Windows用
@@ -933,158 +946,71 @@ def visualize_logistic_regression_results(df, model, scaler, accuracy, metrics, 
     plt.savefig(output_dir / "logistic_regression_confusion_matrix.png", dpi=300, bbox_inches='tight')
     plt.close()
 
+def is_sed_file(file_path: str) -> bool:
+    """
+    ファイルパスがSEDファイルかどうかを判定します。
+    
+    Args:
+        file_path: ファイルパス
+    
+    Returns:
+        bool: SEDファイルの場合True
+    """
+    return Path(file_path).name.upper().startswith('SED')
+
 def main():
-    # コマンドライン引数の解析
-    parser = argparse.ArgumentParser(description='芝レースのレースレベルと勝率の分析を行います。')
-    parser.add_argument('input_path', help='入力CSVファイルのパス、またはCSVファイルを含むディレクトリのパス')
-    parser.add_argument('--output-dir', '-o', default='export/analysis',
-                      help='出力ディレクトリのパス（デフォルト: export/analysis）')
+    parser = argparse.ArgumentParser(description='競馬レース分析')
+    parser.add_argument('input_path', type=str, help='入力パス（ファイル、ディレクトリ、またはZIPファイル）')
+    parser.add_argument('--output-dir', type=str, default='export/analysis',
+                      help='出力ディレクトリ（デフォルト: export/analysis）')
+    parser.add_argument('--min-races', type=int, default=10,
+                      help='分析対象とする最小レース数（デフォルト: 10）')
+    parser.add_argument('--encoding', type=str, default='utf-8-sig',
+                      help='入力ファイルのエンコーディング（デフォルト: utf-8-sig）')
     args = parser.parse_args()
 
-    # データの読み込みと処理
-    df = load_and_process_data(args.input_path)
-    
-    # 入力ファイルから日付情報を取得
-    input_path = Path(args.input_path)
-    if input_path.is_file():
-        date_str = input_path.stem.split('_')[0][3:]  # SECyymmdd から yymmdd を抽出
-    else:
-        # ディレクトリの場合は現在の日付を使用
-        from datetime import datetime
-        date_str = datetime.now().strftime('%y%m%d')
-    
-    # 出力ディレクトリの設定
-    output_base = Path(args.output_dir)
-    output_dir = output_base / f"analysis_turf_{date_str}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # レースレベルの計算
-    df = calculate_race_level(df)
-    
-    # 勝率の分析
-    horse_stats, grade_stats = analyze_win_rates(df)
-    
-    # 基本統計量の表示と保存
-    print("\n基本統計量:")
-    stats_columns = ['最高レベル', '平均レベル', '勝利数', '複勝数', '出走回数', 'win_rate', 'place_rate']
-    stats_df = horse_stats[stats_columns].describe()
-    print("\n馬ごとの統計量:")
-    print(stats_df)
-    
-    # グレード別の基本統計量
-    print("\nグレード別の統計量:")
-    grade_stats_columns = ['勝率', 'レース数', '複勝率', '平均レベル', 'レベル標準偏差']
-    grade_stats_df = grade_stats[grade_stats_columns].describe()
-    print(grade_stats_df)
-    
-    # 統計量をCSVに保存
-    stats_df.to_csv(output_dir / f"basic_stats_turf_{date_str}.csv", encoding="utf-8")
-    grade_stats_df.to_csv(output_dir / f"grade_basic_stats_turf_{date_str}.csv", encoding="utf-8")
-    
-    # 勝利時のレースレベル分布の分析
-    analyze_win_level_distribution(df, output_dir, date_str)
-    
-    # グレード別の勝率傾向の分析
-    analyze_grade_win_trends(df, horse_stats, output_dir)
-    
-    # 相関分析の実行
-    correlation, model, r2 = perform_correlation_analysis(df, horse_stats)
-    
-    # スピアマン相関分析の実行
-    spearman_correlation, p_value, confidence_interval = perform_spearman_correlation_analysis(df, horse_stats)
-    
-    # ロジスティック回帰分析の実行
-    logistic_model, scaler, accuracy, metrics = perform_logistic_regression_analysis(df)
+    try:
+        # 出力ディレクトリの作成
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    # is_win_or_place列がdfに存在しない場合は追加
-    if 'is_win_or_place' not in df.columns:
-        df['is_win_or_place'] = df['着順'].apply(lambda x: 1 if x in [1, 2] else 0)
+        input_path = Path(args.input_path)
+        
+        # 入力パスの検証
+        if input_path.is_file() and not is_sed_file(input_path):
+            raise ValueError(f"指定されたファイルはSEDファイルではありません: {input_path}")
+        elif input_path.is_dir():
+            # ディレクトリ内にSEDファイルが存在するか確認
+            sed_files = [f for f in input_path.glob('**/*') if f.is_file() and is_sed_file(f)]
+            if not sed_files:
+                raise ValueError(f"指定されたディレクトリにSEDファイルが見つかりません: {input_path}")
+            logger.info(f"SEDファイルが {len(sed_files)} 件見つかりました")
 
-    # 結果の可視化と保存
-    if correlation is not None and model is not None and r2 is not None:
-        visualize_correlation_results(horse_stats, correlation, model, r2, output_dir)
+        # データローダーの初期化と読み込み
+        loader = RaceDataLoader(args.input_path, encoding=args.encoding)
+        date_str = loader.get_date_str(Path(args.input_path))
         
-        # 相関分析結果の保存
-        correlation_results = pd.DataFrame({
-            '分析項目': ['相関係数', '決定係数', '回帰係数', '切片'],
-            '値': [correlation, r2, float(np.ravel(model.coef_)[0]), float(np.ravel(model.intercept_)[0])]
-        })
-        correlation_results.to_csv(output_dir / f"correlation_analysis_turf_{date_str}.csv", 
-                                index=False, encoding="utf-8")
+        # データの読み込み（SEDファイルのみ）
+        df = loader.load()
         
-        print(f"\n相関分析の結果：")
-        print(f"相関係数: {correlation:.3f}")
-        print(f"決定係数 (R²): {r2:.3f}")
-        print(f"回帰係数: {float(np.ravel(model.coef_)[0]):.3f}")
-        print(f"切片: {float(np.ravel(model.intercept_)[0]):.3f}")
-    else:
-        print("\n警告: 相関分析を完了できませんでした。")
-    
-    # スピアマン相関分析の結果の可視化と保存
-    if spearman_correlation is not None and p_value is not None:
-        visualize_spearman_correlation_results(horse_stats, spearman_correlation, p_value, confidence_interval, output_dir)
-        
-        # スピアマン相関分析結果の保存
-        spearman_results = pd.DataFrame({
-            '分析項目': ['スピアマン相関係数', 'p値', '95%信頼区間下限', '95%信頼区間上限'],
-            '値': [spearman_correlation, p_value, 
-                  confidence_interval[0] if confidence_interval else None, 
-                  confidence_interval[1] if confidence_interval else None]
-        })
-        spearman_results.to_csv(output_dir / f"spearman_correlation_analysis_turf_{date_str}.csv", 
-                              index=False, encoding="utf-8")
-        
-        print(f"\nスピアマン相関分析の結果：")
-        print(f"スピアマン相関係数: {spearman_correlation:.3f}")
-        print(f"p値: {p_value:.3f}")
-        if confidence_interval:
-            print(f"95%信頼区間: [{confidence_interval[0]:.3f}, {confidence_interval[1]:.3f}]")
-    else:
-        print("\n警告: スピアマン相関分析を完了できませんでした。")
-    
-    # ロジスティック回帰分析の結果の可視化と保存
-    if logistic_model is not None and scaler is not None and accuracy is not None:
-        visualize_logistic_regression_results(df, logistic_model, scaler, accuracy, metrics, output_dir)
-        
-        # ロジスティック回帰分析結果の保存
-        logistic_results = pd.DataFrame({
-            '分析項目': ['精度', '回帰係数', '切片'],
-            '値': [accuracy, float(np.ravel(logistic_model.coef_)[0]), float(np.ravel(logistic_model.intercept_)[0])]
-        })
-        logistic_results.to_csv(output_dir / f"logistic_regression_analysis_turf_{date_str}.csv", 
-                              index=False, encoding="utf-8")
-        
-        print(f"\nロジスティック回帰分析の結果：")
-        print(f"精度: {accuracy:.3f}")
-        print(f"回帰係数: {float(np.ravel(logistic_model.coef_)[0]):.3f}")
-        print(f"切片: {float(np.ravel(logistic_model.intercept_)[0]):.3f}")
-        print("\n分類レポート:")
-        print(metrics[0])
-    else:
-        print("\n警告: ロジスティック回帰分析を完了できませんでした。")
-    
-    # 結果の保存
-    horse_stats.to_csv(output_dir / f"horse_stats_turf_{date_str}.csv", index=False, encoding="utf-8")
-    grade_stats.to_csv(output_dir / f"grade_stats_turf_{date_str}.csv", index=False, encoding="utf-8")
-    
-    print(f"\n芝レースの分析が完了しました。結果は {output_dir} に保存されています：")
-    print(f"- {output_dir}/horse_stats_turf_{date_str}.csv: 馬ごとの統計")
-    print(f"- {output_dir}/grade_stats_turf_{date_str}.csv: グレードごとの統計")
-    print(f"- {output_dir}/correlation_analysis_turf_{date_str}.csv: 相関分析結果")
-    print(f"- {output_dir}/spearman_correlation_analysis_turf_{date_str}.csv: スピアマン相関分析結果")
-    print(f"- {output_dir}/logistic_regression_analysis_turf_{date_str}.csv: ロジスティック回帰分析結果")
-    print(f"- {output_dir}/grade_win_rate.png: グレード別勝率")
-    print(f"- {output_dir}/race_level_correlation.png: レースレベルと勝率の相関分析")
-    print(f"- {output_dir}/race_level_spearman_correlation.png: レースレベルと勝率のスピアマン相関分析")
-    print(f"- {output_dir}/race_level_logistic_regression.png: レースレベルと勝率のロジスティック回帰分析")
-    print(f"- {output_dir}/logistic_regression_confusion_matrix.png: ロジスティック回帰の混同行列")
-    print(f"- {output_dir}/grade_level_analysis.png: グレード別平均レースレベル")
-    print(f"- {output_dir}/win_level_distribution.png: 勝利時のレースレベル分布")
-    print(f"- {output_dir}/race_level_trends.png: レースレベル別の勝率推移")
-    print(f"- {output_dir}/race_level_boxplot.png: レースレベル別の勝率分布（箱ひげ図）")
-    print(f"- {output_dir}/distance_level_heatmap.png: 距離別・レースレベル別の勝率ヒートマップ")
-    print(f"- {output_dir}/win_level_stats_{date_str}.csv: 勝利時のレースレベル統計")
-    print(f"- {output_dir}/race_level_trends.csv: レースレベル別の勝率推移データ")
+        # 分析設定の作成
+        config = AnalysisConfig(
+            input_path=args.input_path,
+            min_races=args.min_races,
+            output_dir=str(output_dir),
+            date_str=date_str
+        )
 
-if __name__ == "__main__":
+        # 分析の実行
+        analyzer = RaceLevelAnalyzer(config)
+        analyzer.df = df  # データフレームを直接設定
+        analyzer.run()
+
+        logger.info(f"分析が完了しました。結果は {output_dir} に保存されています。")
+
+    except Exception as e:
+        logger.error(f"エラーが発生しました: {str(e)}")
+        raise
+
+if __name__ == '__main__':
     main() 
