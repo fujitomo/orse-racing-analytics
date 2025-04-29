@@ -1,11 +1,14 @@
 from typing import Dict, Any, Optional
 import pandas as pd
 import numpy as np
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, LogisticRegression
 from scipy import stats
 from ..base.analyzer import BaseAnalyzer, AnalysisConfig
 from ..data.loader import RaceDataLoader
 from ..visualization.plotter import RacePlotter
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 
 class RaceLevelAnalyzer(BaseAnalyzer):
     """レースレベル分析クラス"""
@@ -94,6 +97,46 @@ class RaceLevelAnalyzer(BaseAnalyzer):
 
         return df
 
+    def _perform_logistic_regression_analysis(self) -> Dict[str, Any]:
+        """ロジスティック回帰分析を実行"""
+        df = self.df.copy()
+        df['is_win_or_place'] = df['着順'].apply(lambda x: 1 if x in [1, 2] else 0)
+        
+        # NA値と無限大値の処理
+        df['race_level'] = df['race_level'].fillna(0)
+        df['race_level'] = df['race_level'].replace([np.inf, -np.inf], df['race_level'].replace([np.inf, -np.inf], np.nan).max())
+        
+        X = df[['race_level']].values
+        y = df['is_win_or_place'].values
+        
+        # 標準化
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # データ分割
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_scaled, y, test_size=0.3, random_state=42, stratify=y
+        )
+        
+        # ロジスティック回帰（クラスバランス補正）
+        model = LogisticRegression(random_state=42, max_iter=1000, class_weight='balanced')
+        model.fit(X_train, y_train)
+        
+        # 予測と評価
+        y_pred = model.predict(X_test)
+        accuracy = accuracy_score(y_test, y_pred)
+        report = classification_report(y_test, y_pred)
+        conf_matrix = confusion_matrix(y_test, y_pred)
+        
+        return {
+            "model": model,
+            "scaler": scaler,
+            "accuracy": accuracy,
+            "report": report,
+            "conf_matrix": conf_matrix,
+            "data": df
+        }
+
     def analyze(self) -> Dict[str, Any]:
         """分析の実行"""
         # 馬ごとの基本統計
@@ -105,20 +148,25 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         # 相関分析
         correlation_stats = self._perform_correlation_analysis(horse_stats)
         
+        # ロジスティック回帰分析
+        logistic_stats = self._perform_logistic_regression_analysis()
+        
         return {
             "horse_stats": horse_stats,
             "grade_stats": grade_stats,
-            "correlation_stats": correlation_stats
+            "correlation_stats": correlation_stats,
+            "logistic_stats": logistic_stats
         }
 
     def visualize(self) -> None:
         """分析結果の可視化"""
-        if not self.stats:
+        if not hasattr(self, 'stats') or not self.stats:
             return
 
         horse_stats = self.stats["horse_stats"]
         grade_stats = self.stats["grade_stats"]
         correlation_stats = self.stats["correlation_stats"]
+        logistic_stats = self.stats.get("logistic_stats", {})
 
         # グレード別統計の可視化
         self.plotter.plot_grade_stats(grade_stats, self.GRADE_LEVELS)
@@ -126,30 +174,57 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         # 相関分析の可視化
         if correlation_stats:
             self.plotter.plot_correlation_analysis(
-                horse_stats,
-                correlation_stats["correlation"],
-                correlation_stats["model"],
-                correlation_stats["r2"],
-                "レースレベル"
+                data=horse_stats,
+                correlation=correlation_stats["correlation"],
+                model=correlation_stats["model"],
+                r2=correlation_stats["r2"],
+                feature_name="レースレベル"
             )
 
         # レースレベルの分布分析
-        self.plotter.plot_distribution_analysis(
-            self.df[self.df["is_win"]],
-            "race_level"
-        )
+        if "race_level" in self.df.columns:
+            self.plotter.plot_distribution_analysis(
+                data=self.df[self.df["is_win"]],
+                feature_name="race_level",
+                bins=30
+            )
 
         # トレンド分析
         level_year_stats = self._calculate_level_year_stats()
-        self.plotter.plot_trend_analysis(level_year_stats, "レースレベル")
+        if level_year_stats is not None:
+            self.plotter.plot_trend_analysis(
+                data=level_year_stats,
+                feature_name="レースレベル"
+            )
 
         # 距離とレースレベルのヒートマップ
         distance_level_pivot = self._calculate_distance_level_pivot()
-        self.plotter.plot_heatmap(
-            distance_level_pivot,
-            "距離別・レースレベル別の勝率ヒートマップ",
-            "distance_level_heatmap.png"
-        )
+        if distance_level_pivot is not None:
+            self.plotter.plot_heatmap(
+                pivot_table=distance_level_pivot,
+                title="距離別・レースレベル別の勝率ヒートマップ",
+                filename="distance_level_heatmap.png"
+            )
+
+        # ロジスティック回帰の可視化
+        if logistic_stats and 'data' in logistic_stats:
+            data = logistic_stats['data']
+            if 'race_level' in data.columns and 'is_win_or_place' in data.columns:
+                X = data['race_level'].values.reshape(-1, 1)
+                y = data['is_win_or_place'].values
+                y_pred_proba = logistic_stats['model'].predict_proba(
+                    logistic_stats['scaler'].transform(X)
+                )[:, 1]
+                y_pred = logistic_stats['model'].predict(
+                    logistic_stats['scaler'].transform(X)
+                )
+                self.plotter.plot_logistic_regression(
+                    X=data['race_level'].values,
+                    y=y,
+                    y_pred_proba=y_pred_proba,
+                    y_pred=y_pred,
+                    feature_name="race_level"
+                )
 
     def _determine_grade(self, row: pd.Series) -> int:
         """グレードの判定"""

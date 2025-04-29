@@ -5,6 +5,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
 import matplotlib as mpl
+from sklearn.metrics import confusion_matrix, classification_report
 
 class RacePlotter:
     """レース分析の可視化クラス"""
@@ -12,6 +13,7 @@ class RacePlotter:
     def __init__(self, output_dir: Path):
         self.output_dir = output_dir
         self._setup_style()
+        self.fig_size = (15, 10)
 
     def _setup_style(self) -> None:
         """プロットスタイルの設定"""
@@ -130,4 +132,139 @@ class RacePlotter:
         plt.title(title)
         plt.tight_layout()
 
-        self.save_plot(fig, filename) 
+        self.save_plot(fig, filename)
+
+    def plot_logistic_regression_curve(
+        self,
+        X,
+        y,
+        y_pred_proba,
+        feature_name: str,
+        title: str = "ロジスティック回帰分析"
+    ) -> None:
+        """
+        ロジスティック回帰の予測曲線を可視化します。
+        
+        Parameters:
+        -----------
+        X : array-like
+            説明変数
+        y : array-like
+            実際のクラスラベル
+        y_pred_proba : array-like
+            予測確率
+        feature_name : str
+            説明変数の名前（軸ラベルに使用）
+        title : str, optional
+            図のタイトル
+        """
+        # 散布図とロジスティック回帰曲線
+        fig = plt.figure(figsize=(15, 8))
+        plt.scatter(X, y, color='blue', alpha=0.5, label='実データ')
+        
+        # データをソートしてスムーズな曲線を描画
+        sort_idx = np.argsort(X)
+        plt.plot(X[sort_idx], y_pred_proba[sort_idx], color='red', label='回帰曲線')
+        
+        plt.xlabel(feature_name)
+        plt.ylabel('確率')
+        plt.title(f'{title}\n予測曲線')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        # プロットを保存
+        self.save_plot(fig, f"{feature_name}_logistic_regression_curve.png")
+
+    def plot_confusion_matrix(
+        self,
+        y,
+        y_pred,
+        feature_name: str,
+        title: str = "ロジスティック回帰分析"
+    ) -> None:
+        """
+        混同行列とクラス分類レポートを可視化します。
+        
+        Parameters:
+        -----------
+        y : array-like
+            実際のクラスラベル
+        y_pred : array-like
+            予測クラスラベル
+        feature_name : str
+            説明変数の名前（ファイル名に使用）
+        title : str, optional
+            図のタイトル
+        """
+        # 混同行列の計算
+        cm = confusion_matrix(y, y_pred)
+        
+        # 混同行列の可視化
+        fig = plt.figure(figsize=(12, 10))
+        gs = fig.add_gridspec(2, 1, height_ratios=[2, 1])
+        
+        # 混同行列のヒートマップ
+        ax1 = fig.add_subplot(gs[0])
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax1)
+        ax1.set_xlabel('予測クラス')
+        ax1.set_ylabel('実際のクラス')
+        ax1.set_title(f'{title}\n混同行列')
+        
+        # 分類レポート
+        ax2 = fig.add_subplot(gs[1])
+        report = classification_report(y, y_pred)
+        ax2.text(0.1, 0.1, report, family='monospace', size=10)
+        ax2.axis('off')
+        ax2.set_title('分類レポート')
+        
+        plt.tight_layout()
+        
+        # プロットを保存
+        self.save_plot(fig, f"{feature_name}_confusion_matrix.png")
+
+    def plot_logistic_regression(
+        self,
+        X,
+        y,
+        y_pred_proba,
+        y_pred,
+        feature_name: str,
+        title: str = "ロジスティック回帰分析"
+    ) -> None:
+        """
+        ロジスティック回帰分析の結果を2つの別々の図として可視化します。
+        1. 散布図とロジスティック回帰曲線
+        2. 混同行列と分類レポート
+        
+        Parameters:
+        -----------
+        X : array-like
+            説明変数
+        y : array-like
+            実際のクラスラベル
+        y_pred_proba : array-like
+            予測確率
+        y_pred : array-like
+            予測クラスラベル
+        feature_name : str
+            説明変数の名前（軸ラベルに使用）
+        title : str, optional
+            図全体のタイトル
+        """
+        # 予測曲線の可視化
+        self.plot_logistic_regression_curve(
+            X=X,
+            y=y,
+            y_pred_proba=y_pred_proba,
+            feature_name=feature_name,
+            title=title
+        )
+        
+        # 混同行列と分類レポートの可視化
+        self.plot_confusion_matrix(
+            y=y,
+            y_pred=y_pred,
+            feature_name=feature_name,
+            title=title
+        ) 

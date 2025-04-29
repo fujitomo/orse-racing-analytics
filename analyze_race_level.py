@@ -14,6 +14,7 @@ from datetime import datetime
 from horse_racing.base.analyzer import AnalysisConfig
 from horse_racing.analyzers.race_level_analyzer import RaceLevelAnalyzer
 from horse_racing.data.loader import RaceDataLoader
+from horse_racing.visualization.plotter import RacePlotter
 import logging
 
 # メインロガーの設定
@@ -959,41 +960,30 @@ def is_sed_file(file_path: str) -> bool:
     return Path(file_path).name.upper().startswith('SED')
 
 def main():
-    parser = argparse.ArgumentParser(description='競馬レース分析')
-    parser.add_argument('input_path', type=str, help='入力パス（ファイル、ディレクトリ、またはZIPファイル）')
-    parser.add_argument('--output-dir', type=str, default='export/analysis',
-                      help='出力ディレクトリ（デフォルト: export/analysis）')
-    parser.add_argument('--min-races', type=int, default=10,
-                      help='分析対象とする最小レース数（デフォルト: 10）')
-    parser.add_argument('--encoding', type=str, default='utf-8-sig',
-                      help='入力ファイルのエンコーディング（デフォルト: utf-8-sig）')
+    parser = argparse.ArgumentParser(description='レースレベル分析を実行します')
+    parser.add_argument('input_path', help='入力ファイルまたはディレクトリのパス')
+    parser.add_argument('--output-dir', default='export/analysis', help='出力ディレクトリのパス')
+    parser.add_argument('--min-races', type=int, default=6, help='分析対象とする最小レース数')
+    parser.add_argument('--encoding', default='utf-8', help='入力ファイルのエンコーディング')
     args = parser.parse_args()
+
+    # ロギングの設定
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
 
     try:
         # 出力ディレクトリの作成
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-
-        input_path = Path(args.input_path)
-        
-        # 入力パスの検証
-        if input_path.is_file() and not is_sed_file(input_path):
-            raise ValueError(f"指定されたファイルはSEDファイルではありません: {input_path}")
-        elif input_path.is_dir():
-            # ディレクトリ内にSEDファイルが存在するか確認
-            sed_files = [f for f in input_path.glob('**/*') if f.is_file() and is_sed_file(f)]
-            if not sed_files:
-                raise ValueError(f"指定されたディレクトリにSEDファイルが見つかりません: {input_path}")
-            logger.info(f"SEDファイルが {len(sed_files)} 件見つかりました")
-
-        # データローダーの初期化と読み込み
+    
+        # データの読み込み
         loader = RaceDataLoader(args.input_path, encoding=args.encoding)
-        date_str = loader.get_date_str(Path(args.input_path))
-        
-        # データの読み込み（SEDファイルのみ）
         df = loader.load()
-        
-        # 分析設定の作成
+
+        # 分析の実行
+        date_str = datetime.now().strftime('%Y%m%d')
         config = AnalysisConfig(
             input_path=args.input_path,
             min_races=args.min_races,
@@ -1001,15 +991,150 @@ def main():
             date_str=date_str
         )
 
-        # 分析の実行
         analyzer = RaceLevelAnalyzer(config)
-        analyzer.df = df  # データフレームを直接設定
-        analyzer.run()
+        analyzer.df = df
+        
+        # 前処理とレースレベルの計算を実行
+        analyzer.df = analyzer.preprocess_data()
+        analyzer.df = analyzer.calculate_feature()
+        
+        # 分析の実行
+        results = analyzer.analyze()
 
-        logger.info(f"分析が完了しました。結果は {output_dir} に保存されています。")
+        # 可視化の実行
+        plotter = RacePlotter(output_dir)
+        
+        # グレード別統計の可視化
+        if 'grade_stats' in results:
+            plotter.plot_grade_stats(
+                grade_stats=results['grade_stats'],
+                grade_levels=analyzer.GRADE_LEVELS
+            )
+        
+        # 相関分析の可視化
+        if 'correlation_stats' in results and results['correlation_stats']:
+            plotter.plot_correlation_analysis(
+                data=results['horse_stats'],
+                correlation=results['correlation_stats']['correlation'],
+                model=results['correlation_stats']['model'],
+                r2=results['correlation_stats']['r2'],
+                feature_name="レースレベル"
+            )
+            
+            # スピアマン相関分析の可視化
+            if 'horse_stats' in results:
+                horse_stats = results['horse_stats'].copy()
+                # スピアマン相関係数の計算
+                correlation, p_value = stats.spearmanr(
+                    horse_stats['最高レベル'],
+                    horse_stats['win_rate']
+                )
+                # 信頼区間の計算
+                n = len(horse_stats)
+                z = np.arctanh(correlation)
+                se = 1 / np.sqrt(n - 3)
+                z_score = stats.norm.ppf(0.975)  # 95%信頼区間
+                z_lower = z - z_score * se
+                z_upper = z + z_score * se
+                ci_lower = np.tanh(z_lower)
+                ci_upper = np.tanh(z_upper)
+                
+                # 散布図の作成
+                plt.figure(figsize=(15, 8))
+                scatter = plt.scatter(
+                    horse_stats['最高レベル'],
+                    horse_stats['win_rate'],
+                    c=horse_stats['主戦グレード'],
+                    s=horse_stats['出走回数']*20,
+                    alpha=0.5,
+                    cmap='viridis'
+                )
+                plt.colorbar(scatter, label='主戦グレード')
+                
+                plt.title(f'レースレベルと勝率の関係（スピアマン相関）\n'
+                         f'相関係数: {correlation:.3f} (p値: {p_value:.3f})\n'
+                         f'95%信頼区間: [{ci_lower:.3f}, {ci_upper:.3f}]')
+                plt.xlabel('最高レースレベル')
+                plt.ylabel('勝率')
+                plt.grid(True, alpha=0.3)
+                plt.tight_layout()
+                plt.savefig(output_dir / "race_level_spearman_correlation.png", dpi=300, bbox_inches='tight')
+                plt.close()
+        
+        # レースレベルの分布分析
+        if 'race_level' in analyzer.df.columns:
+            plotter.plot_distribution_analysis(
+                data=analyzer.df[analyzer.df['is_win']],
+                feature_name="race_level",
+                bins=30
+            )
+        
+        # トレンド分析
+        level_year_stats = analyzer._calculate_level_year_stats()
+        if level_year_stats is not None:
+            plotter.plot_trend_analysis(
+                data=level_year_stats,
+                feature_name="レースレベル"
+            )
+        
+        # 距離とレースレベルのヒートマップ
+        distance_level_pivot = analyzer._calculate_distance_level_pivot()
+        if distance_level_pivot is not None:
+            plotter.plot_heatmap(
+                pivot_table=distance_level_pivot,
+                title="距離別・レースレベル別の勝率ヒートマップ",
+                filename="distance_level_heatmap.png"
+            )
+        
+        # 馬ごとの平均レースレベル分位点区分別の勝率分布（箱ひげ図）
+        if 'horse_stats' in results:
+            horse_stats = results['horse_stats'].copy()
+            horse_stats['平均レベル区分'] = pd.qcut(
+                horse_stats['平均レベル'],
+                q=5,
+                labels=['Q1', 'Q2', 'Q3', 'Q4', 'Q5']
+            )
+            plt.figure(figsize=(15, 8))
+            sns.boxplot(
+                data=horse_stats,
+                x='平均レベル区分',
+                y='win_rate',
+                showfliers=True,
+                color='skyblue'
+            )
+            plt.title('馬ごとの平均レースレベル分位点区分別 勝率分布（箱ひげ図）')
+            plt.xlabel('平均レースレベル分位点区分')
+            plt.ylabel('勝率')
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(output_dir / "race_level_boxplot.png", dpi=300, bbox_inches='tight')
+            plt.close()
+        
+        # ロジスティック回帰分析の結果を可視化
+        if 'logistic_stats' in results and 'data' in results['logistic_stats']:
+            logistic_stats = results['logistic_stats']
+            data = logistic_stats['data']
+            if 'race_level' in data.columns and 'is_win_or_place' in data.columns:
+                X = data['race_level'].values
+                y = data['is_win_or_place'].values
+                y_pred_proba = logistic_stats['model'].predict_proba(
+                    logistic_stats['scaler'].transform(X.reshape(-1, 1))
+                )[:, 1]
+                y_pred = logistic_stats['model'].predict(
+                    logistic_stats['scaler'].transform(X.reshape(-1, 1))
+                )
+                plotter.plot_logistic_regression(
+                    X=X,
+                    y=y,
+                    y_pred_proba=y_pred_proba,
+                    y_pred=y_pred,
+                    feature_name="race_level"
+                )
+
+        logging.info(f'分析が完了しました。結果は {output_dir} に保存されました。')
 
     except Exception as e:
-        logger.error(f"エラーが発生しました: {str(e)}")
+        logging.error(f'エラーが発生しました: {str(e)}')
         raise
 
 if __name__ == '__main__':
