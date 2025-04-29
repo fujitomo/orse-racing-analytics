@@ -1,5 +1,6 @@
 import csv
 from pathlib import Path
+import pandas as pd
 
 # JRAマスターデータの定義
 jra_masters = {
@@ -166,45 +167,52 @@ jra_masters = {
     }
 }
 
-def get_first_prize_money(bac_file):
+def analyze_horse_performance(formatted_records):
     """
-    BACファイルから1着賞金の内容を取得する関数
+    馬ごとのレース回数と勝利回数（1着、2着）を分析します。
     """
-    prize_money_dict = {}  # キー: (場コード, 年, 回, 日, R), 値: 1着賞金
+    # 馬ごとのデータを集計
+    horse_stats = {}
+    
+    for record in formatted_records:
+        horse_name = record[8]  # 馬名
+        finish_position = record[22]  # 着順
+        
+        if horse_name not in horse_stats:
+            horse_stats[horse_name] = {
+                "レース回数": 0,
+                "1着回数": 0,
+                "2着回数": 0
+            }
+        
+        horse_stats[horse_name]["レース回数"] += 1
+        
+        # 着順が数値の場合のみ処理
+        if finish_position.isdigit():
+            position = int(finish_position)
+            if position == 1:
+                horse_stats[horse_name]["1着回数"] += 1
+            elif position == 2:
+                horse_stats[horse_name]["2着回数"] += 1
+    
+    # データフレームに変換
+    horse_df = pd.DataFrame.from_dict(horse_stats, orient='index')
+    horse_df.index.name = "馬名"
+    horse_df = horse_df.reset_index()
+    
+    # 勝率を計算
+    horse_df["1着率"] = horse_df["1着回数"] / horse_df["レース回数"]
+    horse_df["2着率"] = horse_df["2着回数"] / horse_df["レース回数"]
+    
+    # レース回数でソート
+    horse_df = horse_df.sort_values("レース回数", ascending=False)
+    
+    return horse_df
 
-    try:
-        with open(bac_file, "r", encoding="utf-8-sig") as infile:
-            reader = csv.DictReader(infile)
-            for row in reader:
-                # 場コードを数値コードに変換
-                venue_code = None
-                for code, name in jra_masters["場コード"].items():
-                    if name == row["場コード"]:
-                        venue_code = code
-                        break
-                
-                if venue_code is None:
-                    print(f"⚠️ 場コードが見つかりません: {row['場コード']}")
-                    continue
+def format_sed_file(input_file, output_file):
+    record_length = 376  # 固定長レコードのバイト数（改行含む）
 
-                # キーを作成
-                key = (venue_code, row["年"], row["回"], row["日"], row["R"])
-                print(f"BAC: キー={key}, 賞金={row["1着賞金"]}")
-                prize_money = row["1着賞金"]
-                
-                if prize_money:  # 空でない場合のみ追加
-                    prize_money_dict[key] = prize_money
-                    print(f"BAC: キー={key}, 賞金={prize_money}")
-    except Exception as e:
-        print(f"⚠️ BACファイルの処理中にエラーが発生しました: {str(e)}")
-
-    print(f"取得した1着賞金の数: {len(prize_money_dict)}")
-    return prize_money_dict
-
-def format_sec_file(input_file, output_file, prize_money_dict):
-    record_length = 346  # 固定長レコードのバイト数（改行含む）
-
-    # ヘッダー定義（1着賞金を追加）
+    # ヘッダー定義
     headers = [
         "場コード", "年", "回", "日", "R", "馬番", "血統登録番号", "年月日", "馬名",
         "距離", "芝ダ障害コード", "右左", "内外", "馬場状態", "種別", "条件", "記号",
@@ -217,7 +225,9 @@ def format_sec_file(input_file, output_file, prize_money_dict):
         "後3Fタイム", "備考", "予備", "確定複勝オッズ下", "10時単勝オッズ",
         "10時複勝オッズ", "コーナー順位1", "コーナー順位2", "コーナー順位3",
         "コーナー順位4", "前3F先頭差", "後3F先頭差", "騎手コード", "調教師コード",
-        "馬体重", "馬体重増減", "天候コード", "コース", "レース脚質", "1着賞金"
+        "馬体重", "馬体重増減", "天候コード", "コース", "レース脚質", "単勝",
+        "複勝", "本賞金", "収得賞金", "レースペース流れ", "馬ペース流れ",
+        "4角コース取り", "発走時間", "1着賞金"
     ]
 
     with open(input_file, "rb") as infile:
@@ -231,7 +241,7 @@ def format_sec_file(input_file, output_file, prize_money_dict):
             records.append(record)
         pos += record_length
 
-    print(f"SECファイルから読み込んだレコード数: {len(records)}")
+    print(f"SEDファイルから読み込んだレコード数: {len(records)}")
 
     formatted_records = []
     for index, record in enumerate(records):
@@ -253,30 +263,19 @@ def format_sec_file(input_file, output_file, prize_money_dict):
                 print(f"⚠️ 年の値の変換に失敗しました: '{year_2digit}' - エラー: {str(e)}")
                 continue
 
-            # キーとなる情報を取得
-            venue_code = record[0:2].decode("shift_jis")  # 場コード
-            round_num = record[4:5].decode("shift_jis")  # 回
-            day = record[5:6].decode("shift_jis")  # 日
-            race_num = record[6:8].decode("shift_jis")  # R
-
-            # 場コードの変換をデバッグ
-            venue_code_raw = record[0:2].decode("shift_jis")
-            venue_name = jra_masters["場コード"].get(venue_code_raw)
-            print(f"場コード変換: {venue_code_raw} -> {venue_name}")
-
-            # 1着賞金を取得
-            key = (venue_code, year_4digit, round_num, day, race_num)
-            prize_money = prize_money_dict.get(key, "")
-            if prize_money:
-                print(f"SEC: キー={key}, 賞金={prize_money}")
-            else:
-                print(f"SEC: キー={key}, 賞金なし")
+            # 日の処理（16進数から10進数に変換）
+            day_hex = record[5:6].decode("shift_jis")
+            try:
+                day = str(int(day_hex, 16))
+            except ValueError:
+                print(f"⚠️ 日の値の変換に失敗しました: '{day_hex}'")
+                continue
 
             fields = [
                 jra_masters["場コード"].get(record[0:2].decode("shift_jis")),  # 場コード(2)
                 year_4digit,  # 年(2)
                 record[4:5].decode("shift_jis"),  # 回(1)
-                record[5:6].decode("shift_jis"),  # 日(1)
+                day,  # 日(1) - 16進数から変換
                 record[6:8].decode("shift_jis"),  # R(2)
                 record[8:10].decode("shift_jis"),  # 馬番(2)
                 record[10:18].decode("shift_jis").strip(),  # 血統登録番号(8)
@@ -347,7 +346,15 @@ def format_sec_file(input_file, output_file, prize_money_dict):
                 jra_masters["天候コード"].get(record[338:339].decode("shift_jis")),  # 天候コード(1)
                 record[339:340].decode("shift_jis"),  # コース(1)
                 record[340:341].decode("shift_jis"),  # レース脚質(1)
-                prize_money  # 1着賞金
+                record[341:348].decode("shift_jis").strip(),  # 単勝(7)
+                record[348:355].decode("shift_jis").strip(),  # 複勝(7)
+                record[355:360].decode("shift_jis").strip(),  # 本賞金(5)
+                record[360:365].decode("shift_jis").strip(),  # 収得賞金(5)
+                record[365:367].decode("shift_jis"),  # レースペース流れ(2)
+                record[367:369].decode("shift_jis"),  # 馬ペース流れ(2)
+                record[369:370].decode("shift_jis"),  # 4角コース取り(1)
+                record[370:374].decode("shift_jis"),  # 発走時間(4)
+                record[355:360].decode("shift_jis").strip()  # 1着賞金(本賞金と同じ値を使用)
             ]
             formatted_records.append(fields)
         except Exception as e:
@@ -361,44 +368,48 @@ def format_sec_file(input_file, output_file, prize_money_dict):
 
     print(f"✅ 整形されたファイルが {output_file} に保存されました。")
     print(f"処理したレコード数: {len(formatted_records)}")
+    
+    # 馬ごとの成績を分析
+    horse_stats_df = analyze_horse_performance(formatted_records)
+    
+    # 馬ごとの成績をCSVに保存
+    stats_output_file = output_file.parent / f"{output_file.stem}_horse_stats.csv"
+    horse_stats_df.to_csv(stats_output_file, index=False, encoding="utf-8-sig")
+    print(f"✅ 馬ごとの成績が {stats_output_file} に保存されました。")
+    
+    return formatted_records
 
-def process_all_sec_files():
+def process_all_sed_files():
     # importフォルダとexportフォルダのパスを設定
-    import_dir = Path("import/SEC")
-    export_dir = Path("export/SEC")
-    bac_dir = Path("export/BAC")
+    import_dir = Path("import/SED")
+    export_dir = Path("export/SED")
     
     # exportフォルダが存在しない場合は作成
     export_dir.mkdir(parents=True, exist_ok=True)
     
-    # BACファイルから1着賞金を取得
-    bac_files = list(bac_dir.glob("*.csv"))
-    prize_money_dict = {}
-    for bac_file in bac_files:
-        print(f"\n処理中: {bac_file}")
-        prize_money_dict.update(get_first_prize_money(str(bac_file)))
-
-    print(f"\n取得した1着賞金の総数: {len(prize_money_dict)}")
-
-    # SECファイルの処理
-    sec_files = []
-    patterns = ["SEC*.txt", "SEC[0-9][0-9][0-9][0-9][0-9][0-9].txt"]
+    # SEDファイルの処理
+    sed_files = []
     
-    for pattern in patterns:
-        sec_files.extend(list(import_dir.glob(pattern)))
+    # 年フォルダ内のファイルを処理
+    for year_dir in import_dir.glob("SED_*"):
+        if year_dir.is_dir():
+            print(f"\n年フォルダを処理中: {year_dir.name}")
+            for sed_file in year_dir.glob("SED*.txt"):
+                if sed_file.exists():
+                    sed_files.append(sed_file)
     
     # 重複を除去
-    sec_files = list(set(sec_files))
+    sed_files = list(set(sed_files))
     
-    print(f"\n処理対象のSECファイル数: {len(sec_files)}")
+    print(f"\n処理対象のSEDファイル数: {len(sed_files)}")
     print("処理対象ファイル:")
-    for file in sec_files:
+    for file in sed_files:
         print(f"- {file.name}")
     
-    for sec_file in sec_files:
-        output_file = export_dir / f"{sec_file.stem}_formatted.csv"
-        print(f"\n処理中: {sec_file}")
-        format_sec_file(str(sec_file), str(output_file), prize_money_dict)
+    for sed_file in sed_files:
+        output_file = export_dir / f"{sed_file.stem}_formatted.csv"
+        print(f"\n処理中: {sed_file}")
+        format_sed_file(str(sed_file), str(output_file))
 
 if __name__ == "__main__":
-    process_all_sec_files() 
+    process_all_sed_files() 

@@ -9,6 +9,7 @@ from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_squared_error, accuracy_score, classification_report, confusion_matrix
+from scipy import stats  # スピアマン相関用に追加
 
 # 日本語フォントの設定
 plt.rcParams['font.family'] = 'MS Gothic'  # Windows用
@@ -66,25 +67,11 @@ SEASONAL_FACTORS = {
     12: 1.0, # 12月
 }
 
-# 競馬場の難易度係数
-COURSE_DIFFICULTY = {
-    "札幌": 1.0,
-    "函館": 1.0,
-    "福島": 1.0,
-    "新潟": 1.1,
-    "東京": 1.2,
-    "中山": 1.2,
-    "中京": 1.1,
-    "京都": 1.2,
-    "阪神": 1.2,
-    "小倉": 1.0,
-}
-
 def determine_grade_by_prize(row):
     """
     1着賞金からグレードを判定する関数
     """
-    prize = row["1着賞金"] if pd.notna(row["1着賞金"]) else None
+    prize = row["本賞金"] if pd.notna(row["本賞金"]) else None
     
     # 賞金が欠損している場合はNoneを返す
     if prize is None:
@@ -123,8 +110,8 @@ def determine_grade(row):
     elif "L" in race_name or "Ｌ" in race_name:
         return 6
     
-    # 賞金からグレードを判定（1着賞金カラムが存在する場合）
-    if "1着賞金" in row.index:
+    # 賞金からグレードを判定（本賞金カラムが存在する場合）
+    if "本賞金" in row.index:
         prize_grade = determine_grade_by_prize(row)
         if prize_grade is not None:
             return prize_grade
@@ -225,7 +212,7 @@ def load_and_process_data(input_path):
                 if len(df) > 0:
                     required_columns = [
                         "場コード", "年", "回", "日", "R", "馬名", "距離", "着順",
-                        "レース名", "種別", "芝ダ障害コード", "馬番", "騎手名", "調教師名", "グレード", "1着賞金"
+                        "レース名", "種別", "芝ダ障害コード", "馬番", "グレード", "本賞金"
                     ]
                     
                     missing_cols = [col for col in required_columns if col not in df.columns]
@@ -235,6 +222,9 @@ def load_and_process_data(input_path):
                             print("グレード列が存在しないため、レース名と種別から判定します")
                             df["グレード"] = df.apply(determine_grade, axis=1)
                         continue
+                    
+                    # 本賞金列を1着賞金として使用
+                    df["1着賞金"] = df["本賞金"]
                     
                     sec_dfs.append(df)
                     processed_files += 1
@@ -626,6 +616,41 @@ def visualize_results(horse_stats, grade_stats, output_dir):
         outliers_df = pd.DataFrame(outliers_info)
         outliers_df.to_csv(output_dir / "outliers_analysis.csv", index=False, encoding="utf-8")
 
+def calculate_confidence_interval(correlation, n, confidence_level=0.95):
+    """
+    スピアマン相関係数の信頼区間を計算します。
+    
+    Parameters:
+    -----------
+    correlation : float
+        スピアマン相関係数
+    n : int
+        サンプルサイズ
+    confidence_level : float, default=0.95
+        信頼水準（デフォルトは95%）
+    
+    Returns:
+    --------
+    tuple
+        (下限, 上限)の信頼区間
+    """
+    # フィッシャーのZ変換
+    z = np.arctanh(correlation)
+    
+    # 標準誤差の計算
+    se = 1 / np.sqrt(n - 3)
+    
+    # 信頼区間の計算
+    z_score = stats.norm.ppf((1 + confidence_level) / 2)
+    z_lower = z - z_score * se
+    z_upper = z + z_score * se
+    
+    # 逆変換
+    lower = np.tanh(z_lower)
+    upper = np.tanh(z_upper)
+    
+    return lower, upper
+
 def perform_correlation_analysis(df, horse_stats):
     """
     勝率とレースレベルの相関分析を行います。
@@ -691,6 +716,63 @@ def visualize_correlation_results(horse_stats, correlation, model, r2, output_di
     plt.savefig(output_dir / "race_level_correlation.png", dpi=300, bbox_inches='tight')
     plt.close()
 
+def perform_spearman_correlation_analysis(df, horse_stats):
+    """
+    スピアマン相関分析を行います。
+    欠損値を適切に処理します。
+    """
+    try:
+        # 欠損値の確認と出力
+        print("\nスピアマン相関分析前の欠損値確認:")
+        print(horse_stats[['最高レベル', 'win_rate']].isnull().sum())
+        
+        # 欠損値を含む行を除外
+        analysis_data = horse_stats.dropna(subset=['最高レベル', 'win_rate'])
+        print(f"\n分析対象データ数: {len(analysis_data)}")
+        
+        if len(analysis_data) == 0:
+            print("警告: 有効なデータがありません")
+            return None, None, None
+        
+        # スピアマン相関係数の計算
+        correlation, p_value = stats.spearmanr(analysis_data['最高レベル'], analysis_data['win_rate'])
+        
+        # 信頼区間の計算
+        lower_ci, upper_ci = calculate_confidence_interval(correlation, len(analysis_data))
+        
+        return correlation, p_value, (lower_ci, upper_ci)
+        
+    except Exception as e:
+        print(f"\nスピアマン相関分析中にエラーが発生しました: {str(e)}")
+        return None, None, None
+
+def visualize_spearman_correlation_results(horse_stats, correlation, p_value, confidence_interval, output_dir):
+    """
+    スピアマン相関分析の結果を可視化します。
+    信頼区間も表示します。
+    """
+    plt.figure(figsize=(15, 8))
+    
+    # 散布図
+    scatter = plt.scatter(horse_stats["最高レベル"], horse_stats["win_rate"], 
+                         s=horse_stats["出走回数"]*20, alpha=0.5,
+                         c=horse_stats["主戦グレード"], cmap='viridis')
+    
+    # 信頼区間の表示
+    if confidence_interval is not None:
+        lower_ci, upper_ci = confidence_interval
+        plt.title(f"レースレベルと勝率の関係（スピアマン相関）\n相関係数: {correlation:.3f} (p値: {p_value:.3f})\n95%信頼区間: [{lower_ci:.3f}, {upper_ci:.3f}]")
+    else:
+        plt.title(f"レースレベルと勝率の関係（スピアマン相関）\n相関係数: {correlation:.3f} (p値: {p_value:.3f})")
+    
+    plt.xlabel("最高レースレベル")
+    plt.ylabel("勝率")
+    plt.colorbar(scatter, label="主戦グレード")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_dir / "race_level_spearman_correlation.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
 def analyze_win_level_distribution(df, output_dir, date_str):
     """
     勝利時のレースレベルの分布を分析します。
@@ -714,46 +796,142 @@ def analyze_win_level_distribution(df, output_dir, date_str):
     print(win_level_stats)
     win_level_stats.to_csv(output_dir / f"win_level_stats_{date_str}.csv", encoding="utf-8")
 
-def analyze_grade_win_trends(df, output_dir):
+def analyze_grade_win_trends(df, horse_stats, output_dir):
     """
-    レースグレード別の勝率傾向を分析します。
+    レースの有用な指標別の勝率傾向を分析します。
     """
-    # グレード別・年別の勝率推移
-    grade_year_stats = df.groupby(["グレード", "年"])["is_win"].agg(["count", "mean"]).reset_index()
-    grade_year_stats.columns = ["グレード", "年", "レース数", "勝率"]
+    # レースレベルの非有限値を0に置き換え
+    df['race_level'] = df['race_level'].fillna(0)
     
-    # グレード別の勝率トレンド
+    # レースレベル別・年別の勝率推移
+    df['レースレベル区分'] = np.round(df['race_level']).astype(int)
+    level_year_stats = df.groupby(["レースレベル区分", "年"])["is_win"].agg(["count", "mean"]).reset_index()
+    level_year_stats.columns = ["レースレベル区分", "年", "レース数", "勝率"]
+    
+    # レースレベル別の勝率トレンド
     plt.figure(figsize=(15, 8))
-    for grade in sorted(df["グレード"].unique()):
-        grade_data = grade_year_stats[grade_year_stats["グレード"] == grade]
-        plt.plot(grade_data["年"], grade_data["勝率"], 
-                marker='o', label=f"{GRADE_LEVELS[grade]['name']}")
+    for level in sorted(df["レースレベル区分"].unique()):
+        level_data = level_year_stats[level_year_stats["レースレベル区分"] == level]
+        plt.plot(level_data["年"], level_data["勝率"], 
+                marker='o', label=f"レベル{level}")
     
-    plt.title("グレード別の勝率推移")
+    plt.title("レースレベル別の勝率推移")
     plt.xlabel("年")
     plt.ylabel("勝率")
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(output_dir / "grade_win_trends.png", dpi=300, bbox_inches='tight')
+    plt.savefig(output_dir / "race_level_trends.png", dpi=300, bbox_inches='tight')
     plt.close()
     
-    # グレード別の勝率分布（箱ひげ図）
+    # 馬ごとの平均レースレベル分位点区分ごとの勝率分布（箱ひげ図＋散布図）
+    horse_stats_box = horse_stats.copy()
+    horse_stats_box['平均レベル区分'] = pd.qcut(horse_stats_box['平均レベル'], q=5, labels=[f'Q{i+1}' for i in range(5)])
     plt.figure(figsize=(15, 8))
-    sns.boxplot(data=df, x="グレード", y="is_win", 
-                order=sorted(df["グレード"].unique()))
-    plt.title("グレード別の勝率分布")
-    plt.xlabel("グレード")
-    plt.ylabel("勝率")
-    plt.xticks(range(len(GRADE_LEVELS)), 
-               [GRADE_LEVELS[g]['name'] for g in sorted(GRADE_LEVELS.keys())])
+    sns.boxplot(data=horse_stats_box, x='平均レベル区分', y='win_rate', showfliers=True, color='skyblue')
+    plt.title('馬ごとの平均レースレベル分位点区分別 勝率分布（箱ひげ図）')
+    plt.xlabel('平均レースレベル分位点区分')
+    plt.ylabel('勝率')
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(output_dir / "grade_win_distribution.png", dpi=300, bbox_inches='tight')
+    plt.savefig(output_dir / "race_level_boxplot.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # 距離別・レースレベル別のヒートマップ
+    plt.figure(figsize=(15, 8))
+    df['距離区分'] = pd.cut(df['距離'], 
+                          bins=[0, 1400, 1800, 2000, 2400, 9999],
+                          labels=['スプリント', 'マイル', '中距離', '中長距離', '長距離'])
+    pivot_table = df.pivot_table(index='距離区分', 
+                               columns='レースレベル区分', 
+                               values='is_win', 
+                               aggfunc='mean')
+    sns.heatmap(pivot_table, annot=True, fmt=".2f", cmap="YlOrRd")
+    plt.title("距離別・レースレベル別の勝率ヒートマップ")
+    plt.tight_layout()
+    plt.savefig(output_dir / "distance_level_heatmap.png", dpi=300, bbox_inches='tight')
     plt.close()
     
     # 統計情報の保存
-    grade_year_stats.to_csv(output_dir / "grade_win_trends.csv", index=False, encoding="utf-8")
+    level_year_stats.to_csv(output_dir / "race_level_trends.csv", index=False, encoding="utf-8")
+
+def perform_logistic_regression_analysis(df):
+    """
+    レースごとに1,2着を1、それ以外を0とした二値分類ロジスティック回帰分析
+    """
+    df = df.copy()
+    df['is_win_or_place'] = df['着順'].apply(lambda x: 1 if x in [1, 2] else 0)
+    X = df[['race_level']].values
+    y = df['is_win_or_place'].values
+    # 標準化
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    # 分割
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_scaled, y, test_size=0.3, random_state=42, stratify=y
+    )
+    # ロジスティック回帰（クラスバランス補正）SS
+    model = LogisticRegression(random_state=42, max_iter=1000, class_weight='balanced')
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    report = classification_report(y_test, y_pred)
+    conf_matrix = confusion_matrix(y_test, y_pred)
+    print(report)
+    print(conf_matrix)
+    print(f"model.coef_ shape: {model.coef_.shape}, value: {model.coef_}")
+    print(f"model.intercept_ shape: {model.intercept_.shape}, value: {model.intercept_}")
+    return model, scaler, accuracy, (report, conf_matrix)
+
+def visualize_logistic_regression_results(df, model, scaler, accuracy, metrics, output_dir):
+    """
+    ロジスティック回帰分析の結果を可視化します。
+    """
+    output_dir = Path(output_dir)
+    # 散布図
+    plt.figure(figsize=(15, 8))
+    plt.scatter(df['race_level'], df['is_win_or_place'], alpha=0.2, label='データ')
+    X_plot = np.linspace(df['race_level'].min(), df['race_level'].max(), 100).reshape(-1, 1)
+    X_plot_scaled = scaler.transform(X_plot)
+    y_plot = model.predict_proba(X_plot_scaled)[:, 1]
+    plt.plot(X_plot, y_plot, color='red', linestyle='--', label=f'ロジスティック回帰曲線 (精度: {accuracy:.3f})')
+    plt.title('レースレベルと1,2着確率のロジスティック回帰')
+    plt.xlabel('レースレベル')
+    plt.ylabel('1,2着確率')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(output_dir / "race_level_logistic_regression.png", dpi=300, bbox_inches='tight')
+    plt.close()
+    # 混同行列
+    plt.figure(figsize=(8, 6))
+    conf_matrix = metrics[1]
+    # TP, FP, TN, FNのラベルを付与
+    labels = np.array([
+        [f"{conf_matrix[0,0]}\nTN", f"{conf_matrix[0,1]}\nFP"],
+        [f"{conf_matrix[1,0]}\nFN", f"{conf_matrix[1,1]}\nTP"]
+    ])
+    sns.heatmap(conf_matrix, annot=labels, fmt="", cmap='Blues',
+                xticklabels=['その他', '1,2着'],
+                yticklabels=['その他', '1,2着'])
+    plt.title('ロジスティック回帰の混同行列')
+    plt.xlabel('予測')
+    plt.ylabel('実際')
+    plt.tight_layout()
+    # 主要指標の計算
+    from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
+    y_true = metrics[1][0,0] + metrics[1][0,1] + metrics[1][1,0] + metrics[1][1,1]  # dummy for linter
+    # y_test, y_predは関数外でしか取得できないため、metrics[0]（classification_report）から抽出
+    # ここでは混同行列から計算
+    TN, FP, FN, TP = conf_matrix[0,0], conf_matrix[0,1], conf_matrix[1,0], conf_matrix[1,1]
+    accuracy = (TP + TN) / (TP + TN + FP + FN)
+    precision = TP / (TP + FP) if (TP + FP) > 0 else 0
+    recall = TP / (TP + FN) if (TP + FN) > 0 else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    # 指標を画像下部に注釈
+    plt.figtext(0.5, -0.08, f"精度(Accuracy): {accuracy:.3f}  適合率(Precision): {precision:.3f}  再現率(Recall): {recall:.3f}  F1: {f1:.3f}", ha='center', fontsize=12)
+    plt.savefig(output_dir / "logistic_regression_confusion_matrix.png", dpi=300, bbox_inches='tight')
+    plt.close()
 
 def main():
     # コマンドライン引数の解析
@@ -807,11 +985,21 @@ def main():
     analyze_win_level_distribution(df, output_dir, date_str)
     
     # グレード別の勝率傾向の分析
-    analyze_grade_win_trends(df, output_dir)
+    analyze_grade_win_trends(df, horse_stats, output_dir)
     
     # 相関分析の実行
     correlation, model, r2 = perform_correlation_analysis(df, horse_stats)
     
+    # スピアマン相関分析の実行
+    spearman_correlation, p_value, confidence_interval = perform_spearman_correlation_analysis(df, horse_stats)
+    
+    # ロジスティック回帰分析の実行
+    logistic_model, scaler, accuracy, metrics = perform_logistic_regression_analysis(df)
+
+    # is_win_or_place列がdfに存在しない場合は追加
+    if 'is_win_or_place' not in df.columns:
+        df['is_win_or_place'] = df['着順'].apply(lambda x: 1 if x in [1, 2] else 0)
+
     # 結果の可視化と保存
     if correlation is not None and model is not None and r2 is not None:
         visualize_correlation_results(horse_stats, correlation, model, r2, output_dir)
@@ -819,7 +1007,7 @@ def main():
         # 相関分析結果の保存
         correlation_results = pd.DataFrame({
             '分析項目': ['相関係数', '決定係数', '回帰係数', '切片'],
-            '値': [correlation, r2, model.coef_[0], model.intercept_]
+            '値': [correlation, r2, float(np.ravel(model.coef_)[0]), float(np.ravel(model.intercept_)[0])]
         })
         correlation_results.to_csv(output_dir / f"correlation_analysis_turf_{date_str}.csv", 
                                 index=False, encoding="utf-8")
@@ -827,10 +1015,53 @@ def main():
         print(f"\n相関分析の結果：")
         print(f"相関係数: {correlation:.3f}")
         print(f"決定係数 (R²): {r2:.3f}")
-        print(f"回帰係数: {model.coef_[0]:.3f}")
-        print(f"切片: {model.intercept_:.3f}")
+        print(f"回帰係数: {float(np.ravel(model.coef_)[0]):.3f}")
+        print(f"切片: {float(np.ravel(model.intercept_)[0]):.3f}")
     else:
         print("\n警告: 相関分析を完了できませんでした。")
+    
+    # スピアマン相関分析の結果の可視化と保存
+    if spearman_correlation is not None and p_value is not None:
+        visualize_spearman_correlation_results(horse_stats, spearman_correlation, p_value, confidence_interval, output_dir)
+        
+        # スピアマン相関分析結果の保存
+        spearman_results = pd.DataFrame({
+            '分析項目': ['スピアマン相関係数', 'p値', '95%信頼区間下限', '95%信頼区間上限'],
+            '値': [spearman_correlation, p_value, 
+                  confidence_interval[0] if confidence_interval else None, 
+                  confidence_interval[1] if confidence_interval else None]
+        })
+        spearman_results.to_csv(output_dir / f"spearman_correlation_analysis_turf_{date_str}.csv", 
+                              index=False, encoding="utf-8")
+        
+        print(f"\nスピアマン相関分析の結果：")
+        print(f"スピアマン相関係数: {spearman_correlation:.3f}")
+        print(f"p値: {p_value:.3f}")
+        if confidence_interval:
+            print(f"95%信頼区間: [{confidence_interval[0]:.3f}, {confidence_interval[1]:.3f}]")
+    else:
+        print("\n警告: スピアマン相関分析を完了できませんでした。")
+    
+    # ロジスティック回帰分析の結果の可視化と保存
+    if logistic_model is not None and scaler is not None and accuracy is not None:
+        visualize_logistic_regression_results(df, logistic_model, scaler, accuracy, metrics, output_dir)
+        
+        # ロジスティック回帰分析結果の保存
+        logistic_results = pd.DataFrame({
+            '分析項目': ['精度', '回帰係数', '切片'],
+            '値': [accuracy, float(np.ravel(logistic_model.coef_)[0]), float(np.ravel(logistic_model.intercept_)[0])]
+        })
+        logistic_results.to_csv(output_dir / f"logistic_regression_analysis_turf_{date_str}.csv", 
+                              index=False, encoding="utf-8")
+        
+        print(f"\nロジスティック回帰分析の結果：")
+        print(f"精度: {accuracy:.3f}")
+        print(f"回帰係数: {float(np.ravel(logistic_model.coef_)[0]):.3f}")
+        print(f"切片: {float(np.ravel(logistic_model.intercept_)[0]):.3f}")
+        print("\n分類レポート:")
+        print(metrics[0])
+    else:
+        print("\n警告: ロジスティック回帰分析を完了できませんでした。")
     
     # 結果の保存
     horse_stats.to_csv(output_dir / f"horse_stats_turf_{date_str}.csv", index=False, encoding="utf-8")
@@ -840,14 +1071,20 @@ def main():
     print(f"- {output_dir}/horse_stats_turf_{date_str}.csv: 馬ごとの統計")
     print(f"- {output_dir}/grade_stats_turf_{date_str}.csv: グレードごとの統計")
     print(f"- {output_dir}/correlation_analysis_turf_{date_str}.csv: 相関分析結果")
+    print(f"- {output_dir}/spearman_correlation_analysis_turf_{date_str}.csv: スピアマン相関分析結果")
+    print(f"- {output_dir}/logistic_regression_analysis_turf_{date_str}.csv: ロジスティック回帰分析結果")
     print(f"- {output_dir}/grade_win_rate.png: グレード別勝率")
     print(f"- {output_dir}/race_level_correlation.png: レースレベルと勝率の相関分析")
+    print(f"- {output_dir}/race_level_spearman_correlation.png: レースレベルと勝率のスピアマン相関分析")
+    print(f"- {output_dir}/race_level_logistic_regression.png: レースレベルと勝率のロジスティック回帰分析")
+    print(f"- {output_dir}/logistic_regression_confusion_matrix.png: ロジスティック回帰の混同行列")
     print(f"- {output_dir}/grade_level_analysis.png: グレード別平均レースレベル")
     print(f"- {output_dir}/win_level_distribution.png: 勝利時のレースレベル分布")
-    print(f"- {output_dir}/grade_win_trends.png: グレード別の勝率推移")
-    print(f"- {output_dir}/grade_win_distribution.png: グレード別の勝率分布")
+    print(f"- {output_dir}/race_level_trends.png: レースレベル別の勝率推移")
+    print(f"- {output_dir}/race_level_boxplot.png: レースレベル別の勝率分布（箱ひげ図）")
+    print(f"- {output_dir}/distance_level_heatmap.png: 距離別・レースレベル別の勝率ヒートマップ")
     print(f"- {output_dir}/win_level_stats_{date_str}.csv: 勝利時のレースレベル統計")
-    print(f"- {output_dir}/grade_win_trends.csv: グレード別の勝率推移データ")
+    print(f"- {output_dir}/race_level_trends.csv: レースレベル別の勝率推移データ")
 
 if __name__ == "__main__":
     main() 

@@ -211,8 +211,9 @@ def process_all_bac_files():
     bac_files = []
     patterns = ["BAC*.txt", "BAC[0-9][0-9][0-9][0-9][0-9][0-9].txt"]
     
+    # サブフォルダも含めて検索
     for pattern in patterns:
-        bac_files.extend(list(import_dir.glob(pattern)))
+        bac_files.extend(list(import_dir.rglob(pattern)))
     
     # 重複を除去
     bac_files = list(set(bac_files))
@@ -220,12 +221,31 @@ def process_all_bac_files():
     print(f"処理対象のファイル数: {len(bac_files)}")
     print("処理対象ファイル:")
     for file in bac_files:
-        print(f"- {file.name}")
+        print(f"- {file.relative_to(import_dir)}")
     
     for bac_file in bac_files:
-        output_file = export_dir / f"{bac_file.stem}_formatted.csv"
-        print(f"\n処理中: {bac_file}")
+        # 出力ファイル名を生成（フォルダ構造なし）
+        output_file = export_dir / f"{bac_file.stem}.csv"
+        
+        print(f"\n処理中: {bac_file.relative_to(import_dir)}")
         format_bac_file(str(bac_file), str(output_file))
 
 if __name__ == "__main__":
-    process_all_bac_files() 
+    import sys
+    
+    if len(sys.argv) > 1:
+        # コマンドライン引数が指定された場合
+        input_path = Path(sys.argv[1])
+        if input_path.is_file():
+            # 単一ファイルの処理
+            output_file = Path("export/BAC") / f"{input_path.stem}_formatted.csv"
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            format_bac_file(str(input_path), str(output_file))
+        elif input_path.is_dir():
+            # ディレクトリの処理
+            process_all_bac_files()
+        else:
+            print(f"エラー: 指定されたパス '{input_path}' は存在しません。")
+    else:
+        # 引数なしの場合はデフォルトの処理を実行
+        process_all_bac_files() 
