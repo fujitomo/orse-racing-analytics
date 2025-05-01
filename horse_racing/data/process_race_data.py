@@ -2,7 +2,6 @@
 レースデータ（BAC、SED）の一括処理スクリプト
 """
 
-from pathlib import Path
 from .processors.bac_processor import process_all_bac_files
 from .processors.sed_processor import process_all_sed_files
 

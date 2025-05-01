@@ -2,7 +2,7 @@
 型定義モジュール
 """
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional
 
 @dataclass
 class LoaderConfig:
@@ -14,8 +14,6 @@ class LoaderConfig:
 
 class RaceAnalysisError(Exception):
     """レース分析固有のエラー"""
-    pass
 
 class DataLoadError(RaceAnalysisError):
     """データ読み込みエラー"""
-    pass 

@@ -3,7 +3,7 @@
 """
 
 import pytest
-from unittest.mock import patch, call
+from unittest.mock import patch
 from horse_racing.data.process_race_data import process_race_data
 
 def test_process_race_data(capsys):

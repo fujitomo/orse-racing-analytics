@@ -2,8 +2,6 @@
 SEDプロセッサのテストモジュール
 """
 
-import pytest
-from pathlib import Path
 from horse_racing.data.processors.sed_processor import (
     process_sed_record,
     format_sed_file,

@@ -4,10 +4,8 @@ RaceLevelAnalyzerのテストモジュール
 
 import pytest
 import pandas as pd
-import numpy as np
 import logging
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from horse_racing.analyzers.race_level_analyzer import RaceLevelAnalyzer
 from horse_racing.base.analyzer import AnalysisConfig
 from horse_racing.visualization.plotter import RacePlotter

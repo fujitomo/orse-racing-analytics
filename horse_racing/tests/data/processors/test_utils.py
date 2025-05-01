@@ -3,7 +3,6 @@
 """
 
 import pytest
-from pathlib import Path
 from horse_racing.data.processors.utils import (
     clean_text,
     convert_year_to_4digits,

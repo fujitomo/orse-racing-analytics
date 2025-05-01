@@ -2,8 +2,6 @@
 BACプロセッサのテストモジュール
 """
 
-import pytest
-from pathlib import Path
 from horse_racing.data.processors.bac_processor import (
     process_bac_record,
     format_bac_file,

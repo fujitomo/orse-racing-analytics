@@ -3,7 +3,7 @@ import seaborn as sns
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any
 import matplotlib as mpl
 from sklearn.metrics import confusion_matrix, classification_report
 

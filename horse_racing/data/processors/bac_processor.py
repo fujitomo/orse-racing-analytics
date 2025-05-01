@@ -2,7 +2,6 @@
 BACデータ（レース基本情報）の処理モジュール
 """
 
-from pathlib import Path
 from horse_racing.data.constants.jra_masters import JRA_MASTERS
 from .utils import process_fixed_length_file, process_all_files, convert_year_to_4digits, clean_text
 
