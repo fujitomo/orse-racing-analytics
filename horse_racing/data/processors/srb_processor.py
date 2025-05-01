@@ -1,7 +1,19 @@
+"""
+バージョンアップ後に使用予定
+SRBデータ（レース詳細情報）の処理モジュール
+"""
+
 import csv
 from pathlib import Path
 
 def format_srb_file(input_file, output_file):
+    """
+    SRBファイルを整形してCSVに変換します。
+    
+    Args:
+        input_file (str): 入力ファイルのパス
+        output_file (str): 出力ファイルのパス
+    """
     record_length = 852  # 固定長レコードのバイト数
 
     # バイナリモードで読み込む（改行コードを無視）
@@ -60,6 +72,7 @@ def format_srb_file(input_file, output_file):
     print(f"✅ 整形されたファイルが {output_file} に保存されました。")
 
 def process_all_srb_files():
+    """すべてのSRBファイルを処理します。"""
     # importフォルダとexportフォルダのパスを設定
     import_dir = Path("import/SRB")
     export_dir = Path("export/SRB")
