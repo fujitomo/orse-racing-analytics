@@ -53,13 +53,14 @@ class RacePlotter:
         correlation: float,
         model: Any,
         r2: float,
-        feature_name: str
+        feature_name: str,
+        y_column: str = "win_rate"
     ) -> None:
         """相関分析の可視化"""
         fig = plt.figure(figsize=(15, 8))
         scatter = plt.scatter(
             data["最高レベル"],
-            data["win_rate"],
+            data[y_column],
             s=data["出走回数"]*20,
             alpha=0.5,
             c=data["主戦グレード"],
@@ -70,9 +71,9 @@ class RacePlotter:
         y_plot = model.predict(X_plot)
         plt.plot(X_plot, y_plot, color='red', linestyle='--', label=f'回帰直線 (R² = {r2:.3f})')
 
-        plt.title(f"{feature_name}と勝率の関係\n相関係数: {correlation:.3f}")
-        plt.xlabel(f"最高{feature_name}")
-        plt.ylabel("勝率")
+        plt.title(f"{feature_name}\n相関係数: {correlation:.3f}")
+        plt.xlabel(f"最高{feature_name.split('と')[0]}")
+        plt.ylabel("勝率" if y_column == "win_rate" else "複勝率")
         plt.colorbar(scatter, label="主戦グレード")
         plt.legend()
         plt.grid(True, alpha=0.3)
@@ -84,12 +85,13 @@ class RacePlotter:
         self,
         data: pd.DataFrame,
         feature_name: str,
-        bins: int = 30
+        bins: int = 30,
+        title: str = None
     ) -> None:
         """分布分析の可視化"""
         fig = plt.figure(figsize=(15, 8))
         sns.histplot(data=data, x=feature_name, bins=bins, kde=True)
-        plt.title(f"{feature_name}の分布")
+        plt.title(title if title else f"{feature_name}の分布")
         plt.xlabel(feature_name)
         plt.ylabel("頻度")
         plt.grid(True, alpha=0.3)

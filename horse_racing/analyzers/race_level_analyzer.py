@@ -225,44 +225,81 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         """ロジスティック回帰分析を実行"""
         df = self.df.copy()
         df['is_win_or_place'] = df['着順'].apply(lambda x: 1 if x in [1, 2] else 0)
+        df['is_placed_only'] = df['着順'].apply(lambda x: 1 if x <= 3 else 0)
         
         # NA値と無限大値の処理
         df['race_level'] = df['race_level'].fillna(0)
         df['race_level'] = df['race_level'].replace([np.inf, -np.inf], df['race_level'].replace([np.inf, -np.inf], np.nan).max())
         
-        X = df[['race_level']].values
-        y = df['is_win_or_place'].values
+        # 勝率のモデル
+        X_win = df[['race_level']].values
+        y_win = df['is_win_or_place'].values
+        
+        # 複勝率のモデル
+        X_place = df[['race_level']].values
+        y_place = df['is_placed_only'].values
         
         # 標準化
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
+        scaler_win = StandardScaler()
+        X_win_scaled = scaler_win.fit_transform(X_win)
+        
+        scaler_place = StandardScaler()
+        X_place_scaled = scaler_place.fit_transform(X_place)
         
         # データ分割（層化サンプリング）
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_scaled, y, test_size=0.3, random_state=42, stratify=y
+        X_win_train, X_win_test, y_win_train, y_win_test = train_test_split(
+            X_win_scaled, y_win, test_size=0.3, random_state=42, stratify=y_win
         )
         
-        # クラスバランスを考慮したロジスティック回帰
-        model = LogisticRegression(
+        X_place_train, X_place_test, y_place_train, y_place_test = train_test_split(
+            X_place_scaled, y_place, test_size=0.3, random_state=42, stratify=y_place
+        )
+        
+        # クラスバランスを考慮したロジスティック回帰（勝率）
+        model_win = LogisticRegression(
             random_state=42,
             max_iter=1000,
             class_weight='balanced',
-            solver='liblinear'  # より安定したソルバーを使用
+            solver='liblinear'
         )
-        model.fit(X_train, y_train)
+        model_win.fit(X_win_train, y_win_train)
         
-        # 予測と評価（zero_divisionパラメータを設定）
-        y_pred = model.predict(X_test)
-        accuracy = accuracy_score(y_test, y_pred)
-        report = classification_report(y_test, y_pred, zero_division=0)
-        conf_matrix = confusion_matrix(y_test, y_pred)
+        # クラスバランスを考慮したロジスティック回帰（複勝率）
+        model_place = LogisticRegression(
+            random_state=42,
+            max_iter=1000,
+            class_weight='balanced',
+            solver='liblinear'
+        )
+        model_place.fit(X_place_train, y_place_train)
+        
+        # 予測と評価（勝率）
+        y_win_pred = model_win.predict(X_win_test)
+        accuracy_win = accuracy_score(y_win_test, y_win_pred)
+        report_win = classification_report(y_win_test, y_win_pred, zero_division=0)
+        conf_matrix_win = confusion_matrix(y_win_test, y_win_pred)
+        
+        # 予測と評価（複勝率）
+        y_place_pred = model_place.predict(X_place_test)
+        accuracy_place = accuracy_score(y_place_test, y_place_pred)
+        report_place = classification_report(y_place_test, y_place_pred, zero_division=0)
+        conf_matrix_place = confusion_matrix(y_place_test, y_place_pred)
         
         return {
-            "model": model,
-            "scaler": scaler,
-            "accuracy": accuracy,
-            "report": report,
-            "conf_matrix": conf_matrix,
+            "win": {
+                "model": model_win,
+                "scaler": scaler_win,
+                "accuracy": accuracy_win,
+                "report": report_win,
+                "conf_matrix": conf_matrix_win,
+            },
+            "place": {
+                "model": model_place,
+                "scaler": scaler_place,
+                "accuracy": accuracy_place,
+                "report": report_place,
+                "conf_matrix": conf_matrix_place,
+            },
             "data": df
         }
 
@@ -300,14 +337,24 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         # グレード別統計の可視化
         self.plotter.plot_grade_stats(grade_stats, self.GRADE_LEVELS)
 
-        # 相関分析の可視化
+        # 勝率の相関分析の可視化
         if correlation_stats:
             self.plotter.plot_correlation_analysis(
                 data=horse_stats,
-                correlation=correlation_stats["correlation"],
-                model=correlation_stats["model"],
-                r2=correlation_stats["r2"],
-                feature_name="レースレベル"
+                correlation=correlation_stats["correlation_win"],
+                model=correlation_stats["model_win"],
+                r2=correlation_stats["r2_win"],
+                feature_name="レースレベルと勝率の関係"
+            )
+            
+            # 複勝率の相関分析の可視化
+            self.plotter.plot_correlation_analysis(
+                data=horse_stats,
+                correlation=correlation_stats["correlation_place"],
+                model=correlation_stats["model_place"],
+                r2=correlation_stats["r2_place"],
+                feature_name="レースレベルと複勝率の関係",
+                y_column="place_rate"
             )
 
         # レースレベルの分布分析
@@ -315,7 +362,16 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             self.plotter.plot_distribution_analysis(
                 data=self.df[self.df["is_win"]],
                 feature_name="race_level",
-                bins=30
+                bins=30,
+                title="勝利時のレースレベル分布"
+            )
+            
+            # 複勝時のレースレベル分布も追加
+            self.plotter.plot_distribution_analysis(
+                data=self.df[self.df["is_placed"]],
+                feature_name="race_level",
+                bins=30,
+                title="複勝時のレースレベル分布"
             )
 
         # トレンド分析
@@ -332,28 +388,39 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             self.plotter.plot_heatmap(
                 pivot_table=distance_level_pivot,
                 title="距離別・レースレベル別の勝率ヒートマップ",
-                filename="distance_level_heatmap.png"
+                filename="distance_level_win_heatmap.png"
             )
+            
+            # 複勝のヒートマップも追加
+            distance_level_place_pivot = self._calculate_distance_level_pivot(value_column="is_placed")
+            if distance_level_place_pivot is not None:
+                self.plotter.plot_heatmap(
+                    pivot_table=distance_level_place_pivot,
+                    title="距離別・レースレベル別の複勝率ヒートマップ",
+                    filename="distance_level_place_heatmap.png"
+                )
 
         # ロジスティック回帰の可視化
         if logistic_stats and 'data' in logistic_stats:
             data = logistic_stats['data']
-            if 'race_level' in data.columns and 'is_win_or_place' in data.columns:
-                X = data['race_level'].values.reshape(-1, 1)
-                y = data['is_win_or_place'].values
-                y_pred_proba = logistic_stats['model'].predict_proba(
-                    logistic_stats['scaler'].transform(X)
-                )[:, 1]
-                y_pred = logistic_stats['model'].predict(
-                    logistic_stats['scaler'].transform(X)
-                )
-                self.plotter.plot_logistic_regression(
-                    X=data['race_level'].values,
-                    y=y,
-                    y_pred_proba=y_pred_proba,
-                    y_pred=y_pred,
-                    feature_name="race_level"
-                )
+            if 'race_level' in data.columns:
+                # 勝率の可視化
+                if 'is_win_or_place' in data.columns:
+                    X = data['race_level'].values.reshape(-1, 1)
+                    y = data['is_win_or_place'].values
+                    y_pred_proba = logistic_stats['win']['model'].predict_proba(
+                        logistic_stats['win']['scaler'].transform(X)
+                    )[:, 1]
+                    y_pred = logistic_stats['win']['model'].predict(
+                        logistic_stats['win']['scaler'].transform(X)
+                    )
+                    self.plotter.plot_logistic_regression(
+                        X=data['race_level'].values,
+                        y=y,
+                        y_pred_proba=y_pred_proba,
+                        y_pred=y_pred,
+                        feature_name="レースレベルと勝率の関係（ロジスティック回帰）"
+                    )
 
     def _calculate_grade_level(self, df: pd.DataFrame) -> pd.Series:
         """グレードに基づくレベルを計算"""
@@ -414,34 +481,46 @@ class RaceLevelAnalyzer(BaseAnalyzer):
 
     def _perform_correlation_analysis(self, horse_stats: pd.DataFrame) -> Dict[str, Any]:
         """相関分析を実行"""
-        analysis_data = horse_stats.dropna(subset=['最高レベル', 'win_rate'])
+        analysis_data = horse_stats.dropna(subset=['最高レベル', 'win_rate', 'place_rate'])
         
         if len(analysis_data) == 0:
             return {}
 
         # 標準偏差が0の場合の処理
-        stddev = analysis_data[['最高レベル', 'win_rate']].std()
+        stddev = analysis_data[['最高レベル', 'win_rate', 'place_rate']].std()
         if (stddev == 0).any():
             return {
-                "correlation": 0.0,
-                "model": None,
-                "r2": 0.0
+                "correlation_win": 0.0,
+                "correlation_place": 0.0,
+                "model_win": None,
+                "model_place": None,
+                "r2_win": 0.0,
+                "r2_place": 0.0
             }
 
-        # 相関係数の計算（pandasのcorrを使用）
-        correlation = analysis_data[['最高レベル', 'win_rate']].corr().iloc[0, 1]
+        # 勝率の相関係数と回帰分析
+        correlation_win = analysis_data[['最高レベル', 'win_rate']].corr().iloc[0, 1]
+        X_win = analysis_data['最高レベル'].values.reshape(-1, 1)
+        y_win = analysis_data['win_rate'].values
+        model_win = LinearRegression()
+        model_win.fit(X_win, y_win)
+        r2_win = model_win.score(X_win, y_win)
 
-        # 回帰分析
-        X = analysis_data['最高レベル'].values.reshape(-1, 1)
-        y = analysis_data['win_rate'].values
-        model = LinearRegression()
-        model.fit(X, y)
-        r2 = model.score(X, y)
+        # 複勝率の相関係数と回帰分析
+        correlation_place = analysis_data[['最高レベル', 'place_rate']].corr().iloc[0, 1]
+        X_place = analysis_data['最高レベル'].values.reshape(-1, 1)
+        y_place = analysis_data['place_rate'].values
+        model_place = LinearRegression()
+        model_place.fit(X_place, y_place)
+        r2_place = model_place.score(X_place, y_place)
 
         return {
-            "correlation": correlation,
-            "model": model,
-            "r2": r2
+            "correlation_win": correlation_win,
+            "correlation_place": correlation_place,
+            "model_win": model_win,
+            "model_place": model_place,
+            "r2_win": r2_win,
+            "r2_place": r2_place
         }
 
     def _calculate_level_year_stats(self) -> pd.DataFrame:
@@ -466,7 +545,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         
         return level_year_stats
 
-    def _calculate_distance_level_pivot(self) -> pd.DataFrame:
+    def _calculate_distance_level_pivot(self, value_column: str = "is_win") -> pd.DataFrame:
         """距離とレースレベルのピボットテーブルを計算"""
         try:
             df = self.df.copy()
@@ -487,7 +566,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             return df.pivot_table(
                 index='距離区分',
                 columns='レースレベル区分',
-                values='is_win',
+                values=value_column,
                 aggfunc='mean',
                 observed=True  # FutureWarningを解決
             )
