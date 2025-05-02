@@ -73,25 +73,19 @@ class RaceDataLoader:
             raise ValueError(f"サポートされていないファイル形式です: {file_path}")
 
         try:
-            df = pd.read_csv(file_path, 
-                           header=0,
+            df = pd.read_csv(file_path,
                            encoding="utf-8-sig",
-                           index_col=False)  # インデックス列を指定しない
-            # データの確認
-            # print("=== ファイルの先頭行 ===")
-            # print(f"列名: {df.columns.tolist()}")
-            # print(f"最初の行: {df.iloc[0].tolist()}")
-            # print("========================")
+                           low_memory=False)  # メモリ使用量の警告を抑制
             return df
         except UnicodeDecodeError:
             # エンコーディングエラーの場合、cp932で再試行
             try:
-                df = pd.read_csv(file_path, encoding='cp932')
-                logger.info(f"cp932エンコーディングでファイルを読み込みました: {file_path} ({len(df)} レコード)")
+                df = pd.read_csv(file_path, 
+                               encoding='cp932',
+                               low_memory=False)  # メモリ使用量の警告を抑制
                 return df
             except Exception as e:
-                logger.error(f"ファイルの読み込みに失敗しました: {file_path} - {str(e)}")
-                raise
+                raise ValueError(f"ファイルの読み込みに失敗しました: {file_path}, {str(e)}")
 
     def _load_zip_file(self, zip_path: Path) -> pd.DataFrame:
         """

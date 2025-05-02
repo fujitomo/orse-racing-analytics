@@ -152,7 +152,7 @@ def format_sed_file(input_file, output_file):
         "コーナー順位4", "前3F先頭差", "後3F先頭差", "騎手コード", "調教師コード",
         "馬体重", "馬体重増減", "天候コード", "コース", "レース脚質", "単勝",
         "複勝", "本賞金", "収得賞金", "レースペース流れ", "馬ペース流れ",
-        "4角コース取り", "発走時間"
+        "4角コース取り", "発走時間", "1着賞金"
     ]
     
     return process_fixed_length_file(input_file, output_file, 374, headers, process_sed_record)
