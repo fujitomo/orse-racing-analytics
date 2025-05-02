@@ -4,10 +4,11 @@ import zipfile
 import tempfile
 import os
 import logging
-from typing import Union, List, Optional
+from typing import Union
 from datetime import datetime
 
-logging.basicConfig(level=logging.INFO)
+
+logging.basicConfig(level=logging.INFO)  # INFOレベル以上を有効にする
 logger = logging.getLogger(__name__)
 
 class RaceDataLoader:
@@ -72,8 +73,15 @@ class RaceDataLoader:
             raise ValueError(f"サポートされていないファイル形式です: {file_path}")
 
         try:
-            df = pd.read_csv(file_path, encoding=self.encoding)
-            logger.info(f"ファイルを読み込みました: {file_path} ({len(df)} レコード)")
+            df = pd.read_csv(file_path, 
+                           header=0,
+                           encoding="utf-8-sig",
+                           index_col=False)  # インデックス列を指定しない
+            # データの確認
+            # print("=== ファイルの先頭行 ===")
+            # print(f"列名: {df.columns.tolist()}")
+            # print(f"最初の行: {df.iloc[0].tolist()}")
+            # print("========================")
             return df
         except UnicodeDecodeError:
             # エンコーディングエラーの場合、cp932で再試行
@@ -149,7 +157,6 @@ class RaceDataLoader:
             try:
                 df = self._load_single_file(file_path)
                 dfs.append(df)
-                logger.info(f"ファイル読み込み完了: {file_path.relative_to(dir_path)}")
             except Exception as e:
                 logger.warning(f"ファイルのスキップ: {file_path.relative_to(dir_path)} - {str(e)}")
                 continue
@@ -158,7 +165,6 @@ class RaceDataLoader:
             raise ValueError(f"有効なSEDデータが見つかりませんでした: {dir_path}")
 
         result = pd.concat(dfs, ignore_index=True)
-        logger.info(f"ディレクトリを読み込みました: {dir_path} (合計 {len(result)} レコード)")
         return result
 
     @staticmethod
