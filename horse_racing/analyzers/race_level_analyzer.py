@@ -3,11 +3,10 @@
 レースのグレードや賞金額などからレースレベルを分析します。
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression, LogisticRegression
-from scipy import stats
 from ..base.analyzer import BaseAnalyzer, AnalysisConfig
 from ..data.loader import RaceDataLoader
 from ..visualization.plotter import RacePlotter
@@ -15,7 +14,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 import matplotlib.pyplot as plt
-import seaborn as sns
 import matplotlib as mpl
 import logging
 
@@ -42,23 +40,6 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         4: {"name": "重賞", "weight": 6.0, "base_level": 6},
         5: {"name": "特別", "weight": 5.0, "base_level": 5},
         6: {"name": "L", "weight": 5.5, "base_level": 5.5}
-    }
-
-    # コース種別の定義
-    TRACK_TYPE_MAPPING = {
-        "芝": "芝",
-        "ダート": "ダート",
-        "障害": "障害"
-    }
-
-    # 競走種別の定義
-    RACE_TYPE_CODES = {
-        11: "２歳",
-        12: "３歳",
-        13: "３歳以上",
-        14: "４歳以上",
-        20: "障害",
-        99: "その他"
     }
 
     # レースレベル計算の重み付け定義
@@ -256,19 +237,24 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
         
-        # データ分割
+        # データ分割（層化サンプリング）
         X_train, X_test, y_train, y_test = train_test_split(
             X_scaled, y, test_size=0.3, random_state=42, stratify=y
         )
         
-        # ロジスティック回帰（クラスバランス補正）
-        model = LogisticRegression(random_state=42, max_iter=1000, class_weight='balanced')
+        # クラスバランスを考慮したロジスティック回帰
+        model = LogisticRegression(
+            random_state=42,
+            max_iter=1000,
+            class_weight='balanced',
+            solver='liblinear'  # より安定したソルバーを使用
+        )
         model.fit(X_train, y_train)
         
-        # 予測と評価
+        # 予測と評価（zero_divisionパラメータを設定）
         y_pred = model.predict(X_test)
         accuracy = accuracy_score(y_test, y_pred)
-        report = classification_report(y_test, y_pred)
+        report = classification_report(y_test, y_pred, zero_division=0)
         conf_matrix = confusion_matrix(y_test, y_pred)
         
         return {
@@ -433,11 +419,17 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         if len(analysis_data) == 0:
             return {}
 
-        # 相関係数の計算
-        correlation = np.corrcoef(
-            analysis_data['最高レベル'],
-            analysis_data['win_rate']
-        )[0, 1]
+        # 標準偏差が0の場合の処理
+        stddev = analysis_data[['最高レベル', 'win_rate']].std()
+        if (stddev == 0).any():
+            return {
+                "correlation": 0.0,
+                "model": None,
+                "r2": 0.0
+            }
+
+        # 相関係数の計算（pandasのcorrを使用）
+        correlation = analysis_data[['最高レベル', 'win_rate']].corr().iloc[0, 1]
 
         # 回帰分析
         X = analysis_data['最高レベル'].values.reshape(-1, 1)
