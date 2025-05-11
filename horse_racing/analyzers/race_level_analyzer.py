@@ -7,9 +7,9 @@ from typing import Dict, Any
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression, LogisticRegression
-from ..base.analyzer import BaseAnalyzer, AnalysisConfig
-from ..data.loader import RaceDataLoader
-from ..visualization.plotter import RacePlotter
+from horse_racing.base.analyzer import BaseAnalyzer, AnalysisConfig
+from horse_racing.data.loader import RaceDataLoader
+from horse_racing.visualization.plotter import RacePlotter
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
@@ -59,61 +59,54 @@ class RaceLevelAnalyzer(BaseAnalyzer):
     @staticmethod
     def determine_grade_by_prize(row: pd.Series) -> int:
         """賞金からグレードを判定する関数"""
-        prize = row["本賞金"] if pd.notna(row["本賞金"]) else None
-        
-        if prize is None:
+        prize = row.get("本賞金")
+        if pd.isna(prize):
             return None
             
-        if prize >= 10000:
-            return 1
-        elif prize >= 7000:
-            return 2
-        elif prize >= 4500:
-            return 3
-        elif prize >= 3500:
-            return 4
-        elif prize >= 2000:
-            return 6
-        else:
-            return 5
+        match prize:
+            case p if p >= 10000: return 1
+            case p if p >= 7000: return 2
+            case p if p >= 4500: return 3
+            case p if p >= 3500: return 4
+            case p if p >= 2000: return 6
+            case _: return 5
 
     @staticmethod
     def determine_grade(row: pd.Series) -> int:
         """レース名と種別コードからグレードを判定する"""
-        race_name = str(row["レース名"]) if pd.notna(row["レース名"]) else ""
-        race_type = row["種別"] if pd.notna(row["種別"]) else 99
+        race_name = str(row.get("レース名", "")).upper().replace("Ｇ", "G").replace("Ｌ", "L")
+        race_type = row.get("種別", 99)
 
-        if "G1" in race_name or "Ｇ１" in race_name:
-            return 1
-        elif "G2" in race_name or "Ｇ２" in race_name:
-            return 2
-        elif "G3" in race_name or "Ｇ３" in race_name:
-            return 3
-        elif "重賞" in race_name:
-            return 4
-        elif "L" in race_name or "Ｌ" in race_name:
-            return 6
+        # キーワードとグレードのマッピング
+        keyword_to_grade = {
+            "G1": 1,
+            "G2": 2,
+            "G3": 3,
+            "重賞": 4,
+            "L": 6,
+        }
+
+        # マッチするキーワードを探す
+        for keyword, grade in keyword_to_grade.items():
+            if keyword in race_name:
+                return grade
         
+        # マッチするグレードがない場合は賞金による判定
         if "本賞金" in row.index:
             prize_grade = RaceLevelAnalyzer.determine_grade_by_prize(row)
             if prize_grade is not None:
                 return prize_grade
         
-        if race_type in [11, 12]:
-            return 5
-        elif race_type in [13, 14]:
-            return 5
-        elif race_type == 20:
-            if "J.G1" in race_name:
-                return 1
-            elif "J.G2" in race_name:
-                return 2
-            elif "J.G3" in race_name:
-                return 3
-            else:
+        # 種別コードによる判定
+        match race_type:
+            case 11 | 12: return 5
+            case 13 | 14: return 5
+            case 20:
+                if "J.G1" in race_name: return 1
+                if "J.G2" in race_name: return 2
+                if "J.G3" in race_name: return 3
                 return 5
-        else:
-            return 5
+            case _: return 5
 
     def load_data(self) -> pd.DataFrame:
         """データの読み込み"""
@@ -130,6 +123,37 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         """データの前処理"""
         try:
             df = self.df.copy()
+            
+            # データフレームの構造を確認
+            logger.info("データフレームのカラム一覧:")
+            logger.info(df.columns.tolist())
+            logger.info("\nデータフレームの先頭5行:")
+            logger.info(df.head())
+
+            # 日付フィルタリング
+            if self.config.start_date or self.config.end_date:
+                # 日付カラムの作成
+                try:
+                    df['date'] = pd.to_datetime(
+                        df['年'].astype(str) + 
+                        df['回'].astype(str).str.zfill(2) + 
+                        df['日'].astype(str).str.zfill(2),
+                        format='%Y%m%d'
+                    )
+                except KeyError as e:
+                    logger.error(f"日付カラムの作成に失敗しました。利用可能なカラム: {df.columns.tolist()}")
+                    raise ValueError(f"日付カラム（年、回、日）が見つかりません: {str(e)}")
+                
+                # 開始日のフィルタリング
+                if self.config.start_date:
+                    df = df[df['date'] >= pd.to_datetime(self.config.start_date)]
+                
+                # 終了日のフィルタリング
+                if self.config.end_date:
+                    df = df[df['date'] <= pd.to_datetime(self.config.end_date)]
+                
+                # 日付カラムを削除
+                df = df.drop('date', axis=1)
 
             # 芝レースのみをフィルタリング
             df = df[df["芝ダ障害コード"] == "芝"]
@@ -344,7 +368,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 correlation=correlation_stats["correlation_win"],
                 model=correlation_stats["model_win"],
                 r2=correlation_stats["r2_win"],
-                feature_name="レースレベルと勝率の関係"
+                feature_name="レースレベルと勝率の関係",
+                x_column="最高レースレベル　※馬が過去に勝った最も高いレベルのレースを示す"
             )
             
             # 複勝率の相関分析の可視化
@@ -354,6 +379,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 model=correlation_stats["model_place"],
                 r2=correlation_stats["r2_place"],
                 feature_name="レースレベルと複勝率の関係",
+                x_column="最高レースレベル　※馬が過去に勝った最も高いレベルのレースを示す",
                 y_column="place_rate"
             )
 
@@ -454,8 +480,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         # カラム名の整理
         horse_stats.columns = ["馬名", "最高レベル", "平均レベル", "勝利数", "複勝数", "出走回数", "主戦グレード"]
         
-        # レース回数が3回以上の馬のみをフィルタリング
-        min_races = self.config.min_races if hasattr(self.config, 'min_races') else 6
+        # レース回数がmin_races回以上の馬のみをフィルタリング
+        min_races = self.config.min_races if hasattr(self.config, 'min_races') else 3
         horse_stats = horse_stats[horse_stats["出走回数"] >= min_races]
         
         # 勝率と複勝率の計算
@@ -481,12 +507,14 @@ class RaceLevelAnalyzer(BaseAnalyzer):
 
     def _perform_correlation_analysis(self, horse_stats: pd.DataFrame) -> Dict[str, Any]:
         """相関分析を実行"""
+        # TODO:欠損値のついて調査予定
         analysis_data = horse_stats.dropna(subset=['最高レベル', 'win_rate', 'place_rate'])
         
         if len(analysis_data) == 0:
             return {}
 
         # 標準偏差が0の場合の処理
+        # TODO:標準偏差が0の場合の処理を調査予定
         stddev = analysis_data[['最高レベル', 'win_rate', 'place_rate']].std()
         if (stddev == 0).any():
             return {

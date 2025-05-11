@@ -2,8 +2,9 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from abc import ABC, abstractmethod
-from typing import Tuple, Optional, Dict, Any, List
+from typing import Tuple, Dict, Any
 from dataclasses import dataclass
+from datetime import datetime
 
 @dataclass
 class AnalysisConfig:
@@ -13,6 +14,8 @@ class AnalysisConfig:
     date_str: str = ''
     min_races: int = 6
     confidence_level: float = 0.95
+    start_date: datetime = None
+    end_date: datetime = None
 
 class BaseAnalyzer(ABC):
     """基底分析クラス"""

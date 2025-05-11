@@ -30,6 +30,7 @@ class RacePlotter:
 
     def plot_grade_stats(self, grade_stats: pd.DataFrame, grade_levels: Dict[int, Dict[str, Any]]) -> None:
         """グレード別統計のプロット"""
+        # TODO:グレード別統計のプロットの可視化を調査予定
         fig = plt.figure(figsize=(15, 8))
         x = np.arange(len(grade_stats))
         width = 0.35
@@ -54,6 +55,7 @@ class RacePlotter:
         model: Any,
         r2: float,
         feature_name: str,
+        x_column: str,
         y_column: str = "win_rate"
     ) -> None:
         """相関分析の可視化"""
@@ -72,9 +74,26 @@ class RacePlotter:
         plt.plot(X_plot, y_plot, color='red', linestyle='--', label=f'回帰直線 (R² = {r2:.3f})')
 
         plt.title(f"{feature_name}\n相関係数: {correlation:.3f}")
-        plt.xlabel(f"最高{feature_name.split('と')[0]}")
+        plt.xlabel(x_column)
         plt.ylabel("勝率" if y_column == "win_rate" else "複勝率")
-        plt.colorbar(scatter, label="主戦グレード")
+        
+        # カラーバーの設定
+        cbar = plt.colorbar(scatter)
+        cbar.ax.set_title("")  # タイトルは空にする
+
+        # 1つ目：タイトル（カラーバーの右外側、縦書き）
+        cbar.ax.text(
+            1.1, 0.5,
+            "最も出走回数が多いグレード",
+            va='center', ha='left', fontsize=12, fontweight='bold', rotation=90, transform=cbar.ax.transAxes
+        )
+        # 2つ目：例示（さらに右外側、縦書き・重ならないように間隔を広げる）
+        cbar.ax.text(
+            2, 0.5,  # さらに右へ
+            "※例：G1: 3回、G2: 5回、G3: 2回 → 主戦グレードはG2",
+            va='center', ha='left', fontsize=12, rotation=90, transform=cbar.ax.transAxes
+        )
+        
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()

@@ -4,9 +4,7 @@
 """
 
 from .race_level_analyzer import RaceLevelAnalyzer
-from .basic_stats_analyzer import BasicStatsAnalyzer
 
 __all__ = [
     'RaceLevelAnalyzer',
-    'BasicStatsAnalyzer',
 ] 

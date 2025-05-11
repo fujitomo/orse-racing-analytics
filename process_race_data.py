@@ -1,14 +1,6 @@
 """
 レースデータ処理のコマンドラインエントリーポイント
 """
-
-import os
-import sys
-
-# プロジェクトのルートディレクトリをPythonパスに追加
-project_root = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, project_root)
-
 from horse_racing.data.processors.bac_processor import process_all_bac_files
 from horse_racing.data.processors.sed_processor import process_all_sed_files
 
