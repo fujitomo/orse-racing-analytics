@@ -5,13 +5,15 @@ BACデータ（レース基本情報）の処理モジュール
 from horse_racing.data.constants.jra_masters import JRA_MASTERS
 from .utils import process_fixed_length_file, process_all_files, convert_year_to_4digits, clean_text
 
-def process_bac_record(record, index):
+def process_bac_record(record, index, exclude_turf=False, turf_only=False):
     """
     BACレコードを処理します
     
     Args:
         record (bytes): バイナリレコード
         index (int): レコードのインデックス
+        exclude_turf (bool): 芝コースを除外するかどうか
+        turf_only (bool): 芝コースのみを処理するかどうか
         
     Returns:
         list: 処理されたフィールドのリスト
@@ -34,6 +36,20 @@ def process_bac_record(record, index):
             print(f"⚠️ レコード {index} - 不明な場コード: {場コード}")
             return None
 
+        # 芝ダ障害コードの取得
+        芝ダ障害コード_原値 = record[24:25].decode("shift_jis", errors="ignore").strip()
+        芝ダ障害コード = JRA_MASTERS["芝ダ障害コード"].get(芝ダ障害コード_原値)
+        
+        # 芝コースを除外する場合
+        if exclude_turf and 芝ダ障害コード == "芝":
+            print(f"芝コースを除外: レコード {index}")
+            return None
+            
+        # 芝コースのみ処理する場合
+        if turf_only and 芝ダ障害コード != "芝":
+            print(f"芝コース以外を除外: レコード {index}")
+            return None
+
         fields = [
             場名,  # 場コード
             year_4digit,  # 年（4桁）
@@ -43,7 +59,7 @@ def process_bac_record(record, index):
             record[8:16].decode("shift_jis", errors="ignore").strip(),  # 年月日
             record[16:20].decode("shift_jis", errors="ignore").strip(),  # 発走時間
             record[20:24].decode("shift_jis", errors="ignore").strip(),  # 距離
-            JRA_MASTERS["芝ダ障害コード"].get(record[24:25].decode("shift_jis", errors="ignore").strip()),  # 芝ダ障害コード
+            芝ダ障害コード,  # 芝ダ障害コード
             JRA_MASTERS["右左"].get(record[25:26].decode("shift_jis", errors="ignore").strip()),  # 右左
             JRA_MASTERS["内外"].get(record[26:27].decode("shift_jis", errors="ignore").strip()),  # 内外
             JRA_MASTERS["種別"].get(record[27:29].decode("shift_jis", errors="ignore").strip()),  # 種別
@@ -80,13 +96,15 @@ def process_bac_record(record, index):
         print(f"⚠️ レコード {index} - 処理中にエラーが発生しました: {str(e)}")
         return None
 
-def format_bac_file(input_file, output_file):
+def format_bac_file(input_file, output_file, exclude_turf=False, turf_only=False):
     """
     BACファイルを整形してCSVに変換します。
     
     Args:
         input_file (str): 入力ファイルのパス
         output_file (str): 出力ファイルのパス
+        exclude_turf (bool): 芝コースを除外するかどうか
+        turf_only (bool): 芝コースのみを処理するかどうか
         
     Returns:
         list: フォーマット済みのレコードのリスト
@@ -100,11 +118,33 @@ def format_bac_file(input_file, output_file):
         "1着算入賞金", "2着算入賞金", "馬券発売フラグ", "WIN5フラグ"
     ]
     
-    return process_fixed_length_file(input_file, output_file, 183, headers, process_bac_record)
+    # process_recordに芝コース除外オプションを渡す
+    def process_record_with_turf_filter(record, index):
+        return process_bac_record(record, index, exclude_turf, turf_only)
+    
+    return process_fixed_length_file(input_file, output_file, 183, headers, process_record_with_turf_filter)
 
-def process_all_bac_files():
-    """すべてのBACファイルを処理します。"""
-    process_all_files("BAC", "import/BAC", "export/BAC", format_bac_file)
+def process_all_bac_files(exclude_turf=False, turf_only=False):
+    """
+    すべてのBACファイルを処理します。
+    
+    Args:
+        exclude_turf (bool): 芝コースを除外するかどうか
+        turf_only (bool): 芝コースのみを処理するかどうか
+    """
+    # format_bac_fileに芝コース除外オプションを渡すラッパー関数
+    def format_bac_file_wrapper(input_file, output_file):
+        return format_bac_file(input_file, output_file, exclude_turf, turf_only)
+    
+    process_all_files("BAC", "import/BAC", "export/BAC", format_bac_file_wrapper)
 
 if __name__ == "__main__":
-    process_all_bac_files() 
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='BACファイルを処理します')
+    track_group = parser.add_mutually_exclusive_group()
+    track_group.add_argument('--exclude-turf', action='store_true', help='芝コースを除外する')
+    track_group.add_argument('--turf-only', action='store_true', help='芝コースのみを処理する')
+    args = parser.parse_args()
+    
+    process_all_bac_files(exclude_turf=args.exclude_turf, turf_only=args.turf_only) 
