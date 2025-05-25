@@ -2360,6 +2360,9 @@ def main():
     args = parser.parse_args()
     
     try:
+        # 出力ディレクトリの自動作成
+        os.makedirs(args.output_dir, exist_ok=True)
+        
         # データの読み込み
         print(f"データを読み込んでいます: {args.input_path}")
         df = load_data(args.input_path)

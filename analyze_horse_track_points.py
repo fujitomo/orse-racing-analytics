@@ -217,7 +217,7 @@ def analyze_horse_track_points(input_path: str, output_dir: str = 'export/analys
         points_df = calculate_horse_track_points(df)
         
         # 可視化の作成
-        create_horse_track_visualization(points_df, output_path, min_races)
+        # create_horse_track_visualization(points_df, output_path, min_races)
         
         # 勝率とポイントの相関分析
         analyze_win_rate_points_correlation(points_df, output_path, min_races)

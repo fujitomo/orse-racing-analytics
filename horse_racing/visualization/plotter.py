@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, Any
 import matplotlib as mpl
 from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.linear_model import LinearRegression
 
 class RacePlotter:
     """レース分析の可視化クラス"""
@@ -60,8 +61,16 @@ class RacePlotter:
     ) -> None:
         """相関分析の可視化"""
         fig = plt.figure(figsize=(15, 8))
+        
+        # X軸のデータを決定
+        if x_column == "平均レベル":
+            x_data = data["平均レベル"]
+        else:
+            x_data = data["最高レベル"]
+        
+        # 散布図の描画
         scatter = plt.scatter(
-            data["最高レベル"],
+            x_data,
             data[y_column],
             s=data["出走回数"]*20,
             alpha=0.5,
@@ -69,13 +78,23 @@ class RacePlotter:
             cmap='viridis'
         )
 
-        X_plot = np.linspace(data["最高レベル"].min(), data["最高レベル"].max(), 100).reshape(-1, 1)
+        # 回帰直線の描画
+        # グラフの表示範囲全体に回帰直線を描画
+        x_min, x_max = plt.xlim()  # 現在のX軸の表示範囲を取得
+        X_plot = np.linspace(x_min, x_max, 100).reshape(-1, 1)
         y_plot = model.predict(X_plot)
-        plt.plot(X_plot, y_plot, color='red', linestyle='--', label=f'回帰直線 (R² = {r2:.3f})')
+        plt.plot(X_plot, y_plot, color='red', linestyle='--', linewidth=2, label=f'回帰直線 (R² = {r2:.3f})')
 
         plt.title(f"{feature_name}\n相関係数: {correlation:.3f}")
         plt.xlabel(x_column)
         plt.ylabel("勝率" if y_column == "win_rate" else "複勝率")
+        
+        # Y軸の範囲を適切に設定
+        if y_column in ["win_rate", "place_rate"]:
+            plt.ylim(-0.05, 1.05)  # 確率なので0-1の範囲に制限
+        
+        # グリッドを追加して傾向を見やすくする
+        plt.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
         
         # カラーバーの設定
         cbar = plt.colorbar(scatter)
@@ -95,10 +114,78 @@ class RacePlotter:
         )
         
         plt.legend()
-        plt.grid(True, alpha=0.3)
         plt.tight_layout()
 
         self.save_plot(fig, f"{feature_name}_correlation.png")
+        
+        # ビニング版の散布図も作成（傾向をより明確に表示）
+        self._plot_binned_correlation(data, x_data, y_column, feature_name, x_column)
+
+    def _plot_binned_correlation(self, data, x_data, y_column, feature_name, x_column):
+        """ビニング版の相関分析（傾向をより明確に表示）"""
+        fig = plt.figure(figsize=(15, 8))
+        
+        # データをビンに分割
+        n_bins = 10
+        bins = np.linspace(x_data.min(), x_data.max(), n_bins + 1)
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        
+        # 各ビンの平均値と標準誤差を計算
+        bin_means = []
+        bin_stds = []
+        bin_counts = []
+        
+        for i in range(len(bins) - 1):
+            mask = (x_data >= bins[i]) & (x_data < bins[i + 1])
+            if i == len(bins) - 2:  # 最後のビンは右端を含む
+                mask = (x_data >= bins[i]) & (x_data <= bins[i + 1])
+            
+            if mask.sum() > 0:
+                bin_data = data[mask][y_column]
+                bin_means.append(bin_data.mean())
+                bin_stds.append(bin_data.std() / np.sqrt(len(bin_data)))  # 標準誤差
+                bin_counts.append(len(bin_data))
+            else:
+                bin_means.append(np.nan)
+                bin_stds.append(np.nan)
+                bin_counts.append(0)
+        
+        # 有効なデータのみを抽出
+        valid_mask = ~np.isnan(bin_means)
+        valid_centers = bin_centers[valid_mask]
+        valid_means = np.array(bin_means)[valid_mask]
+        valid_stds = np.array(bin_stds)[valid_mask]
+        valid_counts = np.array(bin_counts)[valid_mask]
+        
+        # エラーバー付きの散布図
+        plt.errorbar(valid_centers, valid_means, yerr=valid_stds, 
+                    fmt='o', markersize=8, capsize=5, capthick=2, 
+                    color='blue', alpha=0.7, label='区間平均値')
+        
+        # バブルサイズでデータ数を表現
+        plt.scatter(valid_centers, valid_means, s=valid_counts*5, 
+                   alpha=0.3, color='red', label='データ数（バブルサイズ）')
+        
+        # 線形回帰直線
+        if len(valid_centers) > 1:
+            z = np.polyfit(valid_centers, valid_means, 1)
+            p = np.poly1d(z)
+            plt.plot(valid_centers, p(valid_centers), "r--", alpha=0.8, linewidth=2, 
+                    label=f'回帰直線 (傾き: {z[0]:.3f})')
+        
+        plt.title(f"{feature_name}（区間平均版）\n各区間の平均値とトレンド")
+        plt.xlabel(x_column)
+        plt.ylabel(f"平均{('勝率' if y_column == 'win_rate' else '複勝率')}")
+        
+        # Y軸の範囲を適切に設定
+        if y_column in ["win_rate", "place_rate"]:
+            plt.ylim(-0.05, 1.05)  # 確率なので0-1の範囲に制限
+        
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        
+        self.save_plot(fig, f"{feature_name}_binned_correlation.png")
 
     def plot_distribution_analysis(
         self,
@@ -161,10 +248,11 @@ class RacePlotter:
         y,
         y_pred_proba,
         feature_name: str,
-        title: str = "ロジスティック回帰分析"
+        title: str = "ロジスティック回帰分析",
+        threshold_info: dict = None
     ) -> None:
         """
-        ロジスティック回帰の予測曲線を可視化します。
+        改善されたロジスティック回帰の予測曲線を可視化します。
         
         Parameters:
         -----------
@@ -178,20 +266,54 @@ class RacePlotter:
             説明変数の名前（軸ラベルに使用）
         title : str, optional
             図のタイトル
+        threshold_info : dict, optional
+            閾値情報
         """
         # 散布図とロジスティック回帰曲線
-        fig = plt.figure(figsize=(15, 8))
-        plt.scatter(X, y, color='blue', alpha=0.5, label='実データ')
+        fig = plt.figure(figsize=(15, 10))
+        
+        # 実データの散布図（透明度とサイズを調整）
+        colors = ['red' if label == 0 else 'blue' for label in y]
+        plt.scatter(X, y, c=colors, alpha=0.6, s=30, 
+                   label='実データ (赤:低, 青:高)')
         
         # データをソートしてスムーズな曲線を描画
         sort_idx = np.argsort(X)
-        plt.plot(X[sort_idx], y_pred_proba[sort_idx], color='red', label='回帰曲線')
+        X_sorted = X[sort_idx]
+        y_proba_sorted = y_pred_proba[sort_idx]
         
-        plt.xlabel(feature_name)
-        plt.ylabel('確率')
-        plt.title(f'{title}\n予測曲線')
-        plt.legend()
+        # 回帰曲線を太く、目立つ色で描画
+        plt.plot(X_sorted, y_proba_sorted, color='darkgreen', linewidth=3, 
+                label='ロジスティック回帰曲線')
+        
+        # 50%ラインを追加
+        plt.axhline(y=0.5, color='orange', linestyle='--', alpha=0.7, 
+                   label='50%ライン')
+        
+        # 軸ラベルとタイトル
+        plt.xlabel(feature_name.split('（')[0], fontsize=12)
+        plt.ylabel('高成績確率', fontsize=12)
+        
+        # タイトルに閾値情報を追加
+        title_text = f'{title}\n予測曲線'
+        if threshold_info:
+            if 'place_threshold' in threshold_info:
+                title_text += f' (複勝率閾値: {threshold_info["place_threshold"]:.2f})'
+            elif 'win_threshold' in threshold_info:
+                title_text += f' (勝率閾値: {threshold_info["win_threshold"]:.2f})'
+        
+        plt.title(title_text, fontsize=14)
+        plt.legend(fontsize=10)
         plt.grid(True, alpha=0.3)
+        
+        # Y軸を0-1に制限
+        plt.ylim(-0.05, 1.05)
+        
+        # X軸の範囲を適切に設定
+        x_min, x_max = X.min(), X.max()
+        x_range = x_max - x_min
+        plt.xlim(x_min - x_range * 0.05, x_max + x_range * 0.05)
+        
         plt.tight_layout()
         
         # プロットを保存
@@ -244,6 +366,74 @@ class RacePlotter:
         # プロットを保存
         self.save_plot(fig, f"{feature_name}_confusion_matrix.png")
 
+    def plot_continuous_regression(
+        self,
+        X,
+        y,
+        y_pred,
+        feature_name: str,
+        target_name: str,
+        r2: float,
+        mse: float,
+        outliers_removed: int = 0
+    ) -> None:
+        """
+        連続値回帰の結果を可視化します。
+        
+        Parameters:
+        -----------
+        X : array-like
+            説明変数
+        y : array-like
+            実際の値
+        y_pred : array-like
+            予測値
+        feature_name : str
+            説明変数の名前
+        target_name : str
+            目的変数の名前
+        r2 : float
+            決定係数
+        mse : float
+            平均二乗誤差
+        outliers_removed : int
+            除去された外れ値の数
+        """
+        fig = plt.figure(figsize=(15, 10))
+        
+        # 散布図
+        plt.scatter(X, y, alpha=0.6, s=30, color='blue', label='実データ')
+        
+        # 回帰直線
+        sort_idx = np.argsort(X)
+        X_sorted = X[sort_idx]
+        y_pred_sorted = y_pred[sort_idx]
+        plt.plot(X_sorted, y_pred_sorted, color='red', linewidth=3, 
+                label=f'回帰直線 (R²={r2:.3f})')
+        
+        # 軸ラベルとタイトル
+        plt.xlabel(feature_name.split('（')[0], fontsize=12)
+        plt.ylabel(target_name, fontsize=12)
+        
+        title_text = f'{feature_name}と{target_name}の関係（線形回帰）'
+        if outliers_removed > 0:
+            title_text += f'\n外れ値除去: {outliers_removed}件'
+        title_text += f'\nR² = {r2:.3f}, MSE = {mse:.4f}'
+        
+        plt.title(title_text, fontsize=14)
+        plt.legend(fontsize=10)
+        plt.grid(True, alpha=0.3)
+        
+        # Y軸を0-1に制限（確率の場合）
+        if target_name in ['勝率', 'win_rate', '複勝率', 'place_rate']:
+            plt.ylim(-0.05, 1.05)
+        
+        plt.tight_layout()
+        
+        # プロットを保存
+        safe_target_name = target_name.replace('/', '_')
+        self.save_plot(fig, f"{feature_name}_{safe_target_name}_continuous_regression.png")
+
     def plot_logistic_regression(
         self,
         X,
@@ -251,10 +441,11 @@ class RacePlotter:
         y_pred_proba,
         y_pred,
         feature_name: str,
-        title: str = "ロジスティック回帰分析"
+        title: str = "ロジスティック回帰分析",
+        threshold_info: dict = None
     ) -> None:
         """
-        ロジスティック回帰分析の結果を2つの別々の図として可視化します。
+        改善されたロジスティック回帰分析の結果を2つの別々の図として可視化します。
         1. 散布図とロジスティック回帰曲線
         2. 混同行列と分類レポート
         
@@ -272,6 +463,8 @@ class RacePlotter:
             説明変数の名前（軸ラベルに使用）
         title : str, optional
             図全体のタイトル
+        threshold_info : dict, optional
+            閾値情報
         """
         # 予測曲線の可視化
         self.plot_logistic_regression_curve(
@@ -279,7 +472,8 @@ class RacePlotter:
             y=y,
             y_pred_proba=y_pred_proba,
             feature_name=feature_name,
-            title=title
+            title=title,
+            threshold_info=threshold_info
         )
         
         # 混同行列と分類レポートの可視化
