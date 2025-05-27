@@ -363,23 +363,49 @@ class RaceLevelAnalyzer(BaseAnalyzer):
 
         # 勝率の相関分析の可視化
         if correlation_stats:
+            # 最高レベルでの分析
             self.plotter.plot_correlation_analysis(
                 data=horse_stats,
-                correlation=correlation_stats["correlation_win"],
-                model=correlation_stats["model_win"],
-                r2=correlation_stats["r2_win"],
-                feature_name="レースレベルと勝率の関係",
+                correlation=correlation_stats["correlation_win_max"],
+                model=correlation_stats["model_win_max"],
+                r2=correlation_stats["r2_win_max"],
+                feature_name="レースレベル（最高）と勝率の関係",
                 x_column="最高レースレベル　※馬が過去に勝った最も高いレベルのレースを示す"
             )
             
-            # 複勝率の相関分析の可視化
+            # 複勝率の相関分析の可視化（最高レベル）
             self.plotter.plot_correlation_analysis(
                 data=horse_stats,
-                correlation=correlation_stats["correlation_place"],
-                model=correlation_stats["model_place"],
-                r2=correlation_stats["r2_place"],
-                feature_name="レースレベルと複勝率の関係",
+                correlation=correlation_stats["correlation_place_max"],
+                model=correlation_stats["model_place_max"],
+                r2=correlation_stats["r2_place_max"],
+                feature_name="レースレベル（最高）と複勝率の関係",
                 x_column="最高レースレベル　※馬が過去に勝った最も高いレベルのレースを示す",
+                y_column="place_rate"
+            )
+            
+            # 平均レベルでの勝率分析
+            # horse_statsのデータを平均レベル用に調整
+            horse_stats_avg = horse_stats.copy()
+            horse_stats_avg['最高レベル'] = horse_stats_avg['平均レベル']  # plotterが最高レベルを期待するため
+            
+            self.plotter.plot_correlation_analysis(
+                data=horse_stats_avg,
+                correlation=correlation_stats["correlation_win_avg"],
+                model=correlation_stats["model_win_avg"],
+                r2=correlation_stats["r2_win_avg"],
+                feature_name="レースレベル（平均）と勝率の関係",
+                x_column="平均レースレベル　※馬の全出走レースの平均レベルを示す"
+            )
+            
+            # 平均レベルでの複勝率分析
+            self.plotter.plot_correlation_analysis(
+                data=horse_stats_avg,
+                correlation=correlation_stats["correlation_place_avg"],
+                model=correlation_stats["model_place_avg"],
+                r2=correlation_stats["r2_place_avg"],
+                feature_name="レースレベル（平均）と複勝率の関係",
+                x_column="平均レースレベル　※馬の全出走レースの平均レベルを示す",
                 y_column="place_rate"
             )
 
@@ -508,47 +534,82 @@ class RaceLevelAnalyzer(BaseAnalyzer):
     def _perform_correlation_analysis(self, horse_stats: pd.DataFrame) -> Dict[str, Any]:
         """相関分析を実行"""
         # TODO:欠損値のついて調査予定
-        analysis_data = horse_stats.dropna(subset=['最高レベル', 'win_rate', 'place_rate'])
+        analysis_data = horse_stats.dropna(subset=['最高レベル', '平均レベル', 'win_rate', 'place_rate'])
         
         if len(analysis_data) == 0:
             return {}
 
         # 標準偏差が0の場合の処理
         # TODO:標準偏差が0の場合の処理を調査予定
-        stddev = analysis_data[['最高レベル', 'win_rate', 'place_rate']].std()
+        stddev = analysis_data[['最高レベル', '平均レベル', 'win_rate', 'place_rate']].std()
         if (stddev == 0).any():
             return {
-                "correlation_win": 0.0,
-                "correlation_place": 0.0,
-                "model_win": None,
-                "model_place": None,
-                "r2_win": 0.0,
-                "r2_place": 0.0
+                "correlation_win_max": 0.0,
+                "correlation_place_max": 0.0,
+                "correlation_win_avg": 0.0,
+                "correlation_place_avg": 0.0,
+                "model_win_max": None,
+                "model_place_max": None,
+                "model_win_avg": None,
+                "model_place_avg": None,
+                "r2_win_max": 0.0,
+                "r2_place_max": 0.0,
+                "r2_win_avg": 0.0,
+                "r2_place_avg": 0.0
             }
 
-        # 勝率の相関係数と回帰分析
-        correlation_win = analysis_data[['最高レベル', 'win_rate']].corr().iloc[0, 1]
-        X_win = analysis_data['最高レベル'].values.reshape(-1, 1)
+        # 最高レベル - 勝率の相関係数と回帰分析
+        correlation_win_max = analysis_data[['最高レベル', 'win_rate']].corr().iloc[0, 1]
+        X_win_max = analysis_data['最高レベル'].values.reshape(-1, 1)
         y_win = analysis_data['win_rate'].values
-        model_win = LinearRegression()
-        model_win.fit(X_win, y_win)
-        r2_win = model_win.score(X_win, y_win)
+        model_win_max = LinearRegression()
+        model_win_max.fit(X_win_max, y_win)
+        r2_win_max = model_win_max.score(X_win_max, y_win)
 
-        # 複勝率の相関係数と回帰分析
-        correlation_place = analysis_data[['最高レベル', 'place_rate']].corr().iloc[0, 1]
-        X_place = analysis_data['最高レベル'].values.reshape(-1, 1)
+        # 最高レベル - 複勝率の相関係数と回帰分析
+        correlation_place_max = analysis_data[['最高レベル', 'place_rate']].corr().iloc[0, 1]
+        X_place_max = analysis_data['最高レベル'].values.reshape(-1, 1)
         y_place = analysis_data['place_rate'].values
-        model_place = LinearRegression()
-        model_place.fit(X_place, y_place)
-        r2_place = model_place.score(X_place, y_place)
+        model_place_max = LinearRegression()
+        model_place_max.fit(X_place_max, y_place)
+        r2_place_max = model_place_max.score(X_place_max, y_place)
+
+        # 平均レベル - 勝率の相関係数と回帰分析
+        correlation_win_avg = analysis_data[['平均レベル', 'win_rate']].corr().iloc[0, 1]
+        X_win_avg = analysis_data['平均レベル'].values.reshape(-1, 1)
+        model_win_avg = LinearRegression()
+        model_win_avg.fit(X_win_avg, y_win)
+        r2_win_avg = model_win_avg.score(X_win_avg, y_win)
+
+        # 平均レベル - 複勝率の相関係数と回帰分析
+        correlation_place_avg = analysis_data[['平均レベル', 'place_rate']].corr().iloc[0, 1]
+        X_place_avg = analysis_data['平均レベル'].values.reshape(-1, 1)
+        model_place_avg = LinearRegression()
+        model_place_avg.fit(X_place_avg, y_place)
+        r2_place_avg = model_place_avg.score(X_place_avg, y_place)
 
         return {
-            "correlation_win": correlation_win,
-            "correlation_place": correlation_place,
-            "model_win": model_win,
-            "model_place": model_place,
-            "r2_win": r2_win,
-            "r2_place": r2_place
+            # 最高レベル系
+            "correlation_win_max": correlation_win_max,
+            "correlation_place_max": correlation_place_max,
+            "model_win_max": model_win_max,
+            "model_place_max": model_place_max,
+            "r2_win_max": r2_win_max,
+            "r2_place_max": r2_place_max,
+            # 平均レベル系
+            "correlation_win_avg": correlation_win_avg,
+            "correlation_place_avg": correlation_place_avg,
+            "model_win_avg": model_win_avg,
+            "model_place_avg": model_place_avg,
+            "r2_win_avg": r2_win_avg,
+            "r2_place_avg": r2_place_avg,
+            # 後方互換性のため既存のキーも残す
+            "correlation_win": correlation_win_max,
+            "correlation_place": correlation_place_max,
+            "model_win": model_win_max,
+            "model_place": model_place_max,
+            "r2_win": r2_win_max,
+            "r2_place": r2_place_max
         }
 
     def _calculate_level_year_stats(self) -> pd.DataFrame:
