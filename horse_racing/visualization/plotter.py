@@ -68,14 +68,23 @@ class RacePlotter:
         else:
             x_data = data["最高レベル"]
         
+        # レース回数に基づくサイズ設定（より明確に）
+        min_size = 30
+        max_size = 300
+        race_counts = data["出走回数"]
+        # レース回数を正規化してサイズに変換
+        normalized_sizes = min_size + (race_counts - race_counts.min()) / (race_counts.max() - race_counts.min()) * (max_size - min_size)
+        
         # 散布図の描画
         scatter = plt.scatter(
             x_data,
             data[y_column],
-            s=data["出走回数"]*20,
-            alpha=0.5,
+            s=normalized_sizes,
+            alpha=0.6,
             c=data["主戦グレード"],
-            cmap='viridis'
+            cmap='viridis',
+            edgecolors='black',
+            linewidth=0.5
         )
 
         # 回帰直線の描画
@@ -98,7 +107,7 @@ class RacePlotter:
         
         # カラーバーの設定
         cbar = plt.colorbar(scatter)
-        cbar.ax.set_title("")  # タイトルは空にする
+        cbar.ax.set_title("")
 
         # 1つ目：タイトル（カラーバーの右外側、縦書き）
         cbar.ax.text(
@@ -113,7 +122,36 @@ class RacePlotter:
             va='center', ha='left', fontsize=12, rotation=90, transform=cbar.ax.transAxes
         )
         
-        plt.legend()
+        # レース回数のサイズ凡例を追加
+        sizes_for_legend = [race_counts.min(), race_counts.quantile(0.5), race_counts.max()]
+        labels_for_legend = [f'{int(size)}回' for size in sizes_for_legend]
+        
+        # サイズ凡例用のマーカーサイズを計算
+        legend_sizes = []
+        for size in sizes_for_legend:
+            normalized_size = min_size + (size - race_counts.min()) / (race_counts.max() - race_counts.min()) * (max_size - min_size)
+            legend_sizes.append(normalized_size)
+        
+        # サイズ凡例の作成
+        legend_elements = []
+        for size, label, marker_size in zip(sizes_for_legend, labels_for_legend, legend_sizes):
+            legend_elements.append(plt.scatter([], [], s=marker_size, c='gray', alpha=0.6, 
+                                             edgecolors='black', linewidth=0.5, label=label))
+        
+        # 既存の凡例と組み合わせ
+        legend1 = plt.legend(handles=legend_elements, title="レース回数（点のサイズ）", 
+                           loc='upper left', bbox_to_anchor=(0, 1), frameon=True, fancybox=True, shadow=True)
+        plt.gca().add_artist(legend1)
+        
+        # 回帰直線の凡例
+        legend2 = plt.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
+        
+        # グラフ左下にレース回数の範囲情報を追加
+        info_text = f"レース回数範囲: {int(race_counts.min())}～{int(race_counts.max())}回\n平均: {race_counts.mean():.1f}回"
+        plt.text(0.02, 0.02, info_text, transform=plt.gca().transAxes, 
+                bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8),
+                verticalalignment='bottom', fontsize=10)
+        
         plt.tight_layout()
 
         self.save_plot(fig, f"{feature_name}_correlation.png")
@@ -130,10 +168,11 @@ class RacePlotter:
         bins = np.linspace(x_data.min(), x_data.max(), n_bins + 1)
         bin_centers = (bins[:-1] + bins[1:]) / 2
         
-        # 各ビンの平均値と標準誤差を計算
+        # 各ビンの平均値と標準誤差、レース回数統計を計算
         bin_means = []
         bin_stds = []
         bin_counts = []
+        bin_race_counts_mean = []  # 各ビンの平均レース回数
         
         for i in range(len(bins) - 1):
             mask = (x_data >= bins[i]) & (x_data < bins[i + 1])
@@ -142,13 +181,16 @@ class RacePlotter:
             
             if mask.sum() > 0:
                 bin_data = data[mask][y_column]
+                bin_race_data = data[mask]["出走回数"]
                 bin_means.append(bin_data.mean())
                 bin_stds.append(bin_data.std() / np.sqrt(len(bin_data)))  # 標準誤差
                 bin_counts.append(len(bin_data))
+                bin_race_counts_mean.append(bin_race_data.mean())  # 平均レース回数
             else:
                 bin_means.append(np.nan)
                 bin_stds.append(np.nan)
                 bin_counts.append(0)
+                bin_race_counts_mean.append(np.nan)
         
         # 有効なデータのみを抽出
         valid_mask = ~np.isnan(bin_means)
@@ -156,15 +198,25 @@ class RacePlotter:
         valid_means = np.array(bin_means)[valid_mask]
         valid_stds = np.array(bin_stds)[valid_mask]
         valid_counts = np.array(bin_counts)[valid_mask]
+        valid_race_counts = np.array(bin_race_counts_mean)[valid_mask]
         
         # エラーバー付きの散布図
         plt.errorbar(valid_centers, valid_means, yerr=valid_stds, 
                     fmt='o', markersize=8, capsize=5, capthick=2, 
                     color='blue', alpha=0.7, label='区間平均値')
         
-        # バブルサイズでデータ数を表現
-        plt.scatter(valid_centers, valid_means, s=valid_counts*5, 
-                   alpha=0.3, color='red', label='データ数（バブルサイズ）')
+        # バブルサイズでデータ数を表現（サイズをレース回数平均に比例させる）
+        max_race_count = valid_race_counts.max() if len(valid_race_counts) > 0 else 1
+        min_race_count = valid_race_counts.min() if len(valid_race_counts) > 0 else 1
+        bubble_sizes = 50 + (valid_race_counts - min_race_count) / (max_race_count - min_race_count) * 200
+        
+        scatter = plt.scatter(valid_centers, valid_means, s=bubble_sizes, 
+                   alpha=0.4, c=valid_race_counts, cmap='Reds', 
+                   edgecolors='black', linewidth=1, label='平均レース回数（バブルサイズ・色）')
+        
+        # カラーバーの追加
+        cbar = plt.colorbar(scatter)
+        cbar.set_label('平均レース回数', rotation=270, labelpad=20)
         
         # 線形回帰直線
         if len(valid_centers) > 1:
@@ -181,8 +233,14 @@ class RacePlotter:
         if y_column in ["win_rate", "place_rate"]:
             plt.ylim(-0.05, 1.05)  # 確率なので0-1の範囲に制限
         
+        # グラフ右上にレース回数統計情報を追加
+        race_stats_text = f"レース回数統計（区間別）:\n最小: {min_race_count:.1f}回\n最大: {max_race_count:.1f}回\n全体平均: {data['出走回数'].mean():.1f}回"
+        plt.text(0.98, 0.98, race_stats_text, transform=plt.gca().transAxes, 
+                bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8),
+                verticalalignment='top', horizontalalignment='right', fontsize=9)
+        
         plt.grid(True, alpha=0.3)
-        plt.legend()
+        plt.legend(loc='lower right')
         plt.tight_layout()
         
         self.save_plot(fig, f"{feature_name}_binned_correlation.png")

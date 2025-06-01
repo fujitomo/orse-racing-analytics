@@ -1153,138 +1153,113 @@ class TrackWinRateAnalyzer:
     
     def _plot_horse_weight_analysis(self, weight_analysis, output_dir, period_name):
         """馬ごと重み付けポイント分析可視化（従来通り）"""
-        horse_weights = weight_analysis['horse_weights']
         
-        # 分析データの選択
-        if 'winning_horses' in weight_analysis and weight_analysis['winning_horses'] is not None:
-            main_analysis = weight_analysis['winning_horses']
-            plot_data = weight_analysis['winning_horses_data']
-            analysis_title = f'馬ごと重み付けポイント分析（勝利経験馬のみ） ({period_name})'
+        # weight_analysisの構造に応じて適切なデータを取得
+        if 'horse_weights' in weight_analysis:
+            horse_weights = weight_analysis['horse_weights']
         else:
+            logger.warning(f"期間 {period_name}: horse_weightsデータが見つかりません")
+            return
+        
+        # main_analysisが存在するかチェック、なければall_horsesを使用
+        if 'main_analysis' in weight_analysis:
+            main_analysis = weight_analysis['main_analysis']
+        elif 'all_horses' in weight_analysis:
             main_analysis = weight_analysis['all_horses']
-            plot_data = horse_weights
-            analysis_title = f'馬ごと重み付けポイント分析（全馬） ({period_name})'
+        else:
+            logger.warning(f"期間 {period_name}: 相関分析データが見つかりません")
+            main_analysis = None
         
+        # 勝利経験のある馬のみを抽出（プロット用）
+        plot_data = horse_weights[horse_weights['勝利数'] > 0].copy()
+        
+        if len(plot_data) == 0:
+            logger.warning(f"期間 {period_name}: 勝利経験のある馬がいないため、散布図をスキップします")
+            return
+        
+        # 6つのサブプロットを作成
         fig, axes = plt.subplots(2, 3, figsize=(20, 12))
-        fig.suptitle(analysis_title, fontsize=16)
         
-        # 1. 平均重み付けポイント vs 勝率（勝利経験馬）
+        # 1. 平均重み付けポイント vs 勝率
         ax1 = axes[0, 0]
-        x1 = plot_data['平均重み付けポイント']
-        y1 = plot_data['勝率']
         
-        ax1.scatter(x1, y1, alpha=0.6, s=50, edgecolors='black', linewidth=0.5)
+        # レース回数（出走数）に基づくサイズ設定（より明確に）
+        min_size = 30
+        max_size = 200
+        race_counts = plot_data['出走数']
+        # レース回数を正規化してサイズに変換
+        normalized_sizes = min_size + (race_counts - race_counts.min()) / (race_counts.max() - race_counts.min()) * (max_size - min_size)
         
-        # 回帰直線
-        if 'linear_regression' in main_analysis:
-            reg_data = main_analysis['linear_regression']['weight']
-            x_range = np.linspace(x1.min(), x1.max(), 100)
-            y_pred = reg_data['coefficient'] * x_range + reg_data['intercept']
-            ax1.plot(x_range, y_pred, 'r-', linewidth=2, label='回帰直線')
-            
-            # 統計情報
-            if 'pearson_correlation' in main_analysis:
-                corr = main_analysis['pearson_correlation']['weight_win_corr']
-                p_val = main_analysis['pearson_correlation']['weight_win_p']
-                r2 = reg_data['r2']
-                
-                stats_text = f'r = {corr:.3f}\n'
-                stats_text += f'p = {p_val:.3f}\n'
-                stats_text += f'R² = {r2:.3f}\n'
-                stats_text += f'有意性: {"有意" if p_val < 0.05 else "非有意"}'
-                
-                ax1.text(0.05, 0.95, stats_text, transform=ax1.transAxes, 
-                        verticalalignment='top', 
-                        bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
+        scatter1 = ax1.scatter(plot_data['平均重み付けポイント'], plot_data['勝率'], 
+                             c=plot_data['出走数'], cmap='viridis', 
+                             alpha=0.7, s=normalized_sizes, edgecolors='black', linewidth=0.5)
         
+        plt.colorbar(scatter1, ax=ax1, label='出走数')
         ax1.set_xlabel('平均重み付けポイント')
         ax1.set_ylabel('勝率')
         ax1.set_title('平均重み付けポイント vs 勝率')
         ax1.grid(True, alpha=0.3)
-        if 'linear_regression' in main_analysis:
-            ax1.legend()
         
-        # 2. 複合重みポイント vs 勝率
+        # 2. 累積重み付けポイント vs 勝率（horse_weightsに累積ポイントがあるかチェック）
         ax2 = axes[0, 1]
-        x2 = plot_data['複合重みポイント']
-        y2 = plot_data['勝率']
         
-        ax2.scatter(x2, y2, alpha=0.6, s=50, edgecolors='black', linewidth=0.5, color='orange')
-        
-        # 回帰直線
-        if 'linear_regression' in main_analysis:
-            reg_data = main_analysis['linear_regression']['composite']
-            x_range = np.linspace(x2.min(), x2.max(), 100)
-            y_pred = reg_data['coefficient'] * x_range + reg_data['intercept']
-            ax2.plot(x_range, y_pred, 'r-', linewidth=2, label='回帰直線')
+        if '累積重み付けポイント' in plot_data.columns:
+            # 累積ポイント用のサイズ設定
+            cumulative_counts = plot_data['出走数']
+            normalized_sizes_cum = min_size + (cumulative_counts - cumulative_counts.min()) / (cumulative_counts.max() - cumulative_counts.min()) * (max_size - min_size)
             
-            # 統計情報
-            if 'pearson_correlation' in main_analysis:
-                corr = main_analysis['pearson_correlation']['composite_win_corr']
-                p_val = main_analysis['pearson_correlation']['composite_win_p']
-                r2 = reg_data['r2']
-                
-                stats_text = f'r = {corr:.3f}\n'
-                stats_text += f'p = {p_val:.3f}\n'
-                stats_text += f'R² = {r2:.3f}\n'
-                stats_text += f'有意性: {"有意" if p_val < 0.05 else "非有意"}'
-                
-                ax2.text(0.05, 0.95, stats_text, transform=ax2.transAxes, 
-                        verticalalignment='top', 
-                        bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
-        
-        ax2.set_xlabel('複合重みポイント')
-        ax2.set_ylabel('勝率')
-        ax2.set_title('複合重みポイント vs 勝率')
+            scatter2 = ax2.scatter(plot_data['累積重み付けポイント'], plot_data['勝率'], 
+                                 c=plot_data['出走数'], cmap='plasma', 
+                                 alpha=0.7, s=normalized_sizes_cum, edgecolors='black', linewidth=0.5)
+            
+            plt.colorbar(scatter2, ax=ax2, label='出走数')
+            ax2.set_xlabel('累積重み付けポイント')
+            ax2.set_ylabel('勝率')
+            ax2.set_title('累積重み付けポイント vs 勝率')
+        else:
+            # 累積ポイントがない場合は代替として平均ポイント×出走数を表示
+            cumulative_proxy = plot_data['平均重み付けポイント'] * plot_data['出走数']
+            cumulative_counts = plot_data['出走数']
+            normalized_sizes_cum = min_size + (cumulative_counts - cumulative_counts.min()) / (cumulative_counts.max() - cumulative_counts.min()) * (max_size - min_size)
+            
+            scatter2 = ax2.scatter(cumulative_proxy, plot_data['勝率'], 
+                                 c=plot_data['出走数'], cmap='plasma', 
+                                 alpha=0.7, s=normalized_sizes_cum, edgecolors='black', linewidth=0.5)
+            
+            plt.colorbar(scatter2, ax=ax2, label='出走数')
+            ax2.set_xlabel('推定累積重み付けポイント（平均×出走数）')
+            ax2.set_ylabel('勝率')
+            ax2.set_title('推定累積重み付けポイント vs 勝率')
         ax2.grid(True, alpha=0.3)
-        if 'linear_regression' in main_analysis:
-            ax2.legend()
         
-        # 3. 複勝率での分析
+        # 3. 複合重み付けポイント vs 勝率
         ax3 = axes[0, 2]
-        if 'placerate_analysis' in weight_analysis:
-            placerate_analysis = weight_analysis['placerate_analysis']
-            x3 = horse_weights['平均重み付けポイント']
-            y3 = horse_weights['複勝率']
-            
-            ax3.scatter(x3, y3, alpha=0.6, s=50, edgecolors='black', linewidth=0.5, color='green')
-            
-            # 回帰直線
-            if 'linear_regression' in placerate_analysis:
-                reg_data = placerate_analysis['linear_regression']['weight']
-                x_range = np.linspace(x3.min(), x3.max(), 100)
-                y_pred = reg_data['coefficient'] * x_range + reg_data['intercept']
-                ax3.plot(x_range, y_pred, 'r-', linewidth=2, label='回帰直線')
-                
-                # 統計情報
-                if 'pearson_correlation' in placerate_analysis:
-                    corr = placerate_analysis['pearson_correlation']['weight_win_corr']
-                    p_val = placerate_analysis['pearson_correlation']['weight_win_p']
-                    r2 = reg_data['r2']
-                    
-                    stats_text = f'r = {corr:.3f}\n'
-                    stats_text += f'p = {p_val:.3f}\n'
-                    stats_text += f'R² = {r2:.3f}\n'
-                    stats_text += f'有意性: {"有意" if p_val < 0.05 else "非有意"}'
-                
-                ax3.text(0.05, 0.95, stats_text, transform=ax3.transAxes, 
-                        verticalalignment='top', 
-                        bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.8))
-            
-            ax3.set_xlabel('平均重み付けポイント')
-            ax3.set_ylabel('複勝率')
-            ax3.set_title('平均重み付けポイント vs 複勝率（全馬）')
-            ax3.grid(True, alpha=0.3)
-            if 'linear_regression' in placerate_analysis:
-                ax3.legend()
+        
+        # 複合ポイント用のサイズ設定
+        composite_counts = plot_data['出走数']
+        normalized_sizes_comp = min_size + (composite_counts - composite_counts.min()) / (composite_counts.max() - composite_counts.min()) * (max_size - min_size)
+        
+        scatter3 = ax3.scatter(plot_data['複合重みポイント'], plot_data['勝率'], 
+                             c=plot_data['出走数'], cmap='coolwarm', 
+                             alpha=0.7, s=normalized_sizes_comp, edgecolors='black', linewidth=0.5)
+        
+        plt.colorbar(scatter3, ax=ax3, label='出走数')
+        ax3.set_xlabel('複合重み付けポイント')
+        ax3.set_ylabel('勝率')
+        ax3.set_title('複合重み付けポイント vs 勝率')
+        ax3.grid(True, alpha=0.3)
         
         # 4. 出走数 vs 勝率（重み付けポイント別）
         ax4 = axes[1, 0]
-        scatter = ax4.scatter(plot_data['出走数'], plot_data['勝率'], 
-                             c=plot_data['平均重み付けポイント'], cmap='viridis', 
-                             alpha=0.7, s=50, edgecolors='black', linewidth=0.5)
         
-        plt.colorbar(scatter, ax=ax4, label='平均重み付けポイント')
+        # 出走数vs勝率用のサイズ設定（平均重み付けポイントに基づく）
+        point_based_sizes = min_size + (plot_data['平均重み付けポイント'] - plot_data['平均重み付けポイント'].min()) / (plot_data['平均重み付けポイント'].max() - plot_data['平均重み付けポイント'].min()) * (max_size - min_size)
+        
+        scatter4 = ax4.scatter(plot_data['出走数'], plot_data['勝率'], 
+                             c=plot_data['平均重み付けポイント'], cmap='viridis', 
+                             alpha=0.7, s=point_based_sizes, edgecolors='black', linewidth=0.5)
+        
+        plt.colorbar(scatter4, ax=ax4, label='平均重み付けポイント')
         ax4.set_xlabel('出走数')
         ax4.set_ylabel('勝率')
         ax4.set_title('出走数 vs 勝率（重み付けポイント別）')
@@ -1293,7 +1268,7 @@ class TrackWinRateAnalyzer:
         # 5. 相関係数比較
         ax5 = axes[1, 1]
         
-        if 'pearson_correlation' in main_analysis and 'spearman_correlation' in main_analysis:
+        if main_analysis and 'pearson_correlation' in main_analysis and 'spearman_correlation' in main_analysis:
             pearson_data = [
                 main_analysis['pearson_correlation']['weight_win_corr'],
                 main_analysis['pearson_correlation']['composite_win_corr']
@@ -1316,6 +1291,13 @@ class TrackWinRateAnalyzer:
             ax5.set_xticklabels(['平均重み付け', '複合重み付け'])
             ax5.legend()
             ax5.grid(True, alpha=0.3)
+        else:
+            # 相関分析データがない場合のメッセージ
+            ax5.text(0.5, 0.5, '相関分析データなし', 
+                    transform=ax5.transAxes, ha='center', va='center',
+                    fontsize=14, bbox=dict(boxstyle='round', facecolor='lightgray'))
+            ax5.set_title('相関係数比較')
+            ax5.axis('off')
         
         # 6. 勝率分布
         ax6 = axes[1, 2]
@@ -1329,9 +1311,15 @@ class TrackWinRateAnalyzer:
         ax6.legend()
         ax6.grid(True, alpha=0.3)
         
+        # 全体のタイトルに出走数情報を追加
+        fig.suptitle(f'馬ごと重み付け分析 ({period_name})\n出走数範囲: {int(race_counts.min())}～{int(race_counts.max())}回 (平均: {race_counts.mean():.1f}回)', 
+                    fontsize=16, fontweight='bold')
+        
         plt.tight_layout()
         plt.savefig(output_dir / f'馬ごと重み付け分析_{period_name}.png', dpi=300, bbox_inches='tight')
         plt.close()
+        
+        logger.info(f"馬ごと重み付け分析図を保存: {output_dir / f'馬ごと重み付け分析_{period_name}.png'}")
     
     def _plot_race_point_correlation_analysis(self, horse_stats, correlation_results, output_dir, period_name):
         """複勝時重み付けポイント相関分析の可視化（指定ファイル名）"""
@@ -1444,11 +1432,15 @@ class TrackWinRateAnalyzer:
         x = horse_stats[x_col]
         y = horse_stats[y_col]
         
-        # 出走数でポイントサイズを調整
-        sizes = horse_stats['出走数'] * 2
+        # レース回数（出走数）に基づくサイズ設定（より明確に）
+        min_size = 30
+        max_size = 300
+        race_counts = horse_stats['出走数']
+        # レース回数を正規化してサイズに変換
+        normalized_sizes = min_size + (race_counts - race_counts.min()) / (race_counts.max() - race_counts.min()) * (max_size - min_size)
         
         # 散布図
-        scatter = ax.scatter(x, y, c=horse_stats['出走数'], s=sizes, alpha=0.6, 
+        scatter = ax.scatter(x, y, c=horse_stats['出走数'], s=normalized_sizes, alpha=0.6, 
                            cmap='viridis', edgecolors='black', linewidth=0.5)
         
         # カラーバー
@@ -1475,11 +1467,40 @@ class TrackWinRateAnalyzer:
                verticalalignment='top', fontsize=12,
                bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
         
+        # レース回数のサイズ凡例を追加
+        sizes_for_legend = [race_counts.min(), race_counts.quantile(0.5), race_counts.max()]
+        labels_for_legend = [f'{int(size)}回' for size in sizes_for_legend]
+        
+        # サイズ凡例用のマーカーサイズを計算
+        legend_sizes = []
+        for size in sizes_for_legend:
+            normalized_size = min_size + (size - race_counts.min()) / (race_counts.max() - race_counts.min()) * (max_size - min_size)
+            legend_sizes.append(normalized_size)
+        
+        # サイズ凡例の作成
+        legend_elements = []
+        for size, label, marker_size in zip(sizes_for_legend, labels_for_legend, legend_sizes):
+            legend_elements.append(plt.scatter([], [], s=marker_size, c='gray', alpha=0.6, 
+                                             edgecolors='black', linewidth=0.5, label=label))
+        
+        # 既存の凡例と組み合わせ
+        legend1 = plt.legend(handles=legend_elements, title="出走数（点のサイズ）", 
+                           loc='upper left', bbox_to_anchor=(0, 0.85), frameon=True, fancybox=True, shadow=True)
+        plt.gca().add_artist(legend1)
+        
+        # 回帰直線の凡例
+        legend2 = plt.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
+        
+        # グラフ左下に出走数の範囲情報を追加
+        info_text = f"出走数範囲: {int(race_counts.min())}～{int(race_counts.max())}回\n平均: {race_counts.mean():.1f}回"
+        ax.text(0.02, 0.02, info_text, transform=ax.transAxes, 
+                bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8),
+                verticalalignment='bottom', fontsize=10)
+        
         # ラベルとタイトル
         ax.set_xlabel(f'{x_col} ※複勝した場合のみポイント加算', fontsize=12)
         ax.set_ylabel(y_col, fontsize=12)
         ax.set_title(f'{title}（複勝経験馬のみ）', fontsize=14, fontweight='bold')
-        ax.legend()
         ax.grid(True, alpha=0.3)
         
         plt.tight_layout()
@@ -1731,11 +1752,15 @@ class TrackWinRateAnalyzer:
         x = horse_stats[x_col]
         y = horse_stats[y_col]
         
-        # 出走数でポイントサイズを調整
-        sizes = horse_stats['出走数'] * 2
+        # レース回数（出走数）に基づくサイズ設定（より明確に）
+        min_size = 30
+        max_size = 300
+        race_counts = horse_stats['出走数']
+        # レース回数を正規化してサイズに変換
+        normalized_sizes = min_size + (race_counts - race_counts.min()) / (race_counts.max() - race_counts.min()) * (max_size - min_size)
         
         # 散布図
-        scatter = ax.scatter(x, y, c=horse_stats['出走数'], s=sizes, alpha=0.6, 
+        scatter = ax.scatter(x, y, c=horse_stats['出走数'], s=normalized_sizes, alpha=0.6, 
                            cmap='viridis', edgecolors='black', linewidth=0.5)
         
         # カラーバー
@@ -1765,11 +1790,40 @@ class TrackWinRateAnalyzer:
                verticalalignment='top', fontsize=11,
                bbox=dict(boxstyle='round', facecolor='orange', alpha=0.8))
         
+        # レース回数のサイズ凡例を追加
+        sizes_for_legend = [race_counts.min(), race_counts.quantile(0.5), race_counts.max()]
+        labels_for_legend = [f'{int(size)}回' for size in sizes_for_legend]
+        
+        # サイズ凡例用のマーカーサイズを計算
+        legend_sizes = []
+        for size in sizes_for_legend:
+            normalized_size = min_size + (size - race_counts.min()) / (race_counts.max() - race_counts.min()) * (max_size - min_size)
+            legend_sizes.append(normalized_size)
+        
+        # サイズ凡例の作成
+        legend_elements = []
+        for size, label, marker_size in zip(sizes_for_legend, labels_for_legend, legend_sizes):
+            legend_elements.append(plt.scatter([], [], s=marker_size, c='gray', alpha=0.6, 
+                                             edgecolors='black', linewidth=0.5, label=label))
+        
+        # 既存の凡例と組み合わせ
+        legend1 = plt.legend(handles=legend_elements, title="出走数（点のサイズ）", 
+                           loc='upper left', bbox_to_anchor=(0, 0.75), frameon=True, fancybox=True, shadow=True)
+        plt.gca().add_artist(legend1)
+        
+        # 回帰直線の凡例
+        legend2 = plt.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
+        
+        # グラフ左下に出走数の範囲情報を追加
+        info_text = f"出走数範囲: {int(race_counts.min())}～{int(race_counts.max())}回\n平均: {race_counts.mean():.1f}回"
+        ax.text(0.02, 0.02, info_text, transform=ax.transAxes, 
+                bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8),
+                verticalalignment='bottom', fontsize=10)
+        
         # ラベルとタイトル
         ax.set_xlabel(f'{x_col} ※複勝した場合のみポイント加算', fontsize=12)
         ax.set_ylabel(y_col, fontsize=12)
         ax.set_title(f'{title}（複勝経験馬のみ）', fontsize=14, fontweight='bold')
-        ax.legend()
         ax.grid(True, alpha=0.3)
         
         plt.tight_layout()
@@ -1872,29 +1926,19 @@ class TrackWinRateAnalyzer:
     
     def _plot_comparison_charts(self, results, output_dir, period_name):
         """比較チャートの描画"""
-        original_corr = results['original']['correlation']
-        random_corr = results['random']['correlation']
         
-        # 複勝経験馬のデータフレームを取得
-        if 'place_experienced_horses' in original_corr:
-            original_experienced = original_corr['place_experienced_horses']
-        else:
-            # フォールバック: horse_statsから抽出
-            original_stats = results['original']['horse_stats']
-            original_experienced = original_stats[original_stats['平均重み付けポイント'] > 0.0]
+        original_results = results['original']
+        random_results = results['random']
         
-        if 'place_experienced_horses' in random_corr:
-            random_experienced = random_corr['place_experienced_horses']
-        else:
-            # フォールバック: horse_statsから抽出
-            random_stats = results['random']['horse_stats']
-            random_experienced = random_stats[random_stats['平均重み付けポイント'] > 0.0]
+        # 複勝経験馬のデータを取得
+        original_experienced = original_results['correlation']['place_experienced_horses']
+        random_experienced = random_results['correlation']['place_experienced_horses']
         
-        if len(original_experienced) < 3 or len(random_experienced) < 3:
-            logger.warning(f"期間 {period_name}: 複勝経験馬が不足のため比較チャートをスキップ")
-            return
+        # 相関結果を取得
+        original_corr = original_results['correlation']
+        random_corr = random_results['correlation']
         
-        # 出走数正規化累積ポイントがない場合は計算
+        # 出走数正規化累積ポイントカラムが存在しない場合は作成
         if '出走数正規化累積ポイント' not in original_experienced.columns:
             original_experienced = original_experienced.copy()
             original_experienced['出走数正規化累積ポイント'] = original_experienced['累積重み付けポイント'] / original_experienced['出走数']
@@ -1903,13 +1947,45 @@ class TrackWinRateAnalyzer:
             random_experienced = random_experienced.copy()
             random_experienced['出走数正規化累積ポイント'] = random_experienced['累積重み付けポイント'] / random_experienced['出走数']
         
-        # 1. 相関係数比較
+        # === 1. 平均重み付けポイント vs 複勝率の比較チャート ===
+        self._create_single_comparison_chart(
+            original_experienced, random_experienced,
+            original_corr, random_corr,
+            '平均重み付けポイント', '複勝率',
+            'avg_point', 'place_rate',
+            f'平均重み付けポイント vs 複勝率比較 ({period_name})',
+            output_dir / f'平均重み付けポイントと複勝率の関係比較_{period_name}.png'
+        )
+        
+        # === 2. 出走数正規化累積ポイント vs 複勝率の比較チャート ===
+        self._create_single_comparison_chart(
+            original_experienced, random_experienced,
+            original_corr, random_corr,
+            '出走数正規化累積ポイント', '複勝率',
+            'normalized', 'place_rate',
+            f'出走数正規化累積ポイント vs 複勝率比較 ({period_name})',
+            output_dir / f'出走数正規化累積ポイントと複勝率の関係比較_{period_name}.png'
+        )
+        
+        # === 3. 4象限総合比較チャート（従来版を維持） ===
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
         
         # オリジナル重み付け散布図
         x_orig = original_experienced['出走数正規化累積ポイント']
         y_orig = original_experienced['複勝率']
-        ax1.scatter(x_orig, y_orig, alpha=0.6, c='blue', s=50)
+        
+        # レース回数（出走数）に基づくサイズ設定
+        min_size = 30
+        max_size = 150
+        race_counts_orig = original_experienced['出走数']
+        normalized_sizes_orig = min_size + (race_counts_orig - race_counts_orig.min()) / (race_counts_orig.max() - race_counts_orig.min()) * (max_size - min_size)
+        
+        scatter_orig = ax1.scatter(x_orig, y_orig, alpha=0.6, c=race_counts_orig, s=normalized_sizes_orig, 
+                                 cmap='Blues', edgecolors='black', linewidth=0.5)
+        
+        # カラーバー
+        cbar1 = plt.colorbar(scatter_orig, ax=ax1)
+        cbar1.set_label('出走数', fontsize=10)
         
         # 相関情報の取得
         if ('correlation_analysis' in original_corr and 
@@ -1917,32 +1993,66 @@ class TrackWinRateAnalyzer:
             'place_rate' in original_corr['correlation_analysis']['normalized']):
             orig_corr_val = original_corr['correlation_analysis']['normalized']['place_rate']['correlation']
             orig_p_val = original_corr['correlation_analysis']['normalized']['place_rate']['p_value']
+            orig_regression = original_corr['correlation_analysis']['normalized']['place_rate']['regression']
         else:
             from scipy.stats import pearsonr
+            from sklearn.linear_model import LinearRegression
             orig_corr_val, orig_p_val = pearsonr(x_orig, y_orig)
+            # 回帰直線を計算
+            orig_regression = LinearRegression()
+            orig_regression.fit(x_orig.values.reshape(-1, 1), y_orig.values)
+        
+        # オリジナルの回帰直線を描画
+        x_range_orig = np.linspace(x_orig.min(), x_orig.max(), 100)
+        y_pred_orig = orig_regression.predict(x_range_orig.reshape(-1, 1))
+        ax1.plot(x_range_orig, y_pred_orig, 'r--', linewidth=2, 
+               label=f'回帰直線 (r = {orig_corr_val:.3f})')
         
         ax1.set_title(f'オリジナル重み付け\nr = {orig_corr_val:.3f}, p = {orig_p_val:.3f}', fontsize=12)
         ax1.set_xlabel('出走数正規化累積ポイント')
         ax1.set_ylabel('複勝率')
+        ax1.legend()
         ax1.grid(True, alpha=0.3)
         
         # ランダム重み付け散布図
         x_rand = random_experienced['出走数正規化累積ポイント']
         y_rand = random_experienced['複勝率']
-        ax2.scatter(x_rand, y_rand, alpha=0.6, c='red', s=50)
+        
+        # ランダム重み付け用のサイズ設定
+        race_counts_rand = random_experienced['出走数']
+        normalized_sizes_rand = min_size + (race_counts_rand - race_counts_rand.min()) / (race_counts_rand.max() - race_counts_rand.min()) * (max_size - min_size)
+        
+        scatter_rand = ax2.scatter(x_rand, y_rand, alpha=0.6, c=race_counts_rand, s=normalized_sizes_rand, 
+                                 cmap='Reds', edgecolors='black', linewidth=0.5)
+        
+        # カラーバー
+        cbar2 = plt.colorbar(scatter_rand, ax=ax2)
+        cbar2.set_label('出走数', fontsize=10)
         
         if ('correlation_analysis' in random_corr and 
             'normalized' in random_corr['correlation_analysis'] and
             'place_rate' in random_corr['correlation_analysis']['normalized']):
             rand_corr_val = random_corr['correlation_analysis']['normalized']['place_rate']['correlation']
             rand_p_val = random_corr['correlation_analysis']['normalized']['place_rate']['p_value']
+            rand_regression = random_corr['correlation_analysis']['normalized']['place_rate']['regression']
         else:
             from scipy.stats import pearsonr
+            from sklearn.linear_model import LinearRegression
             rand_corr_val, rand_p_val = pearsonr(x_rand, y_rand)
+            # 回帰直線を計算
+            rand_regression = LinearRegression()
+            rand_regression.fit(x_rand.values.reshape(-1, 1), y_rand.values)
+        
+        # ランダムの回帰直線を描画
+        x_range_rand = np.linspace(x_rand.min(), x_rand.max(), 100)
+        y_pred_rand = rand_regression.predict(x_range_rand.reshape(-1, 1))
+        ax2.plot(x_range_rand, y_pred_rand, 'b--', linewidth=2, 
+               label=f'回帰直線 (r = {rand_corr_val:.3f})')
         
         ax2.set_title(f'ランダム重み付け\nr = {rand_corr_val:.3f}, p = {rand_p_val:.3f}', fontsize=12)
         ax2.set_xlabel('出走数正規化累積ポイント')
         ax2.set_ylabel('複勝率')
+        ax2.legend()
         ax2.grid(True, alpha=0.3)
         
         # 相関係数比較棒グラフ
@@ -1964,31 +2074,196 @@ class TrackWinRateAnalyzer:
         
         # 差の可視化
         diff = abs(orig_corr_val) - abs(rand_corr_val)
-        ax4.text(0.5, 0.6, f'相関係数の差\n（絶対値）:\n{diff:.3f}', 
+        
+        # 出走数統計情報を追加
+        orig_race_stats = f"出走数範囲: {int(race_counts_orig.min())}～{int(race_counts_orig.max())}回\n平均: {race_counts_orig.mean():.1f}回"
+        rand_race_stats = f"出走数範囲: {int(race_counts_rand.min())}～{int(race_counts_rand.max())}回\n平均: {race_counts_rand.mean():.1f}回"
+        
+        ax4.text(0.5, 0.7, f'相関係数の差\n（絶対値）:\n{diff:.3f}', 
                 transform=ax4.transAxes, ha='center', va='center',
                 fontsize=14, bbox=dict(boxstyle='round', facecolor='lightgray'))
         
-        if diff > 0:
-            result_text = 'オリジナル重み付けの方が\n強い相関を示している'
-            color = 'blue'
-        else:
-            result_text = 'ランダム重み付けの方が\n強い相関を示している'
-            color = 'red'
-            
-        ax4.text(0.5, 0.3, result_text, transform=ax4.transAxes, 
-                ha='center', va='center', fontsize=12, color=color,
-                bbox=dict(boxstyle='round', facecolor='lightyellow'))
+        ax4.text(0.5, 0.4, f'オリジナル重み付け\n{orig_race_stats}', 
+                transform=ax4.transAxes, ha='center', va='center',
+                fontsize=10, bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.7))
+        
+        ax4.text(0.5, 0.1, f'ランダム重み付け\n{rand_race_stats}', 
+                transform=ax4.transAxes, ha='center', va='center',
+                fontsize=10, bbox=dict(boxstyle='round', facecolor='lightcoral', alpha=0.7))
         
         ax4.set_xlim(0, 1)
         ax4.set_ylim(0, 1)
         ax4.axis('off')
-        ax4.set_title('結論', fontsize=12)
         
+        plt.suptitle(f'総合比較: 出走数正規化累積ポイント vs 複勝率 ({period_name})', fontsize=16, fontweight='bold')
         plt.tight_layout()
-        plt.savefig(output_dir / f'{period_name}_重み付け比較.png', dpi=300, bbox_inches='tight')
+        plt.savefig(output_dir / f'総合比較_出走数正規化累積ポイント_{period_name}.png', dpi=300, bbox_inches='tight')
         plt.close()
         
-        logger.info(f"📊 比較チャート保存: {output_dir / f'{period_name}_重み付け比較.png'}")
+        logger.info(f"総合比較チャート保存: {output_dir / f'総合比較_出走数正規化累積ポイント_{period_name}.png'}")
+
+    def _create_single_comparison_chart(self, original_data, random_data, 
+                                      original_corr, random_corr,
+                                      x_col, y_col, corr_type, target_type,
+                                      title, output_path):
+        """単一の比較チャート作成"""
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        
+        # オリジナル重み付け散布図
+        x_orig = original_data[x_col]
+        y_orig = original_data[y_col]
+        
+        # レース回数（出走数）に基づくサイズ設定
+        min_size = 30
+        max_size = 150
+        race_counts_orig = original_data['出走数']
+        normalized_sizes_orig = min_size + (race_counts_orig - race_counts_orig.min()) / (race_counts_orig.max() - race_counts_orig.min()) * (max_size - min_size)
+        
+        scatter_orig = ax1.scatter(x_orig, y_orig, alpha=0.6, c=race_counts_orig, s=normalized_sizes_orig, 
+                                 cmap='Blues', edgecolors='black', linewidth=0.5)
+        
+        # カラーバー
+        cbar1 = plt.colorbar(scatter_orig, ax=ax1)
+        cbar1.set_label('出走数', fontsize=10)
+        
+        # 相関情報の取得（オリジナル）
+        if ('correlation_analysis' in original_corr and 
+            corr_type in original_corr['correlation_analysis'] and
+            target_type in original_corr['correlation_analysis'][corr_type]):
+            orig_corr_val = original_corr['correlation_analysis'][corr_type][target_type]['correlation']
+            orig_p_val = original_corr['correlation_analysis'][corr_type][target_type]['p_value']
+            orig_regression = original_corr['correlation_analysis'][corr_type][target_type]['regression']
+        else:
+            from scipy.stats import pearsonr
+            from sklearn.linear_model import LinearRegression
+            orig_corr_val, orig_p_val = pearsonr(x_orig, y_orig)
+            # 回帰直線を計算
+            orig_regression = LinearRegression()
+            orig_regression.fit(x_orig.values.reshape(-1, 1), y_orig.values)
+        
+        # オリジナルの回帰直線を描画
+        x_range_orig = np.linspace(x_orig.min(), x_orig.max(), 100)
+        y_pred_orig = orig_regression.predict(x_range_orig.reshape(-1, 1))
+        ax1.plot(x_range_orig, y_pred_orig, 'r--', linewidth=2, 
+               label=f'回帰直線 (r = {orig_corr_val:.3f})')
+        
+        ax1.set_title(f'オリジナル重み付け\nr = {orig_corr_val:.3f}, p = {orig_p_val:.3f}', fontsize=12)
+        ax1.set_xlabel(x_col)
+        ax1.set_ylabel(y_col)
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # ランダム重み付け散布図
+        x_rand = random_data[x_col]
+        y_rand = random_data[y_col]
+        
+        # ランダム重み付け用のサイズ設定
+        race_counts_rand = random_data['出走数']
+        normalized_sizes_rand = min_size + (race_counts_rand - race_counts_rand.min()) / (race_counts_rand.max() - race_counts_rand.min()) * (max_size - min_size)
+        
+        scatter_rand = ax2.scatter(x_rand, y_rand, alpha=0.6, c=race_counts_rand, s=normalized_sizes_rand, 
+                                 cmap='Reds', edgecolors='black', linewidth=0.5)
+        
+        # カラーバー
+        cbar2 = plt.colorbar(scatter_rand, ax=ax2)
+        cbar2.set_label('出走数', fontsize=10)
+        
+        # 相関情報の取得（ランダム）
+        if ('correlation_analysis' in random_corr and 
+            corr_type in random_corr['correlation_analysis'] and
+            target_type in random_corr['correlation_analysis'][corr_type]):
+            rand_corr_val = random_corr['correlation_analysis'][corr_type][target_type]['correlation']
+            rand_p_val = random_corr['correlation_analysis'][corr_type][target_type]['p_value']
+            rand_regression = random_corr['correlation_analysis'][corr_type][target_type]['regression']
+        else:
+            from scipy.stats import pearsonr
+            from sklearn.linear_model import LinearRegression
+            rand_corr_val, rand_p_val = pearsonr(x_rand, y_rand)
+            # 回帰直線を計算
+            rand_regression = LinearRegression()
+            rand_regression.fit(x_rand.values.reshape(-1, 1), y_rand.values)
+        
+        # ランダムの回帰直線を描画
+        x_range_rand = np.linspace(x_rand.min(), x_rand.max(), 100)
+        y_pred_rand = rand_regression.predict(x_range_rand.reshape(-1, 1))
+        ax2.plot(x_range_rand, y_pred_rand, 'b--', linewidth=2, 
+               label=f'回帰直線 (r = {rand_corr_val:.3f})')
+        
+        ax2.set_title(f'ランダム重み付け\nr = {rand_corr_val:.3f}, p = {rand_p_val:.3f}', fontsize=12)
+        ax2.set_xlabel(x_col)
+        ax2.set_ylabel(y_col)
+        ax2.legend()
+        ax2.grid(True, alpha=0.3)
+        
+        # 相関係数比較棒グラフ
+        categories = ['オリジナル', 'ランダム']
+        correlations = [orig_corr_val, rand_corr_val]
+        colors = ['blue', 'red']
+        
+        bars = ax3.bar(categories, correlations, color=colors, alpha=0.7)
+        ax3.set_title('相関係数比較', fontsize=12)
+        ax3.set_ylabel('相関係数')
+        ax3.set_ylim(-1, 1)
+        ax3.grid(True, alpha=0.3)
+        
+        # 値をバーの上に表示
+        for bar, corr in zip(bars, correlations):
+            height = bar.get_height()
+            ax3.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                    f'{corr:.3f}', ha='center', va='bottom')
+        
+        # 差の可視化と評価
+        diff = abs(orig_corr_val) - abs(rand_corr_val)
+        
+        # 評価結果
+        if diff > 0.1:
+            verdict = "✅ オリジナル明らかに優秀"
+            color = 'lightgreen'
+        elif diff > 0:
+            verdict = "➕ オリジナルがわずかに優秀"
+            color = 'lightblue'
+        elif diff > -0.1:
+            verdict = "➖ ほぼ同等"
+            color = 'lightyellow'
+        else:
+            verdict = "❌ ランダムが優秀"
+            color = 'lightcoral'
+        
+        ax4.text(0.5, 0.7, f'相関係数の差\n（絶対値）:\n{diff:.3f}', 
+                transform=ax4.transAxes, ha='center', va='center',
+                fontsize=14, bbox=dict(boxstyle='round', facecolor='lightgray'))
+        
+        ax4.text(0.5, 0.5, verdict, 
+                transform=ax4.transAxes, ha='center', va='center',
+                fontsize=12, bbox=dict(boxstyle='round', facecolor=color))
+        
+        # 回帰係数情報も追加
+        orig_slope = orig_regression.coef_[0]
+        rand_slope = rand_regression.coef_[0]
+        
+        regression_text = f"回帰係数:\nオリジナル: {orig_slope:.4f}\nランダム: {rand_slope:.4f}"
+        ax4.text(0.5, 0.3, regression_text, 
+                transform=ax4.transAxes, ha='center', va='center',
+                fontsize=10, bbox=dict(boxstyle='round', facecolor='lightcyan', alpha=0.8))
+        
+        # 統計情報
+        orig_race_stats = f"オリジナル出走数: {int(race_counts_orig.min())}～{int(race_counts_orig.max())}回"
+        rand_race_stats = f"ランダム出走数: {int(race_counts_rand.min())}～{int(race_counts_rand.max())}回"
+        
+        ax4.text(0.5, 0.1, f'{orig_race_stats}\n{rand_race_stats}', 
+                transform=ax4.transAxes, ha='center', va='center',
+                fontsize=9, bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.7))
+        
+        ax4.set_xlim(0, 1)
+        ax4.set_ylim(0, 1)
+        ax4.axis('off')
+        
+        plt.suptitle(title, fontsize=16, fontweight='bold')
+        plt.tight_layout()
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        logger.info(f"比較チャート保存: {output_path}")
 
     def generate_comparison_report(self, comparison_results):
         """比較分析レポートの生成"""
@@ -2034,6 +2309,11 @@ class TrackWinRateAnalyzer:
                 orig_experienced = results['original']['horse_stats'][
                     results['original']['horse_stats']['平均重み付けポイント'] > 0.0]
                 
+                # 出走数正規化累積ポイントカラムが存在しない場合は作成
+                if '出走数正規化累積ポイント' not in orig_experienced.columns:
+                    orig_experienced = orig_experienced.copy()
+                    orig_experienced['出走数正規化累積ポイント'] = orig_experienced['累積重み付けポイント'] / orig_experienced['出走数']
+                
                 if ('correlation_analysis' in orig_corr and 
                     'normalized' in orig_corr['correlation_analysis'] and
                     'place_rate' in orig_corr['correlation_analysis']['normalized']):
@@ -2049,6 +2329,11 @@ class TrackWinRateAnalyzer:
                 rand_corr = results['random']['correlation']
                 rand_experienced = results['random']['horse_stats'][
                     results['random']['horse_stats']['平均重み付けポイント'] > 0.0]
+                
+                # 出走数正規化累積ポイントカラムが存在しない場合は作成
+                if '出走数正規化累積ポイント' not in rand_experienced.columns:
+                    rand_experienced = rand_experienced.copy()
+                    rand_experienced['出走数正規化累積ポイント'] = rand_experienced['累積重み付けポイント'] / rand_experienced['出走数']
                 
                 if ('correlation_analysis' in rand_corr and 
                     'normalized' in rand_corr['correlation_analysis'] and
