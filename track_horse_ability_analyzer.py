@@ -22,7 +22,7 @@ import scipy.stats # 追加
 
 class TrackHorseAbilityAnalyzer:
     """
-    競馬場特徴×馬能力適性分析システム
+    競馬場特徴×馬能力適性分析システム（実戦的評価重視：素点0.4 + IDM0.6）
     """
     
     def __init__(self, data_folder="export/with_bias", output_folder="results/track_horse_ability_analysis"):
@@ -146,7 +146,8 @@ class TrackHorseAbilityAnalyzer:
             self.horse_race_counts = None # 明示的にNoneに設定
 
     def _calculate_horse_ability_scores(self):
-        self.df['基本能力値'] = (self.df['IDM'].fillna(self.df['IDM'].median()) * 0.4 + self.df['素点'].fillna(self.df['素点'].median()) * 0.6)
+        # 実戦的評価重視：素点0.4 + IDM0.6
+        self.df['基本能力値'] = (self.df['素点'].fillna(self.df['素点'].median()) * 0.4 + self.df['IDM'].fillna(self.df['IDM'].median()) * 0.6)
         self.df['スピード能力値'] = (self.df['テン指数'].fillna(self.df['テン指数'].median()) * 0.6 + self.df['上がり指数'].fillna(self.df['上がり指数'].median()) * 0.4)
         self.df['スタミナ能力値'] = (self.df['基本能力値'] * 0.7 + (self.df['距離'] / 2000) * self.df['ペース指数'].fillna(self.df['ペース指数'].median()) * 0.3)
         self.df['総合能力値'] = (self.df['基本能力値'] * 0.5 + self.df['スピード能力値'] * 0.3 + self.df['スタミナ能力値'] * 0.2)
@@ -183,7 +184,7 @@ class TrackHorseAbilityAnalyzer:
                         self.df.loc[row.name, '総合適性スコア'] *= adjustment_factor
     
     def analyze_track_aptitude_correlation(self):
-        print("\n=== 競馬場別適性相関分析開始 ===")
+        print("\n=== 競馬場別適性相関分析開始（実戦的評価重視：素点0.4 + IDM0.6） ===")
         if not os.path.exists(self.output_folder):
             os.makedirs(self.output_folder)
         track_correlation_stats = self._calculate_track_correlation_statistics()
@@ -192,14 +193,12 @@ class TrackHorseAbilityAnalyzer:
         return {'correlation_stats': track_correlation_stats}
 
     def analyze_place_aptitude_correlation(self):
-        print("\n=== 競馬場別【複勝】適性相関分析開始 ===")
+        print("\n=== 競馬場別【複勝】適性相関分析開始（実戦的評価重視：素点0.4 + IDM0.6） ===")
         if not os.path.exists(self.output_folder):
             os.makedirs(self.output_folder)
         
-        # 複勝の相関統計を計算
         place_correlation_stats = self._calculate_place_correlation_statistics()
         
-        # 複勝の可視化を作成
         if place_correlation_stats: 
              self._create_place_aptitude_correlation_visualizations(place_correlation_stats)
         
@@ -351,7 +350,7 @@ class TrackHorseAbilityAnalyzer:
         n_cols = 3
         n_rows = (n_tracks + n_cols - 1) // n_cols
         fig, axes = plt.subplots(n_rows, n_cols, figsize=(18, 6 * n_rows))
-        fig.suptitle('競馬場別 馬ごとの適性スコア平均×勝率 相関分析', fontproperties=self.font_prop, fontsize=16)
+        fig.suptitle('競馬場別 馬ごとの適性スコア平均×勝率 相関分析（実戦的評価重視：素点0.4+IDM0.6）', fontproperties=self.font_prop, fontsize=16)
         
         if n_tracks == 1: axes = np.array([[axes]]) 
         elif n_rows == 1: axes = axes.reshape(1, -1)
@@ -402,7 +401,7 @@ class TrackHorseAbilityAnalyzer:
             
             ax.set_title(f'{track}\n相関係数: {stats_data["correlation"]:.3f} (p={stats_data["p_value"]:.3f})\n馬数: {len(aptitude_scores)}頭', 
                         fontproperties=self.font_prop)
-            ax.set_xlabel('馬ごとの総合適性スコア平均', fontproperties=self.font_prop)
+            ax.set_xlabel('馬ごとの総合適性スコア平均（素点0.4+IDM0.6）', fontproperties=self.font_prop)
             ax.set_ylabel('馬ごとの勝率', fontproperties=self.font_prop)
             ax.legend(prop=self.font_prop, fontsize=8)
             ax.set_ylim(-0.05, 1.05)
@@ -414,9 +413,9 @@ class TrackHorseAbilityAnalyzer:
             axes[row, col].set_visible(False)
         
         plt.tight_layout(rect=[0, 0, 1, 0.96])
-        plt.savefig(os.path.join(self.output_folder, '競馬場別適性相関分析_勝率.png'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(self.output_folder, '競馬場別適性相関分析_勝率_素点0_4_IDM0_6.png'), dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"競馬場別適性相関分析_勝率.png を保存しました (競馬場ごと：馬ごとの適性スコア平均 vs 勝率)。")
+        print(f"競馬場別適性相関分析_勝率_素点0_4_IDM0_6.png を保存しました。")
 
     def _create_place_aptitude_correlation_visualizations(self, track_stats):
         print("【複勝】適性相関関係可視化作成中 (競馬場ごと：馬ごとの適性スコア平均 vs 複勝率)...")
@@ -429,7 +428,7 @@ class TrackHorseAbilityAnalyzer:
         n_cols = 3
         n_rows = (n_tracks + n_cols - 1) // n_cols
         fig, axes = plt.subplots(n_rows, n_cols, figsize=(18, 6 * n_rows))
-        fig.suptitle('競馬場別 馬ごとの適性スコア平均×複勝率 相関分析', fontproperties=self.font_prop, fontsize=16)
+        fig.suptitle('競馬場別 馬ごとの適性スコア平均×複勝率 相関分析（実戦的評価重視：素点0.4+IDM0.6）', fontproperties=self.font_prop, fontsize=16)
         
         if n_tracks == 1: axes = np.array([[axes]]) 
         elif n_rows == 1: axes = axes.reshape(1, -1)
@@ -480,7 +479,7 @@ class TrackHorseAbilityAnalyzer:
             
             ax.set_title(f'{track}\n相関係数: {stats_data["correlation"]:.3f} (p={stats_data["p_value"]:.3f})\n馬数: {len(aptitude_scores)}頭', 
                         fontproperties=self.font_prop)
-            ax.set_xlabel('馬ごとの総合適性スコア平均', fontproperties=self.font_prop)
+            ax.set_xlabel('馬ごとの総合適性スコア平均（素点0.4+IDM0.6）', fontproperties=self.font_prop)
             ax.set_ylabel('馬ごとの複勝率', fontproperties=self.font_prop)
             ax.legend(prop=self.font_prop, fontsize=8)
             ax.set_ylim(-0.05, 1.05)
@@ -492,9 +491,9 @@ class TrackHorseAbilityAnalyzer:
             axes[row, col].set_visible(False)
         
         plt.tight_layout(rect=[0, 0, 1, 0.96])
-        plt.savefig(os.path.join(self.output_folder, '競馬場別適性相関分析_複勝率.png'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(self.output_folder, '競馬場別適性相関分析_複勝率_素点0_4_IDM0_6.png'), dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"競馬場別適性相関分析_複勝率.png を保存しました (競馬場ごと：馬ごとの適性スコア平均 vs 複勝率)。")
+        print(f"競馬場別適性相関分析_複勝率_素点0_4_IDM0_6.png を保存しました。")
 
     def analyze_by_periods(self, period_years=3, analysis_type='win'):
         print(f"\n=== {period_years}年間隔時系列分析開始 ({'単勝' if analysis_type == 'win' else '複勝'}) ===")
@@ -554,7 +553,7 @@ class TrackHorseAbilityAnalyzer:
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='競馬場特徴×馬能力適性分析')
+    parser = argparse.ArgumentParser(description='競馬場特徴×馬能力適性分析（実戦的評価重視：素点0.4 + IDM0.6）')
     parser.add_argument('--data-folder', type=str, default="export/with_bias", help='データフォルダのパス')
     parser.add_argument('--output-folder', type=str, default="results/track_horse_ability_analysis", help='結果出力先フォルダのパス')
     parser.add_argument('--period-analysis', action='store_true', help=f'3年間隔での時系列分析を実行')
@@ -570,12 +569,12 @@ def main():
         analyzer.analyze_by_periods(period_years=3, analysis_type=args.analysis_type)
     else:
         analysis_name = "単勝" if args.analysis_type == 'win' else "複勝"
-        print(f"\n=== 全期間統合 【{analysis_name}】 分析開始 ===")
+        print(f"\n=== 全期間統合 【{analysis_name}】 分析開始（実戦的評価重視：素点0.4 + IDM0.6） ===")
         if args.analysis_type == 'win':
             analyzer.analyze_track_aptitude_correlation()
         elif args.analysis_type == 'place':
             analyzer.analyze_place_aptitude_correlation()
-        print(f"全期間統合 【{analysis_name}】 分析完了")
+        print(f"全期間統合 【{analysis_name}】 分析完了（実戦的評価重視：素点0.4 + IDM0.6）")
     
     print(f"\n=== 分析完了 ===")
     print(f"結果保存先: {args.output_folder}")
