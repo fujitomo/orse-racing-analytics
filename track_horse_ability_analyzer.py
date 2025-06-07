@@ -22,13 +22,18 @@ import scipy.stats # 追加
 
 class TrackHorseAbilityAnalyzer:
     """
-    競馬場特徴×馬能力適性分析システム（微調整版：上がり0.55 + ペース0.75）
+    競馬場特徴×馬能力適性分析システム（競馬専門知識版：詳細馬場状態対応）
     
-    【微調整内容】
+    【競馬専門知識版の特徴】
     - スピード能力値: テン指数0.45 + 上がり指数0.55 (上がり微重視)
     - スタミナ能力値: 基本0.25 + ペース0.75 + 距離1600基準 (ペース重視強化)
-    - フィルタリング条件: 品質向上のための軽微な調整
     - 外れ値処理: IQR法による統計的改善
+    
+    【詳細馬場状態対応】
+    - 12種類の馬場状態パターン対応（良・速良・遅良・稍重・速稍重・遅稍重・重・速重・遅重・不良・速不良・遅不良）
+    - 馬場の重さ + スピード変化の組み合わせ分析
+    - ペース重要度の動的調整
+    - 競馬専門知識に基づく投資戦略提案
     """
     
     def __init__(self, data_folder="export/with_bias", output_folder="results/track_horse_ability_analysis"):
@@ -206,6 +211,9 @@ class TrackHorseAbilityAnalyzer:
             self.df['ペース指数'].fillna(self.df['ペース指数'].median()) * stamina_config['pace']
         )
         
+        # 【馬場状態別補正を追加】
+        self._apply_track_condition_adjustments()
+        
         # 総合能力値（基本重視型維持）
         overall_config = self.analysis_config['overall_weights']
         self.df['総合能力値'] = (
@@ -213,6 +221,129 @@ class TrackHorseAbilityAnalyzer:
             self.df['スピード能力値'] * overall_config['speed'] + 
             self.df['スタミナ能力値'] * overall_config['stamina']
         )
+    
+    def _apply_track_condition_adjustments(self):
+        """
+        【競馬専門知識版】馬場状態に応じた能力値補正
+        - 馬場の重さ（良→稍重→重→不良）
+        - スピード変化（速・標準・遅）の組み合わせ対応
+        - 実戦的な補正係数設定
+        """
+        if '馬場状態' not in self.df.columns:
+            print("馬場状態カラムが見つからないため、馬場状態補正をスキップします。")
+            return
+        
+        # 【競馬専門知識】詳細馬場状態別の補正係数
+        # 基本理論：重い馬場ほどスタミナ勝負、速い馬場ほど瞬発力重視
+        track_condition_effects = {
+            # === 良馬場系列 ===
+            '良': {'speed': 1.00, 'stamina': 1.00, 'pace_importance': 0.75, 'category': '良・標準'},
+            '10': {'speed': 1.00, 'stamina': 1.00, 'pace_importance': 0.75, 'category': '良・標準'}, # 良の数値表記
+            '速良': {'speed': 1.05, 'stamina': 0.95, 'pace_importance': 0.70, 'category': '良・高速'},
+            '11': {'speed': 1.05, 'stamina': 0.95, 'pace_importance': 0.70, 'category': '良・高速'}, # 速良
+            '遅良': {'speed': 0.95, 'stamina': 1.05, 'pace_importance': 0.80, 'category': '良・低速'},
+            '12': {'speed': 0.95, 'stamina': 1.05, 'pace_importance': 0.80, 'category': '良・低速'}, # 重良(遅良)
+            
+            # === 稍重馬場系列 ===
+            '稍重': {'speed': 0.95, 'stamina': 1.05, 'pace_importance': 0.80, 'category': '稍重・標準'},
+            '20': {'speed': 0.95, 'stamina': 1.05, 'pace_importance': 0.80, 'category': '稍重・標準'}, # 稍重
+            '速稍重': {'speed': 0.98, 'stamina': 1.02, 'pace_importance': 0.78, 'category': '稍重・高速'},
+            '21': {'speed': 0.98, 'stamina': 1.02, 'pace_importance': 0.78, 'category': '稍重・高速'}, # 速稍重
+            '遅稍重': {'speed': 0.92, 'stamina': 1.08, 'pace_importance': 0.85, 'category': '稍重・低速'},
+            '22': {'speed': 0.92, 'stamina': 1.08, 'pace_importance': 0.85, 'category': '稍重・低速'}, # 遅稍重
+            
+            # === 重馬場系列 ===
+            '重': {'speed': 0.90, 'stamina': 1.10, 'pace_importance': 0.85, 'category': '重・標準'},
+            '30': {'speed': 0.90, 'stamina': 1.10, 'pace_importance': 0.85, 'category': '重・標準'}, # 重
+            '速重': {'speed': 0.93, 'stamina': 1.07, 'pace_importance': 0.82, 'category': '重・高速'},
+            '31': {'speed': 0.93, 'stamina': 1.07, 'pace_importance': 0.82, 'category': '重・高速'}, # 速重
+            '遅重': {'speed': 0.87, 'stamina': 1.13, 'pace_importance': 0.90, 'category': '重・低速'},
+            '32': {'speed': 0.87, 'stamina': 1.13, 'pace_importance': 0.90, 'category': '重・低速'}, # 遅重
+            
+            # === 不良馬場系列 ===
+            '不良': {'speed': 0.85, 'stamina': 1.15, 'pace_importance': 0.90, 'category': '不良・標準'},
+            '40': {'speed': 0.85, 'stamina': 1.15, 'pace_importance': 0.90, 'category': '不良・標準'}, # 不良
+            '速不良': {'speed': 0.88, 'stamina': 1.12, 'pace_importance': 0.88, 'category': '不良・高速'},
+            '41': {'speed': 0.88, 'stamina': 1.12, 'pace_importance': 0.88, 'category': '不良・高速'}, # 速不良
+            '遅不良': {'speed': 0.82, 'stamina': 1.18, 'pace_importance': 0.95, 'category': '不良・低速'},
+            '42': {'speed': 0.82, 'stamina': 1.18, 'pace_importance': 0.95, 'category': '不良・低速'}, # 遅不良
+        }
+        
+        # 馬場状態統計の初期化
+        condition_stats = {}
+        
+        # 馬場状態ごとに補正を適用
+        for condition_code, effects in track_condition_effects.items():
+            mask = self.df['馬場状態'] == condition_code
+            if mask.any():
+                count = mask.sum()
+                
+                # 能力値補正を適用
+                self.df.loc[mask, 'スピード能力値'] *= effects['speed']
+                self.df.loc[mask, 'スタミナ能力値'] *= effects['stamina']
+                
+                # 【新機能】ペース重要度に基づくスタミナ補正の動的調整
+                stamina_config = self.analysis_config['stamina_weights']
+                original_pace_weight = stamina_config['pace']
+                adjusted_pace_weight = original_pace_weight * effects['pace_importance']
+                adjusted_basic_weight = 1.0 - adjusted_pace_weight
+                
+                # ペース重要度調整（より重い馬場ほどペース配分が重要）
+                if 'ペース指数' in self.df.columns:
+                    distance_factor = self.df.loc[mask, '距離'] / self.analysis_config['distance_base']
+                    pace_contribution = (distance_factor * 
+                                       self.df.loc[mask, 'ペース指数'].fillna(self.df['ペース指数'].median()) * 
+                                       adjusted_pace_weight)
+                    basic_contribution = self.df.loc[mask, '基本能力値'] * adjusted_basic_weight
+                    
+                    # スタミナ能力値を動的に再計算
+                    self.df.loc[mask, 'スタミナ能力値'] = basic_contribution + pace_contribution
+                
+                # 統計記録
+                condition_stats[condition_code] = {
+                    'count': count,
+                    'category': effects['category'],
+                    'speed_factor': effects['speed'],
+                    'stamina_factor': effects['stamina'],
+                    'pace_importance': effects['pace_importance']
+                }
+                
+                print(f"馬場状態「{condition_code}」({effects['category']}): {count}件 "
+                      f"速度×{effects['speed']:.2f} 持久×{effects['stamina']:.2f} "
+                      f"ペース重要度×{effects['pace_importance']:.2f}")
+        
+        # 馬場状態分布の報告
+        self._report_track_condition_distribution(condition_stats)
+    
+    def _report_track_condition_distribution(self, condition_stats):
+        """
+        【新機能】馬場状態分布の詳細レポート
+        """
+        print("\n=== 馬場状態分布詳細レポート ===")
+        
+        # カテゴリ別集計
+        category_summary = {}
+        total_races = 0
+        
+        for condition, stats in condition_stats.items():
+            category = stats['category']
+            count = stats['count']
+            total_races += count
+            
+            if category not in category_summary:
+                category_summary[category] = {'count': 0, 'conditions': []}
+            category_summary[category]['count'] += count
+            category_summary[category]['conditions'].append(f"{condition}({count}件)")
+        
+        # カテゴリ別表示
+        for category, summary in category_summary.items():
+            percentage = (summary['count'] / total_races) * 100 if total_races > 0 else 0
+            print(f"{category}: {summary['count']}件 ({percentage:.1f}%) - {', '.join(summary['conditions'])}")
+        
+        print(f"総レース数: {total_races}件")
+        
+        # 馬場状態別の戦略提案
+        self._suggest_track_condition_strategies(category_summary, total_races)
     
     def _add_track_features(self):
         for feature in ['slope_difficulty', 'curve_tightness', 'bias_impact', 'stamina_demand', 'speed_sustainability', 'outside_disadvantage']:
@@ -692,13 +823,304 @@ class TrackHorseAbilityAnalyzer:
         print(f"\n=== {period_years}年間隔時系列分析完了 ({'単勝' if analysis_type == 'win' else '複勝'}) ===")
         return period_results
 
+    def analyze_by_track_condition(self, analysis_type='place'):
+        """
+        【新機能】馬場状態別の適性相関分析
+        """
+        print(f"\n=== 馬場状態別【{'複勝' if analysis_type == 'place' else '単勝'}】適性相関分析開始（微調整版） ===")
+        
+        if '馬場状態' not in self.df.columns:
+            print("エラー: 馬場状態カラムが見つかりません。")
+            return {}
+        
+        if not os.path.exists(self.output_folder):
+            os.makedirs(self.output_folder)
+        
+        track_conditions = self.df['馬場状態'].dropna().unique()
+        condition_results = {}
+        
+        for condition in track_conditions:
+            print(f"\n--- 馬場状態「{condition}」の分析開始 ---")
+            condition_data = self.df[self.df['馬場状態'] == condition].copy()
+            
+            if len(condition_data) < 100:
+                print(f"警告: 馬場状態「{condition}」のデータ数が少ない({len(condition_data)}件)")
+                continue
+            
+            # 一時的にdfを条件別データに置き換え
+            original_df = self.df.copy()
+            self.df = condition_data
+            
+            try:
+                if analysis_type == 'place':
+                    correlation_stats = self._calculate_place_correlation_statistics()
+                else:
+                    correlation_stats = self._calculate_track_correlation_statistics()
+                
+                condition_results[condition] = correlation_stats
+                
+                # 馬場状態別の可視化作成
+                self._create_track_condition_visualizations(correlation_stats, condition, analysis_type)
+                
+            except Exception as e:
+                print(f"エラー: 馬場状態「{condition}」の分析中にエラー: {e}")
+            finally:
+                # dfを元に戻す
+                self.df = original_df
+        
+        # 馬場状態比較可視化の作成
+        self._create_track_condition_comparison(condition_results, analysis_type)
+        
+        print(f"馬場状態別【{'複勝' if analysis_type == 'place' else '単勝'}】適性相関分析完了")
+        return condition_results
+
+    def _create_track_condition_visualizations(self, track_stats, condition, analysis_type):
+        """
+        【新機能】馬場状態別の可視化作成
+        """
+        print(f"馬場状態「{condition}」の可視化作成中...")
+        n_tracks = len(track_stats)
+        if n_tracks == 0:
+            print(f"馬場状態「{condition}」で可視化対象の競馬場データがありません。")
+            return
+        
+        n_cols = 3
+        n_rows = (n_tracks + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(18, 6 * n_rows))
+        target_label = '複勝率' if analysis_type == 'place' else '勝率'
+        fig.suptitle(f'馬場状態「{condition}」別 競馬場×{target_label} 相関分析（微調整版）', 
+                    fontproperties=self.font_prop, fontsize=16)
+        
+        if n_tracks == 1: axes = np.array([[axes]]) 
+        elif n_rows == 1: axes = axes.reshape(1, -1)
+        elif n_cols == 1: axes = axes.reshape(-1, 1)
+        
+        track_names = list(track_stats.keys())
+        for i, track in enumerate(track_names):
+            row, col = i // n_cols, i % n_cols
+            ax = axes[row, col]
+            stats_data = track_stats[track]
+            
+            # データプロット
+            aptitude_scores = stats_data['aptitude_data']
+            rates = stats_data.get('place_data' if analysis_type == 'place' else 'win_data', 
+                                 stats_data.get('win_data', []))
+            race_counts = stats_data['race_counts']
+            
+            if len(aptitude_scores) > 0:
+                # 点のサイズをレース数に比例
+                sizes = np.array(race_counts)
+                if len(sizes) > 1 and sizes.max() > sizes.min():
+                    sizes_normalized = 10 + (sizes - sizes.min()) / (sizes.max() - sizes.min()) * 90
+                else:
+                    sizes_normalized = np.full_like(sizes, 30)
+                
+                color = 'darkgreen' if analysis_type == 'place' else 'darkblue'
+                scatter = ax.scatter(aptitude_scores, rates, 
+                                   s=sizes_normalized, alpha=0.6, 
+                                   color=color, edgecolors='black', linewidth=0.3)
+            
+            # 回帰直線
+            if len(aptitude_scores) > 1 and len(rates) > 1:
+                try:
+                    slope, intercept, r_value, p_value, std_err = stats.linregress(aptitude_scores, rates)
+                    x_line = np.array([aptitude_scores.min(), aptitude_scores.max()])
+                    y_line = slope * x_line + intercept
+                    ax.plot(x_line, y_line, color='red', linewidth=2, 
+                           label=f'回帰直線 (R²={r_value**2:.3f})')
+                except Exception as e:
+                    print(f"回帰直線計算エラー ({track}@{condition}): {e}")
+            
+            ax.set_title(f'{track}\n相関係数: {stats_data["correlation"]:.3f} (p={stats_data["p_value"]:.3f})\n馬数: {len(aptitude_scores)}頭', 
+                        fontproperties=self.font_prop)
+            ax.set_xlabel('馬ごとの総合適性スコア平均（馬場状態補正済み）', fontproperties=self.font_prop)
+            ax.set_ylabel(f'馬ごとの{target_label}', fontproperties=self.font_prop)
+            ax.legend(prop=self.font_prop, fontsize=8)
+            ax.set_ylim(-0.05, 1.05)
+            ax.grid(True, alpha=0.3)
+        
+        # 空のサブプロットを非表示
+        for i in range(n_tracks, n_rows * n_cols): 
+            row, col = i // n_cols, i % n_cols
+            axes[row, col].set_visible(False)
+        
+        plt.tight_layout(rect=[0, 0, 1, 0.96])
+        filename = f'競馬場別適性相関分析_{target_label}_馬場状態_{condition}_微調整版.png'
+        plt.savefig(os.path.join(self.output_folder, filename), dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"{filename} を保存しました。")
+    
+    def _create_track_condition_comparison(self, condition_results, analysis_type):
+        """
+        【新機能】馬場状態間の比較可視化
+        """
+        print("馬場状態間の比較可視化作成中...")
+        if not condition_results:
+            print("比較対象の馬場状態データがありません。")
+            return
+        
+        target_label = '複勝率' if analysis_type == 'place' else '勝率'
+        
+        # 各馬場状態の平均相関係数を計算
+        condition_correlations = {}
+        for condition, tracks_data in condition_results.items():
+            correlations = [stats['correlation'] for stats in tracks_data.values() 
+                          if not np.isnan(stats['correlation'])]
+            if correlations:
+                condition_correlations[condition] = {
+                    'mean_correlation': np.mean(correlations),
+                    'std_correlation': np.std(correlations),
+                    'track_count': len(correlations)
+                }
+        
+        if not condition_correlations:
+            print("比較可能な相関データがありません。")
+            return
+        
+        # 棒グラフで馬場状態別の平均相関係数を比較
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        
+        conditions = list(condition_correlations.keys())
+        mean_corrs = [condition_correlations[c]['mean_correlation'] for c in conditions]
+        std_corrs = [condition_correlations[c]['std_correlation'] for c in conditions]
+        track_counts = [condition_correlations[c]['track_count'] for c in conditions]
+        
+        # 平均相関係数の比較
+        colors = ['lightblue', 'lightgreen', 'lightcoral', 'lightyellow'][:len(conditions)]
+        bars1 = ax1.bar(conditions, mean_corrs, yerr=std_corrs, capsize=5, 
+                       color=colors, alpha=0.7, edgecolor='black')
+        ax1.set_title(f'馬場状態別の平均相関係数比較（{target_label}予測）', fontproperties=self.font_prop)
+        ax1.set_ylabel('平均相関係数', fontproperties=self.font_prop)
+        ax1.set_xlabel('馬場状態', fontproperties=self.font_prop)
+        ax1.grid(True, alpha=0.3)
+        
+        # 値をバーの上に表示
+        for i, (bar, corr, count) in enumerate(zip(bars1, mean_corrs, track_counts)):
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
+                    f'{corr:.3f}\n({count}場)', ha='center', va='bottom', 
+                    fontproperties=self.font_prop, fontsize=10)
+        
+        # サンプル数の比較
+        bars2 = ax2.bar(conditions, track_counts, color=colors, alpha=0.7, edgecolor='black')
+        ax2.set_title('馬場状態別の分析対象競馬場数', fontproperties=self.font_prop)
+        ax2.set_ylabel('競馬場数', fontproperties=self.font_prop)
+        ax2.set_xlabel('馬場状態', fontproperties=self.font_prop)
+        ax2.grid(True, alpha=0.3)
+        
+        for bar, count in zip(bars2, track_counts):
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1, 
+                    f'{count}', ha='center', va='bottom', 
+                    fontproperties=self.font_prop, fontsize=12)
+        
+        plt.tight_layout()
+        filename = f'馬場状態別比較_{target_label}_微調整版.png'
+        plt.savefig(os.path.join(self.output_folder, filename), dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"{filename} を保存しました。")
+
+    def _suggest_track_condition_strategies(self, category_summary, total_races):
+        """
+        【競馬専門知識】馬場状態別の投資戦略提案
+        """
+        print("\n=== 馬券投資戦略提案 ===")
+        
+        for category, summary in category_summary.items():
+            percentage = (summary['count'] / total_races) * 100 if total_races > 0 else 0
+            
+            # カテゴリ別戦略アドバイス
+            if '良・高速' in category:
+                strategy = "瞬発力重視。先行・差し馬が有利。スピード指数重要度: 高"
+            elif '良・標準' in category:
+                strategy = "バランス型。オールラウンダー有利。総合能力重要度: 高"
+            elif '良・低速' in category:
+                strategy = "スタミナ重視。逃げ・追込み馬が有利。ペース配分重要度: 高"
+            elif '稍重・高速' in category:
+                strategy = "軽微なパワー要求+瞬発力。中距離得意馬有利。"
+            elif '稍重・標準' in category:
+                strategy = "パワー+バランス型。実績重視。条件戦強い馬有利。"
+            elif '稍重・低速' in category:
+                strategy = "持続力重視。長距離適性+ペース配分能力重要。"
+            elif '重・高速' in category:
+                strategy = "パワー+瞬発力。重賞実績ある馬が安定。"
+            elif '重・標準' in category:
+                strategy = "真のスタミナ勝負。長距離・重賞実績重視。"
+            elif '重・低速' in category:
+                strategy = "超持続力勝負。逃げ粘り・大逃げ型が台頭。距離延長OK馬。"
+            elif '不良' in category:
+                strategy = "パワー・スタミナ最重要。荒れる可能性大。穴馬狙い有効。"
+            else:
+                strategy = "データ要確認。慎重な馬選択を推奨。"
+            
+            print(f"【{category}】({percentage:.1f}%): {strategy}")
+        
+        # 全体的な傾向分析
+        high_speed_ratio = sum(v['count'] for k, v in category_summary.items() if '高速' in k) / total_races * 100
+        low_speed_ratio = sum(v['count'] for k, v in category_summary.items() if '低速' in k) / total_races * 100
+        
+        print(f"\n=== 全体傾向 ===")
+        print(f"高速馬場: {high_speed_ratio:.1f}% → スピード・瞬発力重視戦略")
+        print(f"低速馬場: {low_speed_ratio:.1f}% → スタミナ・ペース重視戦略")
+        print(f"標準馬場: {100-high_speed_ratio-low_speed_ratio:.1f}% → バランス型戦略")
+
+    def analyze_track_condition_details(self, analysis_type='place'):
+        """
+        【新機能】馬場状態の詳細分析
+        """
+        print(f"\n=== 馬場状態詳細分析開始 ===")
+        
+        if '馬場状態' not in self.df.columns:
+            print("エラー: 馬場状態カラムが見つかりません。")
+            return {}
+        
+        # 馬場状態の分布分析
+        condition_distribution = self.df['馬場状態'].value_counts()
+        print("\n=== 馬場状態分布 ===")
+        for condition, count in condition_distribution.head(10).items():
+            percentage = (count / len(self.df)) * 100
+            print(f"{condition}: {count}件 ({percentage:.2f}%)")
+        
+        # 馬場状態別の勝率・複勝率分析
+        target_column = '複勝' if analysis_type == 'place' else '勝利'
+        target_name = '複勝率' if analysis_type == 'place' else '勝率'
+        
+        condition_performance = self.df.groupby('馬場状態')[target_column].agg(['mean', 'count']).reset_index()
+        condition_performance = condition_performance[condition_performance['count'] >= 50]  # 最低50レース
+        condition_performance = condition_performance.sort_values('mean', ascending=False)
+        
+        print(f"\n=== 馬場状態別{target_name}ランキング（50レース以上） ===")
+        for _, row in condition_performance.head(10).iterrows():
+            print(f"{row['馬場状態']}: {target_name}{row['mean']:.3f} ({row['count']}レース)")
+        
+        # 競馬場×馬場状態のクロス分析
+        track_condition_analysis = self.df.groupby(['場名', '馬場状態']).agg({
+            target_column: ['mean', 'count'],
+            '総合適性スコア': 'mean'
+        }).reset_index()
+        
+        track_condition_analysis.columns = ['場名', '馬場状態', f'{target_name}', 'レース数', '平均適性スコア']
+        track_condition_analysis = track_condition_analysis[track_condition_analysis['レース数'] >= 20]
+        
+        print(f"\n=== 競馬場×馬場状態 最高{target_name}組み合わせ（20レース以上） ===")
+        top_combinations = track_condition_analysis.sort_values(f'{target_name}', ascending=False).head(10)
+        for _, row in top_combinations.iterrows():
+            print(f"{row['場名']}×{row['馬場状態']}: {target_name}{row[f'{target_name}']:.3f} "
+                  f"({row['レース数']}レース, 適性スコア{row['平均適性スコア']:.2f})")
+        
+        return {
+            'distribution': condition_distribution,
+            'performance': condition_performance,
+            'track_condition_cross': track_condition_analysis
+        }
+
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='競馬場特徴×馬能力適性分析（最適化済み設定：スピード0.5/0.5 + スタミナ0.3/0.7）')
+    parser = argparse.ArgumentParser(description='競馬場特徴×馬能力適性分析（競馬専門知識版：12種馬場状態対応）')
     parser.add_argument('--data-folder', type=str, default="export/with_bias", help='データフォルダのパス')
     parser.add_argument('--output-folder', type=str, default="results/track_horse_ability_analysis", help='結果出力先フォルダのパス')
     parser.add_argument('--period-analysis', action='store_true', help=f'3年間隔での時系列分析を実行')
     parser.add_argument('--analysis-type', type=str, default='win', choices=['win', 'place'], help='分析対象 (win: 単勝, place: 複勝)')
+    parser.add_argument('--track-condition', action='store_true', help='馬場状態別分析を実行')
+    parser.add_argument('--detailed-condition', action='store_true', help='馬場状態詳細分析を実行（分布・パフォーマンス・戦略）')
     args = parser.parse_args()
     
     analyzer = TrackHorseAbilityAnalyzer(data_folder=args.data_folder, output_folder=args.output_folder)
@@ -706,19 +1128,29 @@ def main():
         print("データ読み込みまたは前処理に失敗しました。処理を終了します。")
         return
     
-    if args.period_analysis:
+    if args.detailed_condition:
+        print(f"\n=== 馬場状態詳細分析実行 ===")
+        analyzer.analyze_track_condition_details(analysis_type=args.analysis_type)
+    elif args.track_condition:
+        print(f"\n=== 馬場状態別分析実行 ===")
+        analyzer.analyze_by_track_condition(analysis_type=args.analysis_type)
+    elif args.period_analysis:
         analyzer.analyze_by_periods(period_years=3, analysis_type=args.analysis_type)
     else:
         analysis_name = "単勝" if args.analysis_type == 'win' else "複勝"
-        print(f"\n=== 全期間統合 【{analysis_name}】 分析開始（最適化済み設定：スピード0.5/0.5 + スタミナ0.3/0.7） ===")
+        print(f"\n=== 全期間統合 【{analysis_name}】 分析開始（競馬専門知識版：12種馬場状態補正） ===")
         if args.analysis_type == 'win':
             analyzer.analyze_track_aptitude_correlation()
         elif args.analysis_type == 'place':
             analyzer.analyze_place_aptitude_correlation()
-        print(f"全期間統合 【{analysis_name}】 分析完了（最適化済み設定：スピード0.5/0.5 + スタミナ0.3/0.7）")
+        print(f"全期間統合 【{analysis_name}】 分析完了（競馬専門知識版：12種馬場状態補正）")
     
     print(f"\n=== 分析完了 ===")
     print(f"結果保存先: {args.output_folder}")
+    if args.track_condition:
+        print("馬場状態別の詳細分析結果と比較チャートが生成されました。")
+    elif args.detailed_condition:
+        print("馬場状態の詳細分析（分布・パフォーマンス・投資戦略）が完了しました。")
 
 if __name__ == "__main__":
     main() 
