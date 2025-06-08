@@ -36,7 +36,7 @@ class TrackHorseAbilityAnalyzer:
     - 競馬専門知識に基づく投資戦略提案
     """
     
-    def __init__(self, data_folder="export/with_bias", output_folder="results/track_horse_ability_analysis"):
+    def __init__(self, data_folder="export/with_bias", output_folder="results/track_horse_ability_analysis", turf_only=False):
         self.data_folder = data_folder
         self.output_folder = output_folder
         self.df = None
@@ -44,6 +44,7 @@ class TrackHorseAbilityAnalyzer:
         self.scaler = StandardScaler()
         self.font_prop = None
         self.horse_race_counts = None # 馬のレース回数格納用
+        self.turf_only = turf_only  # 芝レースのみに絞るかどうか
         
         # 【成功した微調整版設定】分析パラメータ
         # 複勝率分析で顕著な改善を確認（相関係数・統計的有意性の向上）
@@ -152,6 +153,15 @@ class TrackHorseAbilityAnalyzer:
             print(f"エラー: 必要なカラムが不足: {missing_columns}")
             return False
         
+        # 芝レースのみに絞る処理
+        if self.turf_only:
+            original_length = len(self.df)
+            turf_filtered = self._filter_turf_races()
+            if turf_filtered:
+                print(f"芝レースフィルタリング: {original_length}件 → {len(self.df)}件")
+            else:
+                print("芝レースフィルタリングができませんでした。全レースで分析を継続します。")
+        
         numeric_columns = ['年', '馬番', '着順', 'IDM', '素点', 'テン指数', '上がり指数', 'ペース指数', '距離', '馬体重']
         for col in numeric_columns:
             if col in self.df.columns:
@@ -170,6 +180,57 @@ class TrackHorseAbilityAnalyzer:
         print(f"データクリーニング: {before_count}行 → {after_count}行")
         
         self._calculate_horse_race_counts() # 馬のレース回数を集計
+        
+        return True
+    
+    def _filter_turf_races(self):
+        """
+        芝レースのみにデータをフィルタリング
+        """
+        print("芝レースフィルタリング中...")
+        
+        # コース種別の列を特定
+        turf_column = None
+        possible_columns = ['芝ダ障害コード', 'コース種別', '芝ダート', 'トラック種別']
+        
+        for col in possible_columns:
+            if col in self.df.columns:
+                turf_column = col
+                print(f"コース種別列を発見: {col}")
+                break
+        
+        if turf_column is None:
+            print("警告: コース種別を表す列が見つかりません。")
+            print(f"利用可能な列: {list(self.df.columns)}")
+            return False
+        
+        # データの内容を確認
+        unique_values = self.df[turf_column].dropna().unique()
+        print(f"コース種別の値: {unique_values}")
+        
+        # 芝レースの判定条件
+        if turf_column == '芝ダ障害コード':
+            # 数値コードの場合: 1=芝, 2=ダート, 3=障害
+            turf_mask = (self.df[turf_column] == 1) | (self.df[turf_column] == '1') | (self.df[turf_column] == '芝')
+        elif turf_column in ['コース種別', '芝ダート', 'トラック種別']:
+            # 文字列の場合
+            turf_mask = self.df[turf_column].astype(str).str.contains('芝', na=False)
+        else:
+            print(f"未対応のコース種別列: {turf_column}")
+            return False
+        
+        # フィルタリング実行
+        turf_count = turf_mask.sum()
+        if turf_count == 0:
+            print("芝レースが見つかりませんでした。")
+            return False
+        
+        self.df = self.df[turf_mask].copy()
+        
+        # 結果確認
+        remaining_values = self.df[turf_column].dropna().unique()
+        print(f"フィルタリング後のコース種別: {remaining_values}")
+        print(f"芝レース数: {len(self.df)}件")
         
         return True
     
@@ -1980,7 +2041,19 @@ def main():
     
     print("=== 競馬場特徴×馬能力適性分析システム（馬場差考慮版）開始 ===")
     
-    analyzer = TrackHorseAbilityAnalyzer()
+    # 芝レース限定オプション
+    turf_only_choice = input("芝レースのみに限定しますか？ (y/n): ").strip().lower()
+    turf_only = turf_only_choice in ['y', 'yes', 'はい', '1']
+    
+    if turf_only:
+        print("🌱 芝レース限定モードで分析を実行します。")
+        analyzer = TrackHorseAbilityAnalyzer(
+            output_folder="results/track_horse_ability_analysis_turf_only",
+            turf_only=True
+        )
+    else:
+        print("🏇 全レース（芝・ダート）で分析を実行します。")
+        analyzer = TrackHorseAbilityAnalyzer(turf_only=False)
     
     if not analyzer.load_and_preprocess_data():
         print("データの読み込みに失敗しました。")
@@ -1988,7 +2061,8 @@ def main():
     
 
     
-    print("\n=== 【馬場差考慮版】分析機能メニュー ===")
+    surface_label = "【芝レース限定】" if turf_only else "【芝・ダート全レース】"
+    print(f"\n=== 【馬場差考慮版】{surface_label}分析機能メニュー ===")
     print("1. 競馬場別適性相関分析（勝率）")
     print("2. 競馬場別適性相関分析（複勝率）")
     print("3. 馬場状態別適性相関分析（複勝率）")
@@ -2107,8 +2181,13 @@ def main():
         traceback.print_exc()
         return
     
-    print(f"\n=== 【馬場差考慮版】分析完了 ===")
+    print(f"\n=== 【馬場差考慮版】{surface_label}分析完了 ===")
     print(f"結果は {analyzer.output_folder} フォルダに保存されました。")
+    if turf_only:
+        print("\n【芝レース限定分析の特徴】")
+        print("🌱 芝レースのみの高精度分析")
+        print("🌱 芝馬場特有の傾向を抽出")
+        print("🌱 ダートレースのノイズを除去")
     print("\n【馬場差考慮の効果】")
     print("- 馬場状態による能力値補正")
     print("- 馬の能力バランスと馬場要求の適合度評価")
