@@ -182,7 +182,7 @@ class TrackHorseAbilityAnalyzer:
         else:
             print("警告: self.dfがNoneであるか、'血統登録番号'カラムが存在しないため、レース回数を集計できません。")
             self.horse_race_counts = None # 明示的にNoneに設定
-
+    
     def _calculate_horse_ability_scores(self):
         """
         【最適化済み】馬能力値計算
@@ -356,8 +356,162 @@ class TrackHorseAbilityAnalyzer:
         self.df['パワー適性'] = (self.df['基本能力値'] * self.df['track_slope_difficulty'] * self.df['track_stamina_demand'])
         self.df['技術適性'] = (self.df['総合能力値'] * self.df['track_curve_tightness'] * (1 - self.df['track_bias_impact']))
         self.df['枠順適性'] = (1 - (self.df['馬番'] - 1) / 17 * self.df['track_outside_disadvantage'])
-        self.df['総合適性スコア'] = (self.df['スピード適性'] * 0.3 + self.df['パワー適性'] * 0.3 + self.df['技術適性'] * 0.2 + self.df['枠順適性'] * 0.2)
+        
+        # 【新機能】馬場適性の計算と総合適性スコアへの反映
+        self._calculate_track_condition_aptitude()
+        
+        # 馬場適性を含む総合適性スコア（5要素統合）
+        self.df['総合適性スコア'] = (
+            self.df['スピード適性'] * 0.25 + 
+            self.df['パワー適性'] * 0.25 + 
+            self.df['技術適性'] * 0.15 + 
+            self.df['枠順適性'] * 0.15 + 
+            self.df['馬場適性'] * 0.20  # 馬場適性を20%の重みで追加
+        )
         self._add_similar_track_performance()
+    
+    def _calculate_track_condition_aptitude(self):
+        """
+        【新機能】馬場状態に対する馬の適性を詳細計算
+        - 馬場の重さ（良→稍重→重→不良）への適応度
+        - スピード変化（速・標準・遅）への対応力
+        - 過去の馬場状態別実績を考慮
+        """
+        print("馬場適性の詳細計算中...")
+        
+        # 馬場適性の初期化
+        self.df['馬場適性'] = 1.0
+        
+        if '馬場状態' not in self.df.columns:
+            print("警告: 馬場状態カラムが見つからないため、基本馬場適性(1.0)を使用します。")
+            return
+        
+        # 【競馬専門知識】馬場状態別の適性補正係数
+        track_condition_aptitude = {
+            # === 良馬場系列（基準） ===
+            '良': {'aptitude_base': 1.0, 'speed_demand': 0.5, 'stamina_demand': 0.5},
+            '10': {'aptitude_base': 1.0, 'speed_demand': 0.5, 'stamina_demand': 0.5},
+            '速良': {'aptitude_base': 1.0, 'speed_demand': 0.7, 'stamina_demand': 0.3},
+            '11': {'aptitude_base': 1.0, 'speed_demand': 0.7, 'stamina_demand': 0.3},
+            '遅良': {'aptitude_base': 1.0, 'speed_demand': 0.3, 'stamina_demand': 0.7},
+            '12': {'aptitude_base': 1.0, 'speed_demand': 0.3, 'stamina_demand': 0.7},
+            
+            # === 稍重馬場系列（やや難化） ===
+            '稍重': {'aptitude_base': 0.95, 'speed_demand': 0.4, 'stamina_demand': 0.6},
+            '20': {'aptitude_base': 0.95, 'speed_demand': 0.4, 'stamina_demand': 0.6},
+            '速稍重': {'aptitude_base': 0.97, 'speed_demand': 0.6, 'stamina_demand': 0.4},
+            '21': {'aptitude_base': 0.97, 'speed_demand': 0.6, 'stamina_demand': 0.4},
+            '遅稍重': {'aptitude_base': 0.93, 'speed_demand': 0.2, 'stamina_demand': 0.8},
+            '22': {'aptitude_base': 0.93, 'speed_demand': 0.2, 'stamina_demand': 0.8},
+            
+            # === 重馬場系列（大幅難化） ===
+            '重': {'aptitude_base': 0.85, 'speed_demand': 0.3, 'stamina_demand': 0.7},
+            '30': {'aptitude_base': 0.85, 'speed_demand': 0.3, 'stamina_demand': 0.7},
+            '速重': {'aptitude_base': 0.88, 'speed_demand': 0.5, 'stamina_demand': 0.5},
+            '31': {'aptitude_base': 0.88, 'speed_demand': 0.5, 'stamina_demand': 0.5},
+            '遅重': {'aptitude_base': 0.82, 'speed_demand': 0.1, 'stamina_demand': 0.9},
+            '32': {'aptitude_base': 0.82, 'speed_demand': 0.1, 'stamina_demand': 0.9},
+            
+            # === 不良馬場系列（極端難化） ===
+            '不良': {'aptitude_base': 0.75, 'speed_demand': 0.2, 'stamina_demand': 0.8},
+            '40': {'aptitude_base': 0.75, 'speed_demand': 0.2, 'stamina_demand': 0.8},
+            '速不良': {'aptitude_base': 0.78, 'speed_demand': 0.4, 'stamina_demand': 0.6},
+            '41': {'aptitude_base': 0.78, 'speed_demand': 0.4, 'stamina_demand': 0.6},
+            '遅不良': {'aptitude_base': 0.72, 'speed_demand': 0.05, 'stamina_demand': 0.95},
+            '42': {'aptitude_base': 0.72, 'speed_demand': 0.05, 'stamina_demand': 0.95},
+        }
+        
+        # 【競馬理論】馬の能力バランスと馬場要求の適合度計算
+        for condition_code, aptitude_config in track_condition_aptitude.items():
+            mask = self.df['馬場状態'] == condition_code
+            if mask.any():
+                count = mask.sum()
+                
+                # 馬場が要求する能力バランス
+                speed_demand = aptitude_config['speed_demand']
+                stamina_demand = aptitude_config['stamina_demand']
+                base_aptitude = aptitude_config['aptitude_base']
+                
+                # 馬の能力バランス（正規化）
+                speed_ability = self.df.loc[mask, 'スピード能力値']
+                stamina_ability = self.df.loc[mask, 'スタミナ能力値']
+                total_ability = speed_ability + stamina_ability
+                
+                # ゼロ除算回避
+                valid_total = total_ability > 0
+                speed_ratio = np.where(valid_total, speed_ability / total_ability, 0.5)
+                stamina_ratio = np.where(valid_total, stamina_ability / total_ability, 0.5)
+                
+                # 【理論的適合度】馬場要求と馬能力の一致する度合い
+                speed_match = 1.0 - abs(speed_ratio - speed_demand)
+                stamina_match = 1.0 - abs(stamina_ratio - stamina_demand)
+                
+                # 馬場適性 = 基本適性 × 能力適合度
+                condition_aptitude = base_aptitude * (speed_match * 0.5 + stamina_match * 0.5)
+                
+                # 馬場適性の更新
+                self.df.loc[mask, '馬場適性'] = condition_aptitude
+                
+                print(f"馬場適性計算「{condition_code}」: {count}件 "
+                      f"基本適性×{base_aptitude:.2f} "
+                      f"速度要求{speed_demand:.1f} 持久要求{stamina_demand:.1f}")
+        
+        # 【上級機能】過去の馬場状態別実績による動的調整
+        self._add_historical_track_condition_performance()
+    
+    def _add_historical_track_condition_performance(self):
+        """
+        【上級機能】過去の馬場状態別実績による馬場適性の動的調整
+        """
+        if '血統登録番号' not in self.df.columns:
+            print("警告: 血統登録番号がないため、過去実績による馬場適性調整をスキップします。")
+            return
+        
+        print("過去の馬場状態別実績による馬場適性の動的調整中...")
+        
+        # 馬×馬場状態別の過去実績を集計
+        horse_condition_performance = self.df.groupby(['血統登録番号', '馬場状態']).agg({
+            '複勝': ['mean', 'count']
+        }).reset_index()
+        
+        # カラム名を整理
+        horse_condition_performance.columns = ['血統登録番号', '馬場状態', '複勝率', 'レース数']
+        
+        # 最低3回以上の実績がある場合のみ調整
+        reliable_performance = horse_condition_performance[
+            horse_condition_performance['レース数'] >= 3
+        ]
+        
+        if len(reliable_performance) > 0:
+            print(f"過去実績による調整対象: {len(reliable_performance)}件の馬×馬場状態組み合わせ")
+            
+            # DataFrameをより効率的にマッピング
+            performance_dict = {}
+            for _, row in reliable_performance.iterrows():
+                key = (row['血統登録番号'], row['馬場状態'])
+                performance_dict[key] = row['複勝率']
+            
+            # 調整の適用（ベクトル化）
+            adjustment_factor = []
+            for _, row in self.df.iterrows():
+                key = (row['血統登録番号'], row['馬場状態'])
+                if key in performance_dict:
+                    past_performance = performance_dict[key]
+                    # 過去実績が0.3以上なら+調整、0.2以下なら-調整
+                    if past_performance >= 0.3:
+                        factor = 1.0 + (past_performance - 0.25) * 0.4  # 最大+20%調整
+                    else:
+                        factor = 1.0 + (past_performance - 0.25) * 0.3  # 最大-7.5%調整
+                    adjustment_factor.append(factor)
+                else:
+                    adjustment_factor.append(1.0)  # 調整なし
+            
+            # 馬場適性に過去実績による調整を適用
+            self.df['馬場適性'] *= np.array(adjustment_factor)
+            
+            print("過去実績による馬場適性の動的調整完了")
+        else:
+            print("過去実績による調整対象がありません（3回以上の実績なし）")
     
     def _add_similar_track_performance(self):
         if '血統登録番号' not in self.df.columns: # 血統登録番号がない場合はスキップ
@@ -453,8 +607,8 @@ class TrackHorseAbilityAnalyzer:
                 
                 if len(horse_stats_filtered) < min_horses_after_grouping:
                     print(f"警告: {track} で馬ごと集計後のサンプル数が{min_horses_after_grouping}未満 ({len(horse_stats_filtered)}) のためスキップします。")
-                    continue
-                
+                continue
+            
                 # データ検証と相関計算（強化版）
                 aptitude_scores = horse_stats_filtered['適性スコア平均'].values
                 win_rates = horse_stats_filtered['勝率'].values
@@ -822,7 +976,7 @@ class TrackHorseAbilityAnalyzer:
         
         print(f"\n=== {period_years}年間隔時系列分析完了 ({'単勝' if analysis_type == 'win' else '複勝'}) ===")
         return period_results
-
+    
     def analyze_by_track_condition(self, analysis_type='place'):
         """
         【新機能】馬場状態別の適性相関分析
@@ -1112,45 +1266,854 @@ class TrackHorseAbilityAnalyzer:
             'track_condition_cross': track_condition_analysis
         }
 
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(description='競馬場特徴×馬能力適性分析（競馬専門知識版：12種馬場状態対応）')
-    parser.add_argument('--data-folder', type=str, default="export/with_bias", help='データフォルダのパス')
-    parser.add_argument('--output-folder', type=str, default="results/track_horse_ability_analysis", help='結果出力先フォルダのパス')
-    parser.add_argument('--period-analysis', action='store_true', help=f'3年間隔での時系列分析を実行')
-    parser.add_argument('--analysis-type', type=str, default='win', choices=['win', 'place'], help='分析対象 (win: 単勝, place: 複勝)')
-    parser.add_argument('--track-condition', action='store_true', help='馬場状態別分析を実行')
-    parser.add_argument('--detailed-condition', action='store_true', help='馬場状態詳細分析を実行（分布・パフォーマンス・戦略）')
-    args = parser.parse_args()
+    def analyze_logistic_regression(self, target_type='place'):
+        """
+        【新機能】ロジスティック回帰による勝率・複勝率予測分析
+        """
+        print(f"\n=== ロジスティック回帰分析開始 ({target_type}) ===")
+        
+        # scikit-learnの必要なモジュールをインポート
+        try:
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.model_selection import train_test_split, cross_val_score
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, roc_curve
+            import numpy as np
+        except ImportError:
+            print("❌ scikit-learnが必要です。pip install scikit-learn でインストールしてください。")
+            return
+        
+        # 目的変数の設定
+        target_column = '複勝' if target_type == 'place' else '勝利'
+        target_name = '複勝率' if target_type == 'place' else '勝率'
+        
+        # 特徴量カラムの定義
+        feature_columns = ['スピード適性', 'パワー適性', '技術適性', '枠順適性', '馬場適性', '総合適性スコア']
+        available_features = [col for col in feature_columns if col in self.df.columns]
+        
+        if len(available_features) < 4:
+            print(f"❌ 必要な特徴量が不足しています。利用可能: {available_features}")
+            return
+        
+        print(f"📊 使用特徴量: {available_features}")
+        print(f"🎯 予測対象: {target_name}")
+        
+        # 全体的なロジスティック回帰分析
+        overall_results = self._perform_overall_logistic_regression(available_features, target_column, target_name)
+        
+        # 競馬場別ロジスティック回帰分析
+        track_results = self._perform_track_wise_logistic_regression(available_features, target_column, target_name)
+        
+        # 馬場状態別ロジスティック回帰分析
+        condition_results = self._perform_condition_wise_logistic_regression(available_features, target_column, target_name)
+        
+        # 結果の可視化
+        self._create_logistic_regression_visualizations(overall_results, track_results, condition_results, target_name)
+        
+        # 詳細レポートの生成
+        self._generate_logistic_regression_report(overall_results, track_results, condition_results, target_name)
+        
+        print(f"✅ ロジスティック回帰分析({target_name})が完了しました。")
+
+    def _perform_overall_logistic_regression(self, features, target_column, target_name):
+        """全体データでのロジスティック回帰分析"""
+        print(f"\n--- 全体ロジスティック回帰分析 ---")
+        
+        # scikit-learnのインポート
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.model_selection import train_test_split, cross_val_score
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, roc_curve
+        import numpy as np
+        
+        # データ準備
+        data = self.df[features + [target_column]].dropna()
+        X = data[features].values
+        y = data[target_column].values
+        
+        print(f"サンプル数: {len(data)}件, 正例率: {y.mean():.3f}")
+        
+        # データの標準化
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # 訓練・テストデータ分割
+        X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42, stratify=y)
+        
+        # ロジスティック回帰モデル構築
+        model = LogisticRegression(random_state=42, max_iter=1000)
+        model.fit(X_train, y_train)
+        
+        # 予測と評価
+        y_pred = model.predict(X_test)
+        y_prob = model.predict_proba(X_test)[:, 1]
+        
+        # 各種評価指標
+        accuracy = accuracy_score(y_test, y_pred)
+        precision = precision_score(y_test, y_pred, zero_division=0)
+        recall = recall_score(y_test, y_pred, zero_division=0)
+        f1 = f1_score(y_test, y_pred, zero_division=0)
+        auc = roc_auc_score(y_test, y_prob)
+        
+        # クロスバリデーション
+        cv_scores = cross_val_score(model, X_scaled, y, cv=5, scoring='roc_auc')
+        
+        # 特徴量重要度（係数）
+        feature_importance = dict(zip(features, model.coef_[0]))
+        
+        print(f"精度: {accuracy:.3f}")
+        print(f"適合率: {precision:.3f}")
+        print(f"再現率: {recall:.3f}")
+        print(f"F1スコア: {f1:.3f}")
+        print(f"AUC: {auc:.3f}")
+        print(f"CV-AUC平均: {cv_scores.mean():.3f} (±{cv_scores.std():.3f})")
+        
+        # ROC曲線用データ
+        fpr, tpr, thresholds = roc_curve(y_test, y_prob)
+        
+        return {
+            'model': model,
+            'scaler': scaler,
+            'features': features,
+            'metrics': {
+                'accuracy': accuracy,
+                'precision': precision,
+                'recall': recall,
+                'f1': f1,
+                'auc': auc,
+                'cv_auc_mean': cv_scores.mean(),
+                'cv_auc_std': cv_scores.std()
+            },
+            'feature_importance': feature_importance,
+            'roc_data': {'fpr': fpr, 'tpr': tpr, 'thresholds': thresholds},
+            'sample_size': len(data),
+            'positive_rate': y.mean()
+        }
+
+    def _perform_track_wise_logistic_regression(self, features, target_column, target_name):
+        """競馬場別ロジスティック回帰分析"""
+        print(f"\n--- 競馬場別ロジスティック回帰分析 ---")
+        
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.metrics import accuracy_score, roc_auc_score
+        import numpy as np
+        
+        track_results = {}
+        
+        for track_name in self.df['場名'].unique():
+            track_data = self.df[self.df['場名'] == track_name]
+            track_subset = track_data[features + [target_column]].dropna()
+            
+            # 最低サンプル数チェック
+            if len(track_subset) < 200:
+                continue
+            
+            X = track_subset[features].values
+            y = track_subset[target_column].values
+            
+            # 正例が少なすぎる場合はスキップ
+            if y.sum() < 20:
+                continue
+            
+            # データ標準化
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
+            
+            # モデル構築
+            model = LogisticRegression(random_state=42, max_iter=1000)
+            
+            try:
+                model.fit(X_scaled, y)
+                y_pred = model.predict(X_scaled)
+                y_prob = model.predict_proba(X_scaled)[:, 1]
+                
+                accuracy = accuracy_score(y, y_pred)
+                auc = roc_auc_score(y, y_prob)
+                feature_importance = dict(zip(features, model.coef_[0]))
+                
+                track_results[track_name] = {
+                    'accuracy': accuracy,
+                    'auc': auc,
+                    'feature_importance': feature_importance,
+                    'sample_size': len(track_subset),
+                    'positive_rate': y.mean()
+                }
+                
+                print(f"  {track_name}: AUC={auc:.3f}, 精度={accuracy:.3f}, サンプル={len(track_subset)}")
+                
+            except Exception as e:
+                print(f"  {track_name}: エラー - {e}")
+                continue
+        
+        return track_results
+
+    def _perform_condition_wise_logistic_regression(self, features, target_column, target_name):
+        """馬場状態別ロジスティック回帰分析"""
+        print(f"\n--- 馬場状態別ロジスティック回帰分析 ---")
+        
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.metrics import accuracy_score, roc_auc_score
+        import numpy as np
+        
+        condition_results = {}
+        
+        # 主要な馬場状態のみ分析
+        main_conditions = ['良', '稍重', '重', '不良']
+        
+        for condition in self.df['馬場状態'].unique():
+            if not any(mc in str(condition) for mc in main_conditions):
+                continue
+                
+            condition_data = self.df[self.df['馬場状態'] == condition]
+            condition_subset = condition_data[features + [target_column]].dropna()
+            
+            # 最低サンプル数チェック
+            if len(condition_subset) < 100:
+                continue
+            
+            X = condition_subset[features].values
+            y = condition_subset[target_column].values
+            
+            # 正例が少なすぎる場合はスキップ
+            if y.sum() < 10:
+                continue
+        
+            # データ標準化
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
+            
+            # モデル構築
+            model = LogisticRegression(random_state=42, max_iter=1000)
+            
+            try:
+                model.fit(X_scaled, y)
+                y_pred = model.predict(X_scaled)
+                y_prob = model.predict_proba(X_scaled)[:, 1]
+                
+                accuracy = accuracy_score(y, y_pred)
+                auc = roc_auc_score(y, y_prob)
+                feature_importance = dict(zip(features, model.coef_[0]))
+                
+                condition_results[condition] = {
+                    'accuracy': accuracy,
+                    'auc': auc,
+                    'feature_importance': feature_importance,
+                    'sample_size': len(condition_subset),
+                    'positive_rate': y.mean()
+                }
+                
+                print(f"  {condition}: AUC={auc:.3f}, 精度={accuracy:.3f}, サンプル={len(condition_subset)}")
+                
+            except Exception as e:
+                print(f"  {condition}: エラー - {e}")
+                continue
+        
+        return condition_results
+
+    def _create_logistic_regression_visualizations(self, overall_results, track_results, condition_results, target_name):
+        """ロジスティック回帰分析結果の可視化"""
+        print(f"\n📈 ロジスティック回帰可視化作成中...")
+        
+        import numpy as np
+        
+        # 2x2のサブプロット作成
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        
+        # 1. ROC曲線
+        roc_data = overall_results['roc_data']
+        ax1.plot(roc_data['fpr'], roc_data['tpr'], 
+                label=f'ROC曲線 (AUC = {overall_results["metrics"]["auc"]:.3f})',
+                color='darkorange', lw=2)
+        ax1.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='ランダム予測')
+        ax1.set_xlim([0.0, 1.0])
+        ax1.set_ylim([0.0, 1.05])
+        ax1.set_xlabel('偽陽性率 (False Positive Rate)')
+        ax1.set_ylabel('真陽性率 (True Positive Rate)')
+        ax1.set_title(f'1. ROC曲線 - {target_name}予測')
+        ax1.legend(loc="lower right")
+        ax1.grid(True, alpha=0.3)
+        
+        # 2. 特徴量重要度（全体）
+        importance = overall_results['feature_importance']
+        features = list(importance.keys())
+        values = list(importance.values())
+        colors = ['red' if v < 0 else 'blue' for v in values]
+        
+        bars = ax2.barh(features, values, color=colors, alpha=0.7)
+        ax2.set_xlabel('ロジスティック回帰係数')
+        ax2.set_title(f'2. 特徴量重要度 - {target_name}予測')
+        ax2.grid(True, alpha=0.3)
+        ax2.axvline(x=0, color='black', linestyle='-', alpha=0.3)
+        
+        # 係数値をバーに表示
+        for bar, value in zip(bars, values):
+            width = bar.get_width()
+            ax2.text(width + (0.01 if width >= 0 else -0.01), bar.get_y() + bar.get_height()/2,
+                    f'{value:.3f}', ha='left' if width >= 0 else 'right', va='center')
+        
+        # 3. 競馬場別AUC比較
+        if track_results:
+            track_names = list(track_results.keys())
+            track_aucs = [track_results[name]['auc'] for name in track_names]
+            
+            bars = ax3.bar(range(len(track_names)), track_aucs, alpha=0.7, color='lightgreen')
+            ax3.set_xlabel('競馬場')
+            ax3.set_ylabel('AUC')
+            ax3.set_title(f'3. 競馬場別予測精度 - {target_name}')
+            ax3.set_xticks(range(len(track_names)))
+            ax3.set_xticklabels(track_names, rotation=45)
+            ax3.grid(True, alpha=0.3)
+            ax3.axhline(y=0.5, color='red', linestyle='--', alpha=0.5, label='ランダム予測')
+            
+            # AUC値をバーに表示
+            for bar, auc in zip(bars, track_aucs):
+                height = bar.get_height()
+                ax3.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                        f'{auc:.3f}', ha='center', va='bottom')
+        
+        # 4. 馬場状態別AUC比較
+        if condition_results:
+            condition_names = list(condition_results.keys())
+            condition_aucs = [condition_results[name]['auc'] for name in condition_names]
+            
+            bars = ax4.bar(range(len(condition_names)), condition_aucs, alpha=0.7, color='lightcoral')
+            ax4.set_xlabel('馬場状態')
+            ax4.set_ylabel('AUC')
+            ax4.set_title(f'4. 馬場状態別予測精度 - {target_name}')
+            ax4.set_xticks(range(len(condition_names)))
+            ax4.set_xticklabels(condition_names, rotation=45)
+            ax4.grid(True, alpha=0.3)
+            ax4.axhline(y=0.5, color='red', linestyle='--', alpha=0.5, label='ランダム予測')
+            
+            # AUC値をバーに表示
+            for bar, auc in zip(bars, condition_aucs):
+                height = bar.get_height()
+                ax4.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                        f'{auc:.3f}', ha='center', va='bottom')
+        
+        plt.tight_layout()
+        
+        # ファイル保存
+        target_suffix = 'place' if target_name == '複勝率' else 'win'
+        filename = f"ロジスティック回帰分析_{target_suffix}.png"
+        plt.savefig(os.path.join(self.output_folder, filename), dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"{filename} を保存しました。")
+
+    def _generate_logistic_regression_report(self, overall_results, track_results, condition_results, target_name):
+        """ロジスティック回帰分析の詳細レポート生成"""
+        print(f"📄 ロジスティック回帰レポート生成中...")
+        
+        target_suffix = 'place' if target_name == '複勝率' else 'win'
+        report_filename = os.path.join(self.output_folder, f"ロジスティック回帰分析レポート_{target_suffix}.txt")
+        
+        report_lines = [
+            f"=== ロジスティック回帰分析レポート - {target_name}予測 ===\n",
+            f"分析実行日時: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+            "【全体分析結果】",
+            f"サンプル数: {overall_results['sample_size']:,}件",
+            f"正例率: {overall_results['positive_rate']:.3f}",
+            f"精度: {overall_results['metrics']['accuracy']:.3f}",
+            f"適合率: {overall_results['metrics']['precision']:.3f}",
+            f"再現率: {overall_results['metrics']['recall']:.3f}",
+            f"F1スコア: {overall_results['metrics']['f1']:.3f}",
+            f"AUC: {overall_results['metrics']['auc']:.3f}",
+            f"交差検証AUC: {overall_results['metrics']['cv_auc_mean']:.3f} (±{overall_results['metrics']['cv_auc_std']:.3f})\n",
+            
+            "【特徴量重要度】"
+        ]
+        
+        # 特徴量重要度をソート
+        importance_sorted = sorted(overall_results['feature_importance'].items(), 
+                                 key=lambda x: abs(x[1]), reverse=True)
+        
+        for feature, coef in importance_sorted:
+            effect = "正の影響" if coef > 0 else "負の影響"
+            report_lines.append(f"{feature}: {coef:.4f} ({effect})")
+        
+        # 競馬場別結果
+        if track_results:
+            report_lines.extend([
+                "\n【競馬場別分析結果】",
+                "競馬場名: AUC, 精度, サンプル数"
+            ])
+            
+            track_sorted = sorted(track_results.items(), key=lambda x: x[1]['auc'], reverse=True)
+            for track_name, results in track_sorted:
+                report_lines.append(
+                    f"{track_name}: AUC={results['auc']:.3f}, "
+                    f"精度={results['accuracy']:.3f}, "
+                    f"サンプル={results['sample_size']:,}件"
+                )
+        
+        # 馬場状態別結果
+        if condition_results:
+            report_lines.extend([
+                "\n【馬場状態別分析結果】",
+                "馬場状態: AUC, 精度, サンプル数"
+            ])
+            
+            condition_sorted = sorted(condition_results.items(), key=lambda x: x[1]['auc'], reverse=True)
+            for condition, results in condition_sorted:
+                report_lines.append(
+                    f"{condition}: AUC={results['auc']:.3f}, "
+                    f"精度={results['accuracy']:.3f}, "
+                    f"サンプル={results['sample_size']:,}件"
+                )
+        
+        # 実用的な解釈とアドバイス
+        overall_auc = overall_results['metrics']['auc']
+        if overall_auc >= 0.7:
+            interpretation = "優秀 - 実用的な予測性能"
+        elif overall_auc >= 0.6:
+            interpretation = "良好 - 参考として活用可能"
+        elif overall_auc >= 0.55:
+            interpretation = "やや有効 - 他の指標と組み合わせて使用"
+        else:
+            interpretation = "要改善 - 特徴量やモデルの見直しが必要"
+        
+        report_lines.extend([
+            f"\n【総合評価】",
+            f"予測性能: {interpretation}",
+            f"推奨用途: {'メイン予想材料として活用' if overall_auc >= 0.65 else '補助的な判断材料として活用'}",
+            f"\n【活用のポイント】",
+            "- 係数が正の特徴量は{target_name}向上に寄与",
+            "- 係数が負の特徴量は{target_name}低下に寄与", 
+            "- AUCが0.6以上の競馬場・馬場状態で特に有効",
+            "- サンプル数が多い結果ほど信頼性が高い"
+        ])
+        
+        # レポート保存
+        with open(report_filename, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(report_lines))
+        
+        print(f"📄 {report_filename} を保存しました。")
+        
+        # 重要な結果をコンソール出力
+        print(f"\n=== {target_name}予測 - 重要な知見 ===")
+        print(f"🎯 全体AUC: {overall_auc:.3f} ({interpretation})")
+        print("🔑 最重要特徴量:")
+        for feature, coef in importance_sorted[:3]:
+            effect = "↗️" if coef > 0 else "↘️"
+            print(f"   {feature}: {coef:.3f} {effect}")
+        
+        if track_results:
+            best_track = max(track_results.items(), key=lambda x: x[1]['auc'])
+            print(f"🏆 最高AUC競馬場: {best_track[0]} (AUC: {best_track[1]['auc']:.3f})")
+
+    def analyze_aptitude_logistic_curve(self, target_type='place'):
+        """適性スコア vs 勝率/複勝率のロジスティック回帰曲線分析"""
+        try:
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.metrics import roc_auc_score
+            import numpy as np
+        except ImportError:
+            print("❌ scikit-learn が必要です。")
+            return
+        
+        print(f"\n=== 適性スコア ロジスティック曲線分析開始 ===")
+        
+        target_column = '複勝' if target_type == 'place' else '勝利'
+        target_name = '複勝率' if target_type == 'place' else '勝率'
+        
+        # データ準備
+        data = self.df[['総合適性スコア', target_column]].dropna()
+        X = data['総合適性スコア'].values.reshape(-1, 1)
+        y = data[target_column].values
+        
+        print(f"サンプル数: {len(data)}件")
+        print(f"{target_name}全体平均: {y.mean():.3f}")
+        
+        # データ標準化とモデル構築
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        model = LogisticRegression(random_state=42)
+        model.fit(X_scaled, y)
+        
+        # 予測精度
+        y_prob = model.predict_proba(X_scaled)[:, 1]
+        auc = roc_auc_score(y, y_prob)
+        print(f"予測精度 (AUC): {auc:.3f}")
+        
+        # 可視化用データ生成
+        score_min = X.min() - (X.max() - X.min()) * 0.2  # 20%下方拡張
+        score_max = X.max() + (X.max() - X.min()) * 0.3  # 30%上方拡張
+        score_range = np.linspace(score_min, score_max, 1000)
+        score_range_scaled = scaler.transform(score_range.reshape(-1, 1))
+        predicted_probs = model.predict_proba(score_range_scaled)[:, 1]
+        
+        # 可視化
+        fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+        
+        # 実際のデータポイント
+        success_mask = y == 1
+        fail_mask = y == 0
+        
+        success_scores = X[success_mask].flatten()
+        fail_scores = X[fail_mask].flatten()
+        
+        # ジッター追加
+        np.random.seed(42)  # 再現性のため
+        success_y = np.ones(len(success_scores)) + np.random.normal(0, 0.02, len(success_scores))
+        fail_y = np.zeros(len(fail_scores)) + np.random.normal(0, 0.02, len(fail_scores))
+        
+        ax.scatter(success_scores, success_y, alpha=0.3, s=8, color='black', marker='o', label=f'{target_name}成功')
+        ax.scatter(fail_scores, fail_y, alpha=0.3, s=8, color='gray', marker='o', label=f'{target_name}失敗')
+        
+        # ロジスティック回帰曲線
+        ax.plot(score_range, predicted_probs, color='red', linewidth=3, 
+               label=f'ロジスティック回帰曲線 (AUC = {auc:.3f})')
+        
+        # 50%確率ライン
+        prob_50_idx = np.argmin(np.abs(predicted_probs - 0.5))
+        score_50 = score_range[prob_50_idx]
+        ax.axvline(x=score_50, color='orange', linestyle='--', alpha=0.7, 
+                  label=f'50%確率ライン ({score_50:.3f})')
+        ax.axhline(y=0.5, color='orange', linestyle='--', alpha=0.7)
+        
+        # 平均スコアライン
+        score_mean = X.mean()
+        ax.axvline(x=score_mean, color='green', linestyle='--', alpha=0.7, 
+                  label=f'平均適性スコア ({score_mean:.3f})')
+        
+        # グラフ装飾
+        ax.set_xlabel('総合適性スコア', fontsize=14)
+        ax.set_ylabel(f'{target_name}確率', fontsize=14)
+        ax.set_title(f'総合適性スコア vs {target_name} - ロジスティック回帰分析', fontsize=16)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='center right')
+        ax.set_ylim(-0.1, 1.1)
+        
+        plt.tight_layout()
+        
+        # ファイル保存
+        target_suffix = 'place' if target_type == 'place' else 'win'
+        filename = f"適性スコア_ロジスティック曲線_{target_suffix}.png"
+        plt.savefig(os.path.join(self.output_folder, filename), dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"{filename} を保存しました。")
+        
+        # 重要な統計値の表示
+        print(f"\n=== 重要な知見 ===")
+        print(f"🎯 50%確率の適性スコア: {score_50:.3f}")
+        print(f"📈 平均適性スコアでの予測{target_name}: {model.predict_proba(scaler.transform([[score_mean]]))[0][1]:.3f}")
+        
+        # パーセンタイル別予測確率
+        percentiles = [25, 50, 75, 90]
+        score_values = np.percentile(X, percentiles)
+        score_values_scaled = scaler.transform(score_values.reshape(-1, 1))
+        predicted_probs_pct = model.predict_proba(score_values_scaled)[:, 1]
+        
+        print("📊 適性スコア別予測確率:")
+        for pct, score, prob in zip(percentiles, score_values, predicted_probs_pct):
+            print(f"  {pct}%ile (スコア{score:.3f}): 予測{target_name} {prob:.3f}")
+        
+        print(f"✅ 適性スコア ロジスティック曲線分析が完了しました。")
     
-    analyzer = TrackHorseAbilityAnalyzer(data_folder=args.data_folder, output_folder=args.output_folder)
+    def _create_aptitude_logistic_curve_visualization(self, target_type='place'):
+        """【改良版】適性スコア vs 勝率/複勝率のロジスティック回帰曲線可視化"""
+        try:
+            from sklearn.linear_model import LogisticRegression
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.metrics import roc_auc_score
+            import numpy as np
+        except ImportError:
+            print("❌ scikit-learn が必要です。")
+            return
+        
+        print(f"\n=== 適性スコア ロジスティック曲線分析開始 ===")
+        
+        # 必要な列の存在確認
+        required_columns = ['IDM', 'テン指数', '上がり指数', 'ペース指数', '着順']
+        missing_columns = [col for col in required_columns if col not in self.df.columns]
+        if missing_columns:
+            print(f"❌ 必要なカラムが不足: {missing_columns}")
+            return
+        
+        # データ準備
+        data = self.df[required_columns].dropna()
+        if len(data) == 0:
+            print("❌ 分析可能なデータがありません。")
+            return
+        
+        print(f"データ読み込み完了: {len(data)}件")
+        
+        # 適性スコア計算
+        print("適性スコア計算中...")
+        weights = {'IDM': 0.3, 'テン指数': 0.25, '上がり指数': 0.25, 'ペース指数': 0.2}
+        aptitude_score = np.zeros(len(data))
+        
+        for column, weight in weights.items():
+            if column in data.columns:
+                values = np.array(data[column].fillna(data[column].median()))
+                aptitude_score += values * weight
+                print(f"✓ {column}を使用")
+        
+        print(f"✓ 適性スコア計算完了（平均: {aptitude_score.mean():.2f}, 標準偏差: {aptitude_score.std():.2f}）")
+        
+        # 目的変数作成
+        print("目的変数作成中...")
+        win_target = np.array((data['着順'] == 1).astype(int))
+        place_target = np.array(((data['着順'] >= 1) & (data['着順'] <= 3)).astype(int))
+        
+        print(f"✓ 勝利率: {win_target.mean():.3f}")
+        print(f"✓ 複勝率: {place_target.mean():.3f}")
+        
+        # 分析対象の設定
+        if target_type == 'place':
+            y = place_target
+            target_name = '複勝率'
+        else:
+            y = win_target
+            target_name = '勝率'
+        
+        # 有効データのフィルタリング
+        aptitude_score = np.array(aptitude_score)  # 型を確実にnumpy arrayに
+        y = np.array(y)  # 型を確実にnumpy arrayに
+        valid_mask = ~(np.isnan(aptitude_score) | np.isnan(y))
+        X = aptitude_score[valid_mask].reshape(-1, 1)
+        y = y[valid_mask]
+        
+        print(f"サンプル数: {len(X)}件")
+        print(f"{target_name}全体平均: {y.mean():.3f}")
+        
+        # ロジスティック回帰モデル構築
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        model = LogisticRegression(random_state=42)
+        model.fit(X_scaled, y)
+        
+        # 予測精度
+        y_prob = model.predict_proba(X_scaled)[:, 1]
+        auc = roc_auc_score(y, y_prob)
+        print(f"予測精度 (AUC): {auc:.3f}")
+        
+        # 可視化用データ生成
+        score_min = X.min() - (X.max() - X.min()) * 0.2  # 20%下方拡張
+        score_max = X.max() + (X.max() - X.min()) * 0.3  # 30%上方拡張
+        score_range = np.linspace(score_min, score_max, 1000)
+        score_range_scaled = scaler.transform(score_range.reshape(-1, 1))
+        predicted_probs = model.predict_proba(score_range_scaled)[:, 1]
+        
+        # 可視化
+        fig, ax = plt.subplots(1, 1, figsize=(12, 8))
+        
+        # 実際のデータポイント（ジッター付き）
+        np.random.seed(42)
+        success_mask = y == 1
+        fail_mask = y == 0
+        
+        success_scores = X[success_mask].flatten()
+        fail_scores = X[fail_mask].flatten()
+        
+        success_y = np.ones(len(success_scores)) + np.random.normal(0, 0.02, len(success_scores))
+        fail_y = np.zeros(len(fail_scores)) + np.random.normal(0, 0.02, len(fail_scores))
+        
+        ax.scatter(success_scores, success_y, alpha=0.4, s=12, color='black', marker='o', label=f'{target_name}成功')
+        ax.scatter(fail_scores, fail_y, alpha=0.2, s=8, color='gray', marker='o', label=f'{target_name}失敗')
+        
+        # ロジスティック回帰曲線（S字カーブ）
+        ax.plot(score_range, predicted_probs, color='red', linewidth=3, 
+               label=f'ロジスティック回帰曲線 (AUC = {auc:.3f})')
+        
+        # 50%確率ライン
+        prob_50_idx = np.argmin(np.abs(predicted_probs - 0.5))
+        score_50 = score_range[prob_50_idx]
+        ax.axvline(x=score_50, color='orange', linestyle='--', linewidth=2, alpha=0.8, 
+                  label=f'50%確率ライン (スコア{score_50:.1f})')
+        ax.axhline(y=0.5, color='orange', linestyle='--', linewidth=1, alpha=0.6)
+        
+        # 平均スコアライン
+        score_mean = X.mean()
+        pred_mean = model.predict_proba(scaler.transform([[score_mean]]))[0][1]
+        ax.axvline(x=score_mean, color='green', linestyle='--', linewidth=2, alpha=0.8, 
+                  label=f'平均適性スコア (スコア{score_mean:.1f})')
+        
+        # グラフ装飾
+        ax.set_xlabel('適性スコア（IDM30% + テン指数25% + 上がり指数25% + ペース指数20%）', 
+                     fontproperties=self.font_prop, fontsize=12)
+        ax.set_ylabel(f'{target_name}確率', fontproperties=self.font_prop, fontsize=12)
+        ax.set_title(f'適性スコア vs {target_name} - ロジスティック回帰曲線', 
+                    fontproperties=self.font_prop, fontsize=14)
+        ax.grid(True, alpha=0.3)
+        ax.legend(prop=self.font_prop, loc='center right')
+        ax.set_ylim(-0.1, 1.1)
+        
+        plt.tight_layout()
+        
+        # 結果保存ディレクトリ作成
+        curve_folder = os.path.join("results", "logistic_curve")
+        if not os.path.exists(curve_folder):
+            os.makedirs(curve_folder)
+        
+        # ファイル保存
+        target_suffix = 'place' if target_type == 'place' else 'win'
+        filename = f"適性スコア_ロジスティック曲線_{target_suffix}.png"
+        filepath = os.path.join(curve_folder, filename)
+        plt.savefig(filepath, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"📊 {filepath} を保存しました。")
+        
+        # 重要な統計値の表示
+        print(f"\n=== 重要な知見 ===")
+        print(f"🎯 50%確率の適性スコア: {score_50:.1f}")
+        print(f"📈 平均適性スコアでの予測{target_name}: {pred_mean:.3f}")
+        
+        # パーセンタイル別予測確率
+        percentiles = [25, 50, 75, 90]
+        score_values = np.percentile(X, percentiles)
+        score_values_scaled = scaler.transform(score_values.reshape(-1, 1))
+        predicted_probs_pct = model.predict_proba(score_values_scaled)[:, 1]
+        
+        print(f"📊 適性スコア別予測確率:")
+        for pct, score, prob in zip(percentiles, score_values, predicted_probs_pct):
+            print(f"  {pct}%ile (スコア{score:.1f}): 予測{target_name} {prob:.3f}")
+        
+        print(f"✅ 適性スコア ロジスティック曲線分析が完了しました。")
+
+
+def main():
+    import sys
+    
+    print("=== 競馬場特徴×馬能力適性分析システム（馬場差考慮版）開始 ===")
+    
+    analyzer = TrackHorseAbilityAnalyzer()
+    
     if not analyzer.load_and_preprocess_data():
-        print("データ読み込みまたは前処理に失敗しました。処理を終了します。")
+        print("データの読み込みに失敗しました。")
         return
     
-    if args.detailed_condition:
-        print(f"\n=== 馬場状態詳細分析実行 ===")
-        analyzer.analyze_track_condition_details(analysis_type=args.analysis_type)
-    elif args.track_condition:
-        print(f"\n=== 馬場状態別分析実行 ===")
-        analyzer.analyze_by_track_condition(analysis_type=args.analysis_type)
-    elif args.period_analysis:
-        analyzer.analyze_by_periods(period_years=3, analysis_type=args.analysis_type)
-    else:
-        analysis_name = "単勝" if args.analysis_type == 'win' else "複勝"
-        print(f"\n=== 全期間統合 【{analysis_name}】 分析開始（競馬専門知識版：12種馬場状態補正） ===")
-        if args.analysis_type == 'win':
-            analyzer.analyze_track_aptitude_correlation()
-        elif args.analysis_type == 'place':
-            analyzer.analyze_place_aptitude_correlation()
-        print(f"全期間統合 【{analysis_name}】 分析完了（競馬専門知識版：12種馬場状態補正）")
+
     
-    print(f"\n=== 分析完了 ===")
-    print(f"結果保存先: {args.output_folder}")
-    if args.track_condition:
-        print("馬場状態別の詳細分析結果と比較チャートが生成されました。")
-    elif args.detailed_condition:
-        print("馬場状態の詳細分析（分布・パフォーマンス・投資戦略）が完了しました。")
+    print("\n=== 【馬場差考慮版】分析機能メニュー ===")
+    print("1. 競馬場別適性相関分析（勝率）")
+    print("2. 競馬場別適性相関分析（複勝率）")
+    print("3. 馬場状態別適性相関分析（複勝率）")
+    print("4. 馬場状態詳細分析")
+    print("5. ロジスティック回帰分析（複勝率予測）")
+    print("6. ロジスティック回帰分析（勝率予測）")
+    print("7. 適性スコア ロジスティック曲線分析（複勝率）")
+    print("8. 適性スコア ロジスティック曲線分析（勝率）")
+    print("9. 全分析実行")
+    
+    choice = input("実行する分析を選択してください (1-9): ").strip()
+    
+    try:
+        if choice == '1':
+            print("\n=== 競馬場別適性相関分析（勝率）実行 ===")
+            analyzer.analyze_track_aptitude_correlation()
+            
+        elif choice == '2':
+            print("\n=== 競馬場別適性相関分析（複勝率）実行 ===")
+            analyzer.analyze_place_aptitude_correlation()
+            
+        elif choice == '3':
+            print("\n=== 馬場状態別適性相関分析（複勝率）実行 ===")
+            analyzer.analyze_by_track_condition('place')
+            
+        elif choice == '4':
+            print("\n=== 馬場状態詳細分析実行 ===")
+            analyzer.analyze_track_condition_details('place')
+            
+        elif choice == '5':
+            print("\n=== ロジスティック回帰分析（複勝率予測）実行 ===")
+            analyzer.analyze_logistic_regression('place')
+            
+        elif choice == '6':
+            print("\n=== ロジスティック回帰分析（勝率予測）実行 ===")
+            analyzer.analyze_logistic_regression('win')
+            
+        elif choice == '7':
+            print("\n=== 適性スコア ロジスティック曲線分析（複勝率）実行 ===")
+            analyzer._create_aptitude_logistic_curve_visualization('place')
+            
+        elif choice == '8':
+            print("\n=== 適性スコア ロジスティック曲線分析（勝率）実行 ===")
+            analyzer._create_aptitude_logistic_curve_visualization('win')
+            
+        elif choice == '9':
+            print("\n=== 全分析実行 ===")
+            
+            # 1. 競馬場別分析
+            print("\n--- 1/8: 競馬場別適性相関分析（勝率） ---")
+            analyzer.analyze_track_aptitude_correlation()
+            
+            print("\n--- 2/8: 競馬場別適性相関分析（複勝率） ---")
+            analyzer.analyze_place_aptitude_correlation()
+            
+            # 2. 馬場状態別分析
+            print("\n--- 3/8: 馬場状態別適性相関分析（複勝率） ---")
+            analyzer.analyze_by_track_condition('place')
+            
+            # 3. 馬場状態詳細分析
+            print("\n--- 4/8: 馬場状態詳細分析 ---")
+            analyzer.analyze_track_condition_details('place')
+            
+            # 4. ロジスティック回帰分析（複勝率）
+            print("\n--- 5/8: ロジスティック回帰分析（複勝率予測） ---")
+            analyzer.analyze_logistic_regression('place')
+            
+            # 5. ロジスティック回帰分析（勝率）
+            print("\n--- 6/8: ロジスティック回帰分析（勝率予測） ---")
+            analyzer.analyze_logistic_regression('win')
+            
+            # 6. ロジスティック曲線分析（複勝率）
+            print("\n--- 7/8: 適性スコア ロジスティック曲線分析（複勝率） ---")
+            analyzer._create_aptitude_logistic_curve_visualization('place')
+            
+            # 7. ロジスティック曲線分析（勝率）
+            print("\n--- 8/8: 適性スコア ロジスティック曲線分析（勝率） ---")
+            analyzer._create_aptitude_logistic_curve_visualization('win')
+            
+            # 【新機能】馬場適性統計サマリーの出力
+            print("\n=== 馬場適性統計サマリー ===")
+            if '馬場適性' in analyzer.df.columns:
+                track_aptitude_stats = analyzer.df.groupby('馬場状態')['馬場適性'].agg(['mean', 'std', 'count']).round(3)
+                print("馬場状態別の平均馬場適性:")
+                print(track_aptitude_stats)
+                
+                # 馬場適性の分布確認
+                overall_aptitude_stats = analyzer.df['馬場適性'].describe()
+                print(f"\n全体の馬場適性統計:")
+                print(f"平均: {overall_aptitude_stats['mean']:.3f}")
+                print(f"標準偏差: {overall_aptitude_stats['std']:.3f}")
+                print(f"最小値: {overall_aptitude_stats['min']:.3f}")
+                print(f"最大値: {overall_aptitude_stats['max']:.3f}")
+                
+                # 総合適性スコアの構成要素確認
+                print(f"\n総合適性スコアの構成要素平均:")
+                component_stats = analyzer.df[['スピード適性', 'パワー適性', '技術適性', '枠順適性', '馬場適性']].mean()
+                for component, value in component_stats.items():
+                    print(f"{component}: {value:.3f}")
+                
+                print("\n【馬場差考慮版の特徴】")
+                print("✅ 馬場適性が総合適性スコアの20%を占める")
+                print("✅ 12種類の詳細馬場状態に対応")
+                print("✅ 過去実績による動的調整機能")
+                print("✅ 馬場要求と馬能力の理論的適合度計算")
+            else:
+                print("警告: 馬場適性カラムが見つかりません。")
+        
+        else:
+            print("無効な選択です。1-9の番号を入力してください。")
+            return
+            
+    except Exception as e:
+        print(f"分析実行中にエラーが発生しました: {e}")
+        import traceback
+        traceback.print_exc()
+        return
+    
+    print(f"\n=== 【馬場差考慮版】分析完了 ===")
+    print(f"結果は {analyzer.output_folder} フォルダに保存されました。")
+    print("\n【馬場差考慮の効果】")
+    print("- 馬場状態による能力値補正")
+    print("- 馬の能力バランスと馬場要求の適合度評価")
+    print("- 過去の馬場状態別実績による動的調整")
+    print("- 総合適性スコアへの馬場適性の統合（20%重み）")
 
 if __name__ == "__main__":
     main() 
