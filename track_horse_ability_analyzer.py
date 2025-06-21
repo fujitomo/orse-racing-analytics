@@ -49,9 +49,9 @@ class TrackHorseAbilityAnalyzer:
         # 【成功した微調整版設定】分析パラメータ
         # 複勝率分析で顕著な改善を確認（相関係数・統計的有意性の向上）
         self.analysis_config = {
-            'min_races_per_horse': 4,       # 馬ごと最低レース数（品質向上）
-            'min_sample_size': 60,          # 競馬場ごと最低サンプル数（信頼性向上）
-            'min_horses_after_grouping': 12, # 馬ごと集計後の最低数（統計精度向上）
+            'min_races_per_horse': 3,       # 馬ごと最低レース数（品質向上）
+            'min_sample_size': 30,          # 競馬場ごと最低サンプル数（信頼性向上）
+            'min_horses_after_grouping': 5, # 馬ごと集計後の最低数（統計精度向上）
             
             # 【成功実績】微調整版重み設定
             'speed_weights': {'ten': 0.45, 'agari': 0.55},  # 上がり微重視→複勝率に効果的
@@ -147,7 +147,7 @@ class TrackHorseAbilityAnalyzer:
     
     def _preprocess_data(self):
         print("データ前処理を実行中...")
-        required_columns = ['場名', '年', '馬番', '着順', 'IDM', '素点']
+        required_columns = ['場名', '年', '馬番', '着順', 'IDM']
         missing_columns = [col for col in required_columns if col not in self.df.columns]
         if missing_columns:
             print(f"エラー: 必要なカラムが不足: {missing_columns}")
@@ -162,7 +162,7 @@ class TrackHorseAbilityAnalyzer:
             else:
                 print("芝レースフィルタリングができませんでした。全レースで分析を継続します。")
         
-        numeric_columns = ['年', '馬番', '着順', 'IDM', '素点', 'テン指数', '上がり指数', 'ペース指数', '距離', '馬体重']
+        numeric_columns = ['年', '馬番', '着順', 'IDM', 'テン指数', '上がり指数', 'ペース指数', '距離', '馬体重']
         for col in numeric_columns:
             if col in self.df.columns:
                 self.df[col] = pd.to_numeric(self.df[col], errors='coerce')
@@ -250,11 +250,8 @@ class TrackHorseAbilityAnalyzer:
         - スピード: バランス型（テン0.5 + 上がり0.5）+0.26%改善
         - スタミナ: ペース重視（基本0.3 + ペース0.7）+ 1600基準 +0.47%改善
         """
-        # 基本能力値（実戦的評価重視：素点0.4 + IDM0.6）
-        self.df['基本能力値'] = (
-            self.df['素点'].fillna(self.df['素点'].median()) * 0.4 + 
-            self.df['IDM'].fillna(self.df['IDM'].median()) * 0.6
-        )
+        # 基本能力値（IDMのみ使用）
+        self.df['基本能力値'] = self.df['IDM'].fillna(self.df['IDM'].median())
         
         # 【最適化済み】スピード能力値：バランス型重み付け
         speed_config = self.analysis_config['speed_weights']
@@ -1009,9 +1006,11 @@ class TrackHorseAbilityAnalyzer:
             period_name = f"{start_year}-{end_year}"
             print(f"\n--- {period_name}期間の分析開始 ---")
             period_data = original_df[(original_df['年'] >= start_year) & (original_df['年'] <= end_year)].copy()
-            if len(period_data) < 100:
-                print(f"警告: {period_name}期間のデータ数が少ない({len(period_data)}行)")
+            if len(period_data) < 20:
+                print(f"警告: {period_name}期間のデータ数が少なすぎます({len(period_data)}行) - スキップします")
                 continue
+            elif len(period_data) < 100:
+                print(f"注意: {period_name}期間のデータ数が少ない({len(period_data)}行) - 実行しますが結果の信頼性は低い可能性があります")
             
             self.df = period_data # 一時的にdfを期間データに置き換え
             period_output_folder = os.path.join(original_output_folder, f"period_{period_name}")
@@ -2036,163 +2035,156 @@ class TrackHorseAbilityAnalyzer:
         print(f"✅ 適性スコア ロジスティック曲線分析が完了しました。")
 
 
+
+
 def main():
     import sys
+    import argparse
+    
+    # コマンドライン引数の設定
+    parser = argparse.ArgumentParser(description='競馬場特徴×馬能力適性分析システム（馬場差考慮版）')
+    parser.add_argument('--period-years', type=int, default=1, 
+                       help='期間分析の年数（例: 1=1年ずつ, 3=3年ずつ）デフォルト: 1')
+    parser.add_argument('--turf-only', action='store_true', help='芝レースのみに限定')
+    parser.add_argument('--analysis-type', choices=['place', 'win'], default='place', 
+                       help='分析タイプ: place=複勝率, win=勝率')
+    parser.add_argument('--include-track-analysis', action='store_true', default=True,
+                       help='既存の馬場分析を含める（デフォルト: True）')
+    
+    args = parser.parse_args()
     
     print("=== 競馬場特徴×馬能力適性分析システム（馬場差考慮版）開始 ===")
     
-    # 芝レース限定オプション
-    turf_only_choice = input("芝レースのみに限定しますか？ (y/n): ").strip().lower()
-    turf_only = turf_only_choice in ['y', 'yes', 'はい', '1']
+    # 期間年数の決定
+    period_years = args.period_years
+    if len(sys.argv) == 1:  # コマンドライン引数がない場合は対話式
+        try:
+            period_input = input("何年分ずつ分析しますか？（例: 1=1年ずつ, 3=3年ずつ）[1]: ").strip()
+            if period_input:
+                period_years = int(period_input)
+            else:
+                period_years = 1
+        except ValueError:
+            print("無効な値が入力されました。1年ずつで分析します。")
+            period_years = 1
     
+    # 芝レース限定の決定
+    turf_only = args.turf_only
+    if len(sys.argv) == 1:  # 対話式の場合
+        turf_only_choice = input("芝レースのみに限定しますか？ (y/n): ").strip().lower()
+        turf_only = turf_only_choice in ['y', 'yes', 'はい', '1']
+    
+    # 分析タイプの決定
+    analysis_type = args.analysis_type
+    if len(sys.argv) == 1:  # 対話式の場合
+        analysis_choice = input("分析タイプを選択してください (place=複勝率, win=勝率) [place]: ").strip().lower()
+        if analysis_choice in ['win', 'w']:
+            analysis_type = 'win'
+    
+    # アナライザーの初期化
     if turf_only:
         print("🌱 芝レース限定モードで分析を実行します。")
-        analyzer = TrackHorseAbilityAnalyzer(
-            output_folder="results/track_horse_ability_analysis_turf_only",
-            turf_only=True
-        )
+        output_suffix = "_turf_only"
     else:
         print("🏇 全レース（芝・ダート）で分析を実行します。")
-        analyzer = TrackHorseAbilityAnalyzer(turf_only=False)
+        output_suffix = ""
+    
+    output_folder = f"results/track_horse_ability_analysis_{period_years}year_periods{output_suffix}"
+    print(f"📊 全年データを{period_years}年分ずつで期間分析します。")
+    
+    analyzer = TrackHorseAbilityAnalyzer(
+        output_folder=output_folder,
+        turf_only=turf_only
+    )
     
     if not analyzer.load_and_preprocess_data():
         print("データの読み込みに失敗しました。")
         return
     
-
+    target_label = '複勝率' if analysis_type == 'place' else '勝率'
+    print(f"🎯 分析タイプ: {target_label}")
     
-    surface_label = "【芝レース限定】" if turf_only else "【芝・ダート全レース】"
-    print(f"\n=== 【馬場差考慮版】{surface_label}分析機能メニュー ===")
-    print("1. 競馬場別適性相関分析（勝率）")
-    print("2. 競馬場別適性相関分析（複勝率）")
-    print("3. 馬場状態別適性相関分析（複勝率）")
-    print("4. 馬場状態詳細分析")
-    print("5. ロジスティック回帰分析（複勝率予測）")
-    print("6. ロジスティック回帰分析（勝率予測）")
-    print("7. 適性スコア ロジスティック曲線分析（複勝率）")
-    print("8. 適性スコア ロジスティック曲線分析（勝率）")
-    print("9. 全分析実行")
+    # データ年範囲の確認
+    if '年' in analyzer.df.columns:
+        available_years = sorted(analyzer.df['年'].dropna().unique())
+        if available_years:
+            print(f"📅 利用可能年範囲: {min(available_years):.0f}年 〜 {max(available_years):.0f}年")
+            total_years = len(available_years)
+            expected_periods = (total_years + period_years - 1) // period_years
+            print(f"📊 期間数予測: 約{expected_periods}期間（{period_years}年×{expected_periods}期間）")
     
-    choice = input("実行する分析を選択してください (1-9): ").strip()
+    # メイン期間分析の実行
+    print(f"\n=== {period_years}年分ずつ期間分析（{target_label}）実行 ===")
+    period_results = analyzer.analyze_by_periods(period_years=period_years, analysis_type=analysis_type)
     
-    try:
-        if choice == '1':
-            print("\n=== 競馬場別適性相関分析（勝率）実行 ===")
-            analyzer.analyze_track_aptitude_correlation()
-            
-        elif choice == '2':
-            print("\n=== 競馬場別適性相関分析（複勝率）実行 ===")
-            analyzer.analyze_place_aptitude_correlation()
-            
-        elif choice == '3':
-            print("\n=== 馬場状態別適性相関分析（複勝率）実行 ===")
-            analyzer.analyze_by_track_condition('place')
-            
-        elif choice == '4':
-            print("\n=== 馬場状態詳細分析実行 ===")
-            analyzer.analyze_track_condition_details('place')
-            
-        elif choice == '5':
-            print("\n=== ロジスティック回帰分析（複勝率予測）実行 ===")
-            analyzer.analyze_logistic_regression('place')
-            
-        elif choice == '6':
-            print("\n=== ロジスティック回帰分析（勝率予測）実行 ===")
-            analyzer.analyze_logistic_regression('win')
-            
-        elif choice == '7':
-            print("\n=== 適性スコア ロジスティック曲線分析（複勝率）実行 ===")
-            analyzer._create_aptitude_logistic_curve_visualization('place')
-            
-        elif choice == '8':
-            print("\n=== 適性スコア ロジスティック曲線分析（勝率）実行 ===")
-            analyzer._create_aptitude_logistic_curve_visualization('win')
-            
-        elif choice == '9':
-            print("\n=== 全分析実行 ===")
-            
-            # 1. 競馬場別分析
-            print("\n--- 1/8: 競馬場別適性相関分析（勝率） ---")
-            analyzer.analyze_track_aptitude_correlation()
-            
-            print("\n--- 2/8: 競馬場別適性相関分析（複勝率） ---")
-            analyzer.analyze_place_aptitude_correlation()
-            
-            # 2. 馬場状態別分析
-            print("\n--- 3/8: 馬場状態別適性相関分析（複勝率） ---")
-            analyzer.analyze_by_track_condition('place')
-            
-            # 3. 馬場状態詳細分析
-            print("\n--- 4/8: 馬場状態詳細分析 ---")
-            analyzer.analyze_track_condition_details('place')
-            
-            # 4. ロジスティック回帰分析（複勝率）
-            print("\n--- 5/8: ロジスティック回帰分析（複勝率予測） ---")
-            analyzer.analyze_logistic_regression('place')
-            
-            # 5. ロジスティック回帰分析（勝率）
-            print("\n--- 6/8: ロジスティック回帰分析（勝率予測） ---")
-            analyzer.analyze_logistic_regression('win')
-            
-            # 6. ロジスティック曲線分析（複勝率）
-            print("\n--- 7/8: 適性スコア ロジスティック曲線分析（複勝率） ---")
-            analyzer._create_aptitude_logistic_curve_visualization('place')
-            
-            # 7. ロジスティック曲線分析（勝率）
-            print("\n--- 8/8: 適性スコア ロジスティック曲線分析（勝率） ---")
-            analyzer._create_aptitude_logistic_curve_visualization('win')
-            
-            # 【新機能】馬場適性統計サマリーの出力
-            print("\n=== 馬場適性統計サマリー ===")
-            if '馬場適性' in analyzer.df.columns:
-                track_aptitude_stats = analyzer.df.groupby('馬場状態')['馬場適性'].agg(['mean', 'std', 'count']).round(3)
-                print("馬場状態別の平均馬場適性:")
-                print(track_aptitude_stats)
-                
-                # 馬場適性の分布確認
-                overall_aptitude_stats = analyzer.df['馬場適性'].describe()
-                print(f"\n全体の馬場適性統計:")
-                print(f"平均: {overall_aptitude_stats['mean']:.3f}")
-                print(f"標準偏差: {overall_aptitude_stats['std']:.3f}")
-                print(f"最小値: {overall_aptitude_stats['min']:.3f}")
-                print(f"最大値: {overall_aptitude_stats['max']:.3f}")
-                
-                # 総合適性スコアの構成要素確認
-                print(f"\n総合適性スコアの構成要素平均:")
-                component_stats = analyzer.df[['スピード適性', 'パワー適性', '技術適性', '枠順適性', '馬場適性']].mean()
-                for component, value in component_stats.items():
-                    print(f"{component}: {value:.3f}")
-                
-                print("\n【馬場差考慮版の特徴】")
-                print("✅ 馬場適性が総合適性スコアの20%を占める")
-                print("✅ 12種類の詳細馬場状態に対応")
-                print("✅ 過去実績による動的調整機能")
-                print("✅ 馬場要求と馬能力の理論的適合度計算")
-            else:
-                print("警告: 馬場適性カラムが見つかりません。")
+    # 既存の馬場分析を含める場合（全年データで実行）
+    if args.include_track_analysis:
+        print(f"\n=== 全年データでの追加分析 ===")
         
-        else:
-            print("無効な選択です。1-9の番号を入力してください。")
-            return
-            
-    except Exception as e:
-        print(f"分析実行中にエラーが発生しました: {e}")
-        import traceback
-        traceback.print_exc()
-        return
+        print(f"\n=== 馬場状態別分析（{target_label}）実行 ===")
+        analyzer.analyze_by_track_condition(analysis_type=analysis_type)
+        
+        print(f"\n=== 馬場状態詳細分析（{target_label}）実行 ===")  
+        analyzer.analyze_track_condition_details(analysis_type=analysis_type)
+        
+        print(f"\n=== ロジスティック回帰分析（{target_label}）実行 ===")
+        analyzer.analyze_logistic_regression(target_type=analysis_type)
+        
+        print(f"\n=== 適性ロジスティック曲線分析（{target_label}）実行 ===")
+        analyzer.analyze_aptitude_logistic_curve(target_type=analysis_type)
     
-    print(f"\n=== 【馬場差考慮版】{surface_label}分析完了 ===")
+    print(f"\n=== 🏁 分析完了 ===")
     print(f"結果は {analyzer.output_folder} フォルダに保存されました。")
+    print(f"期間分析: {period_years}年分ずつ")
+    print(f"分析タイプ: {target_label}")
     if turf_only:
-        print("\n【芝レース限定分析の特徴】")
-        print("🌱 芝レースのみの高精度分析")
-        print("🌱 芝馬場特有の傾向を抽出")
-        print("🌱 ダートレースのノイズを除去")
-    print("\n【馬場差考慮の効果】")
-    print("- 馬場状態による能力値補正")
-    print("- 馬の能力バランスと馬場要求の適合度評価")
-    print("- 過去の馬場状態別実績による動的調整")
-    print("- 総合適性スコアへの馬場適性の統合（20%重み）")
+        print("レース種別: 芝限定")
+    else:
+        print("レース種別: 芝・ダート")
+    
+    # 分析結果のサマリー表示
+    if hasattr(analyzer, 'df') and len(analyzer.df) > 0:
+        print(f"\n=== 📊 分析データサマリー ===")
+        print(f"総レース数: {len(analyzer.df):,}件")
+        if '場名' in analyzer.df.columns:
+            track_count = analyzer.df['場名'].nunique()
+            print(f"競馬場数: {track_count}場")
+        if '馬場状態' in analyzer.df.columns:
+            condition_count = analyzer.df['馬場状態'].nunique()
+            print(f"馬場状態種類: {condition_count}種類")
+        
+        # 勝率・複勝率の基本統計
+        if analysis_type == 'place' and '複勝' in analyzer.df.columns:
+            place_rate = analyzer.df['複勝'].mean()
+            print(f"全体複勝率: {place_rate:.3f}")
+        elif analysis_type == 'win' and '勝利' in analyzer.df.columns:
+            win_rate = analyzer.df['勝利'].mean()
+            print(f"全体勝率: {win_rate:.3f}")
+        
+        # 期間分析結果のサマリー
+        if period_results:
+            print(f"\n=== 📈 期間分析結果サマリー ===")
+            print(f"生成期間数: {len(period_results)}期間")
+            
+            # 各期間のデータ件数
+            period_counts = [result.get('data_count', 0) for result in period_results.values()]
+            if period_counts:
+                print(f"期間別データ数: 最小{min(period_counts):,}件 〜 最大{max(period_counts):,}件")
+                print(f"平均データ数: {sum(period_counts)/len(period_counts):,.0f}件/期間")
+            
+            # 期間別フォルダの説明
+            print(f"各期間の詳細分析結果は以下のサブフォルダに保存されています:")
+            for period_name in sorted(period_results.keys()):
+                print(f"  - {period_name}/")
+        
+        print(f"\n💡 フォルダ構成:")
+        print(f"  {analyzer.output_folder}/")
+        if period_results:
+            print(f"  ├── (期間別サブフォルダ) × {len(period_results)}個")
+        if args.include_track_analysis:
+            print(f"  ├── 馬場状態別分析結果")
+            print(f"  ├── ロジスティック回帰分析結果")
+            print(f"  └── 適性曲線分析結果")
 
 if __name__ == "__main__":
     main() 
