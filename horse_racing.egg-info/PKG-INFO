@@ -1,5 +1,0 @@
-Metadata-Version: 2.4
-Name: horse_racing
-Version: 0.1
-Requires-Dist: pandas
-Dynamic: requires-dist
