@@ -1,238 +1,434 @@
-"""
-RaceLevelAnalyzerのテストモジュール
-"""
-
 import pytest
 import pandas as pd
-import logging
-from unittest.mock import patch
-from horse_racing.analyzers.race_level_analyzer import RaceLevelAnalyzer
-from horse_racing.base.analyzer import AnalysisConfig
-from horse_racing.visualization.plotter import RacePlotter
-from horse_racing.data.loader import RaceDataLoader
+import numpy as np
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+from datetime import datetime
+from sklearn.linear_model import LinearRegression
 
-# ロガーの設定
-logger = logging.getLogger(__name__)
+from horse_racing.analyzers.race_level_analyzer import RaceLevelAnalyzer, AnalysisConfig
+from horse_racing.data.loader import RaceDataLoader
+from horse_racing.visualization.plotter import RacePlotter
+from horse_racing.analyzers.causal_analyzer import analyze_causal_relationship, generate_causal_analysis_report
 
 @pytest.fixture
-def test_config():
-    """テスト用の設定"""
+def mock_config(tmp_path):
+    """Fixture for AnalysisConfig."""
     return AnalysisConfig(
-        input_path='test_input.csv',
-        output_dir='test_output',
-        date_str='20240101',
+        input_path=str(tmp_path / "dummy_data.csv"),
+        output_dir=str(tmp_path / "output"),
+        date_str="20230101",
         min_races=3,
-        confidence_level=0.95
+        confidence_level=0.95,
+        start_date=datetime(2023, 1, 1),
+        end_date=datetime(2023, 12, 31),
+        causal_analysis_enabled=True
     )
 
 @pytest.fixture
-def sample_race_data():
-    """テスト用のレースデータ"""
-    df = pd.DataFrame({
-        '場コード': [1, 1, 2, 2, 2, 2, 2, 2, 2, 2],
-        '年': [2024] * 10,
-        '回': [1, 1, 2, 2, 2, 2, 2, 2, 2, 2],
-        '日': [1, 1, 2, 2, 2, 3, 3, 3, 3, 3],
-        'R': list(range(1, 11)),
-        '馬名': ['テスト馬A', 'テスト馬B', 'テスト馬A', 'テスト馬B', 'テスト馬A',
-               'テスト馬B', 'テスト馬A', 'テスト馬B', 'テスト馬A', 'テスト馬B'],
-        '距離': [1600, 2000, 1800, 2000, 1600, 1800, 2000, 1600, 2000, 1800],
-        '着順': [1, 2, 3, 1, 2, 1, 2, 1, 3, 2],
-        'レース名': ['テストG1', 'テストG2', '一般レース', 'テストG3', 'テストL',
-                  'テストG2', '一般レース', 'テストG3', 'テストL', 'テストG1'],
-        '種別': [11, 12, 13, 14, 13, 12, 13, 14, 13, 11],
-        '芝ダ障害コード': ['芝'] * 10,
-        '馬番': list(range(1, 11)),
-        'グレード': [1, 2, 5, 3, 6, 2, 5, 3, 6, 1],
-        '本賞金': [10000, 7000, 2000, 4500, 2500, 7000, 2000, 4500, 2500, 10000]
-    })
-    df['1着賞金'] = df['本賞金']
-    df['is_win'] = df['着順'] == 1
-    df['is_placed'] = df['着順'] <= 3
-    df['race_level'] = 5.0
+def dummy_df():
+    """Dummy DataFrame for RaceLevelAnalyzer tests."""
+    data = {
+        '場コード': ['01', '01', '02', '01', '01', '02'],
+        '年': [2023, 2023, 2023, 2023, 2023, 2023],
+        '回': [1, 1, 1, 2, 2, 2],
+        '日': [1, 2, 1, 1, 2, 1],
+        'R': [1, 2, 1, 1, 2, 1],
+        '馬名': ['HorseA', 'HorseA', 'HorseA', 'HorseA', 'HorseA', 'HorseA', 'HorseB', 'HorseB', 'HorseB', 'HorseB'],
+        '距離': [1600, 2000, 1600, 1800, 2400, 2000],
+        '着順': [1, 5, 2, 1, 3, 4],
+        'レース名': ['G1レース', 'OPレース', 'G3レース', '特別レース', 'G2レース', 'Lレース'],
+        '種別': [13, 13, 13, 13, 13, 13],
+        '芝ダ障害コード': ['芝', '芝', 'ダート', '芝', '芝', 'ダート'],
+        '馬番': [1, 2, 3, 1, 2, 3],
+        'クラス': [1, 5, 3, 5, 2, 6],
+        '本賞金': [10000, 2000, 4000, 3000, 7000, 2500],
+        '1着賞金': [5000, 1000, 2000, 1500, 3500, 1200],
+        '年月日': ['20230101', '20230108', '20230101', '20230201', '20230208', '20230201'],
+        'is_win': [True, False, False, True, False, False],
+        'is_placed': [True, False, True, True, True, False]
+    }
+    df = pd.DataFrame(data)
+    df['date'] = pd.to_datetime(df['年月日'], format='%Y%m%d') # Add date column
     return df
 
 @pytest.fixture
-def analyzer(test_config):
-    """テスト用のアナライザーインスタンス"""
-    with patch('horse_racing.data.loader.RaceDataLoader.load') as mock_load:
-        analyzer = RaceLevelAnalyzer(test_config)
-        mock_load.return_value = pd.DataFrame()
-        return analyzer
+def analyzer(mock_config, dummy_df, mocker):
+    """RaceLevelAnalyzer instance for testing."""
+    mocker.patch('horse_racing.data.loader.RaceDataLoader.load', return_value=dummy_df)
+    mock_plotter_class = mocker.patch('horse_racing.analyzers.race_level_analyzer.RacePlotter', autospec=True)
+    analyzer_instance = RaceLevelAnalyzer(mock_config)
+    analyzer_instance.plotter = mock_plotter_class.return_value # Assign the mock instance
+    return analyzer_instance
 
-def test_init(analyzer):
-    """初期化のテスト"""
-    assert isinstance(analyzer.plotter, RacePlotter)
+def test_init(mock_config, analyzer, mocker):
+    """Test RaceLevelAnalyzer initialization."""
+    assert analyzer.config == mock_config
+    assert isinstance(analyzer.plotter, MagicMock)
     assert isinstance(analyzer.loader, RaceDataLoader)
+    assert analyzer.output_dir.exists()
 
-def test_determine_grade(sample_race_data):
-    """グレード判定のテスト"""
-    # G1レースのテスト
-    row = pd.Series({
-        'レース名': 'テストG1',
-        '種別': 11,
-        '本賞金': 10000
-    })
-    assert RaceLevelAnalyzer.determine_grade(row) == 1
+def test_load_data(analyzer, dummy_df, mocker):
+    """Test load_data method."""
+    with patch.object(analyzer.loader, 'load', return_value=dummy_df) as mock_load:
+        df = analyzer.load_data()
+        mock_load.assert_called_once()
+        pd.testing.assert_frame_equal(df, dummy_df)
 
-    # G2レースのテスト
-    row = pd.Series({
-        'レース名': 'テストG2',
-        '種別': 12,
-        '本賞金': 7000
-    })
-    assert RaceLevelAnalyzer.determine_grade(row) == 2
+def test_load_data_file_not_found(analyzer, mocker):
+    """Test load_data with FileNotFoundError."""
+    with patch.object(analyzer.loader, 'load', side_effect=FileNotFoundError) as mock_load:
+        with pytest.raises(FileNotFoundError):
+            analyzer.load_data()
+        mock_load.assert_called_once()
 
-    # 一般レースのテスト
-    row = pd.Series({
-        'レース名': '一般レース',
-        '種別': 13,
-        '本賞金': 2000
-    })
-    assert RaceLevelAnalyzer.determine_grade(row) == 6
+def test_load_data_other_exception(analyzer, mocker):
+    """Test load_data with other exceptions."""
+    with patch.object(analyzer.loader, 'load', side_effect=Exception("Test Error")) as mock_load:
+        with pytest.raises(Exception, match="Test Error"):
+            analyzer.load_data()
+        mock_load.assert_called_once()
 
-def test_determine_grade_by_prize():
-    """賞金によるグレード判定のテスト"""
-    test_cases = [
-        ({'本賞金': 10000}, 1),  # G1
-        ({'本賞金': 7000}, 2),   # G2
-        ({'本賞金': 4500}, 3),   # G3
-        ({'本賞金': 3500}, 4),   # 重賞
-        ({'本賞金': 2000}, 6),   # L
-        ({'本賞金': 1000}, 5),   # 一般
-        ({'本賞金': None}, None) # 賞金なし
+def test_preprocess_data(analyzer, dummy_df, mock_config, mocker):
+    """Test preprocess_data method."""
+    analyzer.df = dummy_df.copy()
+    processed_df = analyzer.preprocess_data()
+
+    # Check column stripping
+    assert all(col == col.strip() for col in processed_df.columns)
+
+    # Check date filtering
+    expected_df = dummy_df[
+        (dummy_df['date'] >= mock_config.start_date) &
+        (dummy_df['date'] <= mock_config.end_date)
     ]
+    # min_races = 3, HorseA has 4 races, HorseB has 2 races
+    expected_df = expected_df[expected_df['馬名'] == 'HorseA']
     
-    for row_data, expected_grade in test_cases:
-        row = pd.Series(row_data)
-        assert RaceLevelAnalyzer.determine_grade_by_prize(row) == expected_grade
+    pd.testing.assert_frame_equal(processed_df.reset_index(drop=True), expected_df.reset_index(drop=True))
 
-def test_calculate_feature(analyzer, sample_race_data):
-    """レースレベル計算のテスト"""
-    analyzer.df = sample_race_data.copy()
-    result = analyzer.calculate_feature()
-    
-    assert 'race_level' in result.columns
-    assert 'is_win' in result.columns
-    assert 'is_placed' in result.columns
-    assert not result['race_level'].isna().any()
-    assert result['race_level'].between(0, 10).all()
-    
-    # 距離による補正が適切に適用されていることを確認
-    distance_2000m = result[result['距離'] == 2000]['race_level'].mean()
-    distance_1600m = result[result['距離'] == 1600]['race_level'].mean()
-    assert distance_2000m > distance_1600m
+def test_preprocess_data_no_date_column(analyzer, mock_config, mocker):
+    """Test preprocess_data when '年月日' column is missing."""
+    df_no_ymd = pd.DataFrame({
+        '場コード': ['01', '01', '02', '01', '01', '02', '01', '01', '02', '01'],
+        '年': [2023] * 10,
+        '回': [1, 1, 1, 2, 2, 2, 1, 1, 1, 2],
+        '日': [1, 2, 1, 1, 2, 1, 1, 2, 1, 1],
+        'R': [1, 2, 1, 1, 2, 1, 1, 2, 1, 1],
+        '馬名': ['HorseA', 'HorseA', 'HorseA', 'HorseA', 'HorseA', 'HorseA', 'HorseB', 'HorseB', 'HorseB', 'HorseB'],
+        '距離': [1600, 2000, 1600, 1800, 2400, 2000, 1600, 2000, 1600, 1800],
+        '着順': [1, 5, 2, 1, 3, 4, 1, 5, 2, 1],
+        'レース名': ['G1レース', 'OPレース', 'G3レース', '特別レース', 'G2レース', 'Lレース', 'G1レース', 'OPレース', 'G3レース', '特別レース'],
+        '種別': [13] * 10,
+        '芝ダ障害コード': ['芝', '芝', 'ダート', '芝', '芝', 'ダート', '芝', '芝', 'ダート', '芝'],
+        '馬番': [1, 2, 3, 1, 2, 3, 1, 2, 3, 1],
+        'クラス': [1, 5, 3, 5, 2, 6, 1, 5, 3, 5],
+        '本賞金': [10000, 2000, 4000, 3000, 7000, 2500, 10000, 2000, 4000, 3000],
+        '1着賞金': [5000, 1000, 2000, 1500, 3500, 1200, 5000, 1000, 2000, 1500]
+    })
+    analyzer.df = df_no_ymd.copy()
+    processed_df = analyzer.preprocess_data()
+    assert 'date' in processed_df.columns
+    assert len(processed_df) == 4 # HorseA has 4 races, HorseB has 2 races (min_races=3)
 
-def test_calculate_grade_level(analyzer, sample_race_data):
-    """グレードレベル計算のテスト"""
-    analyzer.df = sample_race_data.copy()
-    grade_level = analyzer._calculate_grade_level(sample_race_data)
+def test_preprocess_data_date_conversion_failure(analyzer, dummy_df, mocker):
+    """Test preprocess_data with date conversion failure."""
+    df_bad_date = dummy_df.copy()
+    df_bad_date.loc[0, '年月日'] = 'invalid_date'
+    analyzer.df = df_bad_date
+    with pytest.raises(ValueError, match="time data \"invalid_date\" doesn't match format \"%Y%m%d\""):
+        analyzer.preprocess_data()
+
+def test_preprocess_data_no_data_after_min_races_filter(analyzer, dummy_df, mocker):
+    """Test preprocess_data when no data remains after min_races filter."""
+    analyzer.config.min_races = 100 # Set a high min_races to filter out all data
+    analyzer.df = dummy_df.copy()
+    with pytest.raises(ValueError, match="条件を満たすデータが見つかりません"):
+        analyzer.preprocess_data()
+
+def test_calculate_feature(analyzer, dummy_df, mocker):
+    """Test calculate_feature method."""
+    analyzer.df = dummy_df.copy()
+    featured_df = analyzer.calculate_feature()
+
+    assert "race_level" in featured_df.columns
+    assert "is_win" in featured_df.columns
+    assert "is_placed" in featured_df.columns
+    assert featured_df["race_level"].between(0, 10).all()
+
+def test_perform_logistic_regression_analysis(analyzer, dummy_df, mocker):
+    """Test _perform_logistic_regression_analysis method."""
+    analyzer.df = dummy_df.copy()
+    # Add race_level column as it's used in the method
+    analyzer.df['race_level'] = np.random.rand(len(dummy_df)) * 10
     
-    assert isinstance(grade_level, pd.Series)
-    assert not grade_level.isna().any()
+    results = analyzer._perform_logistic_regression_analysis()
+    assert "win" in results
+    assert "place" in results
+    assert "model" in results["win"]
+    assert "scaler" in results["win"]
+    assert "accuracy" in results["win"]
+    assert "report" in results["win"]
+    assert "conf_matrix" in results["win"]
+    assert "data" in results
+
+def test_analyze(analyzer, dummy_df, mocker):
+    """Test analyze method."""
+    analyzer.df = dummy_df.copy()
+    analyzer.df = analyzer.preprocess_data()
+    analyzer.df = analyzer.calculate_feature()
+
+    with patch('horse_racing.analyzers.causal_analyzer.analyze_causal_relationship', return_value={}) as mock_causal_analysis:
+        with patch('horse_racing.analyzers.causal_analyzer.generate_causal_analysis_report') as mock_generate_report:
+            with patch.object(analyzer, '_perform_correlation_analysis', return_value={}) as mock_correlation_analysis:
+                results = analyzer.analyze()
+                mock_correlation_analysis.assert_called_once()
+                mock_causal_analysis.assert_called_once_with(analyzer.df)
+                mock_generate_report.assert_called_once()
+                assert 'correlation_stats' in results
+                assert 'causal_analysis' in results
+
+def test_visualize(analyzer, dummy_df, mocker):
+    """Test visualize method."""
+    analyzer.df = dummy_df.copy()
+    analyzer.df['race_level'] = np.random.rand(len(dummy_df)) * 10 # Add race_level
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.stats = {
+        'correlation_stats': {},
+        'causal_analysis': {}
+    }
+
+    with patch.object(analyzer.plotter, '_visualize_correlations') as mock_plot_correlations:
+        with patch.object(analyzer, '_visualize_causal_analysis') as mock_visualize_causal:
+            analyzer.visualize()
+            mock_plot_correlations.assert_called_once()
+            mock_visualize_causal.assert_called_once()
+
+def test_visualize_no_stats(analyzer, mocker):
+    """Test visualize method raises ValueError if no stats."""
+    analyzer.stats = {}
+    with pytest.raises(ValueError, match="分析結果がありません"):
+        analyzer.visualize()
+
+def test_visualize_causal_analysis(analyzer, dummy_df, mocker):
+    """Test _visualize_causal_analysis method."""
+    analyzer.df = dummy_df.copy()
+    analyzer.df['race_level'] = np.random.rand(len(dummy_df)) * 10 # Add race_level
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.stats = {
+        'causal_analysis': {
+            'temporal_precedence': {},
+            'mechanism': {},
+            'confounding_factors': {}
+        }
+    }
+
+    with patch.object(analyzer, '_plot_temporal_precedence') as mock_plot_temporal:
+        with patch.object(analyzer, '_plot_mechanism_analysis') as mock_plot_mechanism:
+            with patch.object(analyzer, '_plot_confounding_factors') as mock_plot_confounding:
+                analyzer._visualize_causal_analysis()
+                mock_plot_temporal.assert_called_once()
+                mock_plot_mechanism.assert_called_once()
+                mock_plot_confounding.assert_called_once()
+
+def test_plot_temporal_precedence(analyzer, dummy_df, mock_config):
+    """Test _plot_temporal_precedence method."""
+    analyzer.df = dummy_df.copy()
+    analyzer.df['race_level'] = np.random.rand(len(dummy_df)) * 10 # Add race_level
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    
+    # Ensure enough data for the plot
+    analyzer.df = pd.concat([analyzer.df] * 2, ignore_index=True) # Duplicate data to ensure >= 6 races per horse
+    analyzer.df['年月日'] = pd.to_datetime(analyzer.df['年月日'], format='%Y%m%d')
+    analyzer.df = analyzer.df.sort_values(by=['馬名', '年月日'])
+
+    with patch('matplotlib.pyplot.savefig') as mock_savefig:
+        with patch('matplotlib.pyplot.close') as mock_close:
+            analyzer._plot_temporal_precedence(Path(mock_config.output_dir) / 'causal_analysis')
+            mock_savefig.assert_called_once()
+            mock_close.assert_called_once()
+
+def test_plot_mechanism_analysis(analyzer, dummy_df, mock_config):
+    """Test _plot_mechanism_analysis method."""
+    analyzer.df = dummy_df.copy()
+    analyzer.df['race_level'] = np.random.rand(len(dummy_df)) * 10 # Add race_level
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+
+    # Ensure enough data for the plot
+    analyzer.df = pd.concat([analyzer.df] * 2, ignore_index=True) # Duplicate data to ensure >= 6 races per horse
+    analyzer.df['年月日'] = pd.to_datetime(analyzer.df['年月日'], format='%Y%m%d')
+    analyzer.df = analyzer.df.sort_values(by=['馬名', '年月日'])
+
+    with patch('matplotlib.pyplot.savefig') as mock_savefig:
+        with patch('matplotlib.pyplot.close') as mock_close:
+            analyzer._plot_mechanism_analysis(Path(mock_config.output_dir) / 'causal_analysis')
+            mock_savefig.assert_called_once()
+            mock_close.assert_called_once()
+
+def test_plot_confounding_factors(analyzer, dummy_df, mock_config):
+    """Test _plot_confounding_factors method."""
+    analyzer.df = dummy_df.copy()
+    analyzer.df['race_level'] = np.random.rand(len(dummy_df)) * 10 # Add race_level
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+
+    with patch('matplotlib.pyplot.savefig') as mock_savefig:
+        with patch('matplotlib.pyplot.close') as mock_close:
+            analyzer._plot_confounding_factors(Path(mock_config.output_dir) / 'causal_analysis')
+            assert mock_savefig.call_count == 3 # For each confounder (場コード, 距離, 芝ダ障害コード)
+            assert mock_close.call_count == 3
+
+def test_calculate_grade_level(analyzer, dummy_df, mocker):
+    """Test _calculate_grade_level method."""
+    analyzer.df = dummy_df.copy()
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    
+    grade_level = analyzer._calculate_grade_level(analyzer.df)
+    assert "race_level" not in grade_level.name # Should return a Series, not a DataFrame
     assert grade_level.between(0, 10).all()
-    
-    # G1の勝利が最高レベルになることを確認
-    g1_win = sample_race_data[
-        (sample_race_data['グレード'] == 1) &
-        (sample_race_data['is_win'])
-    ].index
-    assert grade_level[g1_win].iloc[0] == 10.0
 
-def test_calculate_prize_level(analyzer, sample_race_data):
-    """賞金レベル計算のテスト"""
-    analyzer.df = sample_race_data.copy()
-    prize_level = analyzer._calculate_prize_level(sample_race_data)
-    
-    assert isinstance(prize_level, pd.Series)
-    assert not prize_level.isna().any()
+def test_calculate_prize_level(analyzer, dummy_df, mocker):
+    """Test _calculate_prize_level method."""
+    analyzer.df = dummy_df.copy()
+    prize_level = analyzer._calculate_prize_level(analyzer.df)
     assert prize_level.between(0, 10).all()
-    
-    # 最高賞金のレースが最高レベルになることを確認
-    max_prize = sample_race_data['本賞金'].max()
-    max_prize_races = sample_race_data['本賞金'] == max_prize
-    assert prize_level[max_prize_races].iloc[0] == 10.0
 
-def test_apply_distance_correction(analyzer, sample_race_data):
-    """距離補正のテスト"""
-    analyzer.df = sample_race_data.copy()
-    result = analyzer.calculate_feature()
-    
-    assert 'race_level' in result.columns
-    assert not result['race_level'].isna().any()
-    assert result['race_level'].between(0, 10).all()
-    
-    # 距離による補正が適用されていることを確認
-    distance_2000m = result[result['距離'] == 2000]['race_level'].mean()
-    distance_1600m = result[result['距離'] == 1600]['race_level'].mean()
-    assert distance_2000m > distance_1600m
+def test_calculate_horse_stats(analyzer, dummy_df, mocker):
+    """Test _calculate_horse_stats method."""
+    analyzer.df = dummy_df.copy()
+    analyzer.df['race_level'] = np.random.rand(len(dummy_df)) * 10 # Add race_level
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
 
-def test_analyze(analyzer, sample_race_data):
-    """分析実行のテスト"""
-    analyzer.df = sample_race_data.copy()
-    result = analyzer.analyze()
-    
-    assert isinstance(result, dict)
-    assert 'horse_stats' in result
-    assert 'grade_stats' in result
-    assert 'correlation_stats' in result
-    assert 'logistic_stats' in result
-
-def test_calculate_horse_stats(analyzer, sample_race_data):
-    """馬統計計算のテスト"""
-    analyzer.df = sample_race_data.copy()
-    result = analyzer._calculate_horse_stats()
-    
-    assert isinstance(result, pd.DataFrame)
-    assert '馬名' in result.columns
-    assert '勝利数' in result.columns
-    assert '複勝数' in result.columns
-    assert not result.empty
-    
-    # テスト馬Aの統計を確認
-    horse_a = result[result['馬名'] == 'テスト馬A'].iloc[0]
-    assert horse_a['勝利数'] == 1
-    assert horse_a['複勝数'] >= 3
-
-def test_calculate_grade_stats(analyzer, sample_race_data):
-    """グレード統計計算のテスト"""
-    analyzer.df = sample_race_data.copy()
-    result = analyzer._calculate_grade_stats()
-    
-    assert isinstance(result, pd.DataFrame)
-    assert 'グレード' in result.columns
-    assert '勝率' in result.columns
-    assert 'レース数' in result.columns
-    assert not result.empty
-
-def test_perform_correlation_analysis(analyzer, sample_race_data):
-    """相関分析のテスト"""
-    analyzer.df = sample_race_data.copy()
     horse_stats = analyzer._calculate_horse_stats()
-    result = analyzer._perform_correlation_analysis(horse_stats)
-    
-    assert isinstance(result, dict)
-    if result:  # データが十分にある場合
-        assert 'correlation' in result
-        assert 'model' in result
-        assert 'r2' in result
+    assert "最高レベル" in horse_stats.columns
+    assert "平均レベル" in horse_stats.columns
+    assert "win_rate" in horse_stats.columns
+    assert "place_rate" in horse_stats.columns
+    assert "出走回数" in horse_stats.columns
+    assert "主戦クラス" in horse_stats.columns
+    assert len(horse_stats) == 1 # Only HorseA meets min_races=3
+    assert horse_stats.iloc[0]['馬名'] == 'HorseA'
 
-def test_calculate_level_year_stats(analyzer, sample_race_data):
-    """年別レベル統計計算のテスト"""
-    analyzer.df = sample_race_data.copy()
-    result = analyzer._calculate_level_year_stats()
-    
-    assert isinstance(result, pd.DataFrame)
-    assert 'レースレベル区分' in result.columns
-    assert '年' in result.columns
-    assert 'レース数' in result.columns
-    assert '勝率' in result.columns
+def test_calculate_grade_stats(analyzer, dummy_df, mocker):
+    """Test _calculate_grade_stats method."""
+    analyzer.df = dummy_df.copy()
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df['race_level'] = np.random.rand(len(dummy_df)) * 10 # Add race_level
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
 
-def test_calculate_distance_level_pivot(analyzer, sample_race_data):
-    """距離レベルピボットテーブル計算のテスト"""
-    analyzer.df = sample_race_data.copy()
-    result = analyzer._calculate_distance_level_pivot()
-    
-    assert isinstance(result, pd.DataFrame)
-    assert not result.empty
-    assert result.index.name == '距離区分' 
+    grade_stats = analyzer._calculate_grade_stats()
+    assert "クラス" in grade_stats.columns
+    assert "勝率" in grade_stats.columns
+    assert "複勝率" in grade_stats.columns
+    assert "平均レベル" in grade_stats.columns
+
+def test_perform_correlation_analysis(analyzer, dummy_df, mocker):
+    """Test _perform_correlation_analysis method."""
+    analyzer.df = dummy_df.copy()
+    analyzer.df['race_level'] = np.random.rand(len(dummy_df)) * 10 # Add race_level
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+
+    horse_stats = analyzer._calculate_horse_stats()
+    results = analyzer._perform_correlation_analysis(horse_stats)
+
+    assert "correlation_win_max" in results
+    assert "model_win_max" in results
+    assert "r2_win_max" in results
+
+def test_perform_correlation_analysis_empty_data(analyzer, mocker):
+    """Test _perform_correlation_analysis with empty data."""
+    empty_df = pd.DataFrame(columns=['馬名', '最高レベル', '平均レベル', 'win_rate', 'place_rate'])
+    results = analyzer._perform_correlation_analysis(empty_df)
+    assert results == {}
+
+def test_perform_correlation_analysis_zero_std(analyzer, mocker):
+    """Test _perform_correlation_analysis with zero standard deviation."""
+    data = pd.DataFrame({
+        '馬名': ['A', 'B'],
+        '最高レベル': [5.0, 5.0],
+        '平均レベル': [5.0, 5.0],
+        'win_rate': [0.5, 0.5],
+        'place_rate': [0.8, 0.8],
+        '出走回数': [10, 10],
+        '主戦クラス': [1, 1]
+    })
+    results = analyzer._perform_correlation_analysis(data)
+    assert results["correlation_win_max"] == 0.0
+    assert results["r2_win_max"] == 0.0

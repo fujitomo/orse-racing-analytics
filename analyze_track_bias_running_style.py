@@ -342,6 +342,17 @@ def analyze_running_style(df, running_style_col, rank_col, output_dir):
     
     # 3. コース形状（内/外）別の分析
     if 'コース' in df.columns:
+        # 脚質ごとの勝率を棒グラフで可視化
+        plt.figure(figsize=(10, 6))
+        sns.barplot(x=style_summary.index, y='勝率', data=style_summary, palette='viridis')
+        plt.title('脚質別勝率')
+        plt.xlabel('脚質')
+        plt.ylabel('勝率')
+        plt.ylim(0, 1)
+        plt.grid(axis='y', linestyle='--')
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/running_style_win_rate.png")
+        plt.close()
         print("コース形状別の分析を実行中...")
         # 「内」「外」を含むかどうかで判定
         df['コース形状'] = df['コース'].apply(

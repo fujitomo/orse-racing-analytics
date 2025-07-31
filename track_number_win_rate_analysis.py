@@ -18,17 +18,19 @@ class TrackNumberWinRateAnalyzer:
     競馬場別馬番と勝率の関係を分析するクラス
     """
     
-    def __init__(self, data_folder="export/with_bias", output_folder="results/track_number_analysis"):
+    def __init__(self, data_folder="export/with_bias", output_folder="results/track_number_analysis", turf_only=False):
         """
         初期化
         
         Args:
             data_folder (str): データフォルダのパス
             output_folder (str): 結果出力先フォルダのパス
+            turf_only (bool): 芝レースのみに絞るかどうか
         """
         self.data_folder = data_folder
         self.output_folder = output_folder
         self.df = None
+        self.turf_only = turf_only  # 芝レースのみに絞るかどうか
         
         # 日本語フォント設定
         self._setup_japanese_font()
@@ -213,12 +215,73 @@ class TrackNumberWinRateAnalyzer:
         
         print(f"データクリーニング: {before_count}行 → {after_count}行")
         
+        # 芝レースフィルタリング
+        if self.turf_only:
+            if not self._filter_turf_races():
+                print("芝レースフィルタリングに失敗しました。")
+                return False
+        
         # 基本統計情報の表示
         print("\n=== データ概要 ===")
         print(f"年の範囲: {self.df['年'].min()} - {self.df['年'].max()}")
         print(f"馬番の範囲: {self.df['馬番'].min()} - {self.df['馬番'].max()}")
         print(f"競馬場数: {self.df['場名'].nunique()}")
         print(f"競馬場: {list(self.df['場名'].unique())}")
+        
+        return True
+    
+    def _filter_turf_races(self):
+        """
+        芝レースのみにデータをフィルタリング
+        
+        Returns:
+            bool: フィルタリング成功時True、失敗時False
+        """
+        print("🌱 芝レースフィルタリング中...")
+        
+        # コース種別の列を特定
+        turf_column = None
+        possible_columns = ['芝ダ障害コード', 'コース種別', '芝ダート', 'トラック種別']
+        
+        for col in possible_columns:
+            if col in self.df.columns:
+                turf_column = col
+                print(f"コース種別列を発見: {col}")
+                break
+        
+        if turf_column is None:
+            print("警告: コース種別を表す列が見つかりません。")
+            print(f"利用可能な列: {list(self.df.columns)}")
+            return False
+        
+        # データの内容を確認
+        unique_values = self.df[turf_column].dropna().unique()
+        print(f"コース種別の値: {unique_values}")
+        
+        # 芝レースの判定条件
+        before_count = len(self.df)
+        
+        if turf_column == '芝ダ障害コード':
+            # データの値を確認して適切な条件を設定
+            if self.df[turf_column].dtype == 'object':
+                # 文字列の場合
+                turf_condition = self.df[turf_column] == '芝'
+            else:
+                # 数値コードの場合: 1=芝、2=ダート、3=障害（一般的な設定）
+                turf_condition = self.df[turf_column] == 1
+        else:
+            # 文字列の場合
+            turf_condition = self.df[turf_column].str.contains('芝', na=False)
+        
+        self.df = self.df[turf_condition].copy()
+        after_count = len(self.df)
+        
+        print(f"芝レースフィルタリング結果: {before_count}行 → {after_count}行")
+        print(f"削減されたレース数: {before_count - after_count}行 ({((before_count - after_count) / before_count * 100):.1f}%)")
+        
+        if after_count == 0:
+            print("エラー: 芝レースが見つかりませんでした。フィルタリング条件を確認してください。")
+            return False
         
         return True
     
@@ -475,7 +538,8 @@ p値: {results['correlation_pvalue']:.4f}
         Returns:
             list: 分析結果のリスト
         """
-        print(f"競馬場別馬番と勝率の関係分析を開始します（期間: {period_years}年）")
+        surface_label = "【芝レース限定】" if self.turf_only else "【芝・ダート全レース】"
+        print(f"{surface_label} 競馬場別馬番と勝率の関係分析を開始します（期間: {period_years}年）")
         
         # 出力ディレクトリの作成
         output_dir = os.path.join(self.output_folder, f"period_{period_years}years")
@@ -542,13 +606,18 @@ p値: {results['correlation_pvalue']:.4f}
         output_dir = os.path.join(self.output_folder, f"period_{period_years}years")
         report_path = os.path.join(output_dir, f"馬番勝率分析レポート_{period_years}年.md")
         
+        # 芝レース限定の判定
+        surface_type = "芝レース限定" if self.turf_only else "全レース（芝・ダート）"
+        
         # Windows環境での文字化けを防ぐためUTF-8 BOM付きで保存
+        print(f"レポートを保存します: {report_path}")
         with open(report_path, 'w', encoding='utf-8-sig') as f:
-            f.write(f"# 競馬場別馬番と勝率の関係分析レポート（{period_years}年期間）\n\n")
+            f.write(f"# 競馬場別馬番と勝率の関係分析レポート（{period_years}年期間・{surface_type}）\n\n")
             f.write(f"生成日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
             
             f.write("## 概要\n\n")
             f.write(f"各競馬場において、馬番と勝率の関係を{period_years}年期間ごとに分析しました。\n")
+            f.write(f"対象レース: **{surface_type}**\n")
             f.write("統計的手法として相関分析、線形回帰、ロジスティック回帰を使用しています。\n\n")
             
             f.write("## 分析結果一覧\n\n")
@@ -602,11 +671,12 @@ p値: {results['correlation_pvalue']:.4f}
         report_path_sjis = os.path.join(output_dir, f"馬番勝率分析レポート_{period_years}年_SJIS.md")
         try:
             with open(report_path_sjis, 'w', encoding='shift-jis', errors='replace') as f:
-                f.write(f"# 競馬場別馬番と勝率の関係分析レポート（{period_years}年期間）\n\n")
+                f.write(f"# 競馬場別馬番と勝率の関係分析レポート（{period_years}年期間・{surface_type}）\n\n")
                 f.write(f"生成日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                 
                 f.write("## 概要\n\n")
                 f.write(f"各競馬場において、馬番と勝率の関係を{period_years}年期間ごとに分析しました。\n")
+                f.write(f"対象レース: **{surface_type}**\n")
                 f.write("統計的手法として相関分析、線形回帰、ロジスティック回帰を使用しています。\n\n")
                 
                 f.write("## 分析結果一覧\n\n")
@@ -670,13 +740,31 @@ def main():
                        help='データフォルダのパス')
     parser.add_argument('--output-folder', type=str, default="results/track_number_analysis",
                        help='結果出力先フォルダのパス')
+    parser.add_argument('--turf-only', action='store_true',
+                       help='芝レースのみに限定する')
     
     args = parser.parse_args()
+    
+    # 芝レース限定オプション（インタラクティブ版）
+    if not args.turf_only:
+        turf_only_choice = input("芝レースのみに限定しますか？ (y/n): ").strip().lower()
+        turf_only = turf_only_choice in ['y', 'yes', 'はい', '1']
+    else:
+        turf_only = True
+    
+    # 出力フォルダを調整
+    output_folder = args.output_folder
+    if turf_only:
+        output_folder = output_folder.replace("track_number_analysis", "track_number_analysis_turf_only")
+        print("🌱 芝レース限定モードで馬番勝率分析を実行します。")
+    else:
+        print("🏇 全レース（芝・ダート）で馬番勝率分析を実行します。")
     
     # 分析器を初期化
     analyzer = TrackNumberWinRateAnalyzer(
         data_folder=args.data_folder,
-        output_folder=args.output_folder
+        output_folder=output_folder,
+        turf_only=turf_only
     )
     
     # データ読み込み
@@ -702,9 +790,14 @@ def main():
     # レポート生成
     analyzer.generate_summary_report(all_results, args.period)
     
-    print(f"\n=== 分析完了 ===")
-    print(f"分析件数: {len(all_results)}件")
-    print(f"結果保存先: {args.output_folder}")
+    print(f"\n=== 馬番勝率分析完了 ===")
+    surface_label = "【芝レース限定】" if turf_only else "【芝・ダート全レース】"
+    print(f"{surface_label} 分析件数: {len(all_results)}件")
+    print(f"結果保存先: {output_folder}")
+    
+    if turf_only:
+        print("🌱 芝レース限定の馬番勝率分析により、芝レース特有の傾向が抽出されました。")
+        print("🌱 ダートレースの影響を除去し、より精密な芝馬場での馬番効果を分析できます。")
 
 if __name__ == "__main__":
     main() 

@@ -12,7 +12,7 @@ class RacePlotter:
     """レース分析の可視化クラス"""
     
     def __init__(self, output_dir: Path):
-        self.output_dir = output_dir
+        self.output_dir = Path(output_dir)  # Pathオブジェクトに変換
         self._setup_style()
         self.fig_size = (15, 10)
 
@@ -68,14 +68,23 @@ class RacePlotter:
         else:
             x_data = data["最高レベル"]
         
+        # レース回数に基づくサイズ設定（より明確に）
+        min_size = 30
+        max_size = 300
+        race_counts = data["出走回数"]
+        # レース回数を正規化してサイズに変換
+        normalized_sizes = min_size + (race_counts - race_counts.min()) / (race_counts.max() - race_counts.min()) * (max_size - min_size)
+        
         # 散布図の描画
         scatter = plt.scatter(
             x_data,
             data[y_column],
-            s=data["出走回数"]*20,
-            alpha=0.5,
-            c=data["主戦グレード"],
-            cmap='viridis'
+            s=normalized_sizes,
+            alpha=0.6,
+            c=data["主戦クラス"] if "主戦クラス" in data.columns else None,
+            cmap='viridis',
+            edgecolors='black',
+            linewidth=0.5
         )
 
         # 回帰直線の描画
@@ -97,23 +106,53 @@ class RacePlotter:
         plt.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
         
         # カラーバーの設定
-        cbar = plt.colorbar(scatter)
-        cbar.ax.set_title("")  # タイトルは空にする
+        if "主戦クラス" in data.columns:
+            cbar = plt.colorbar(scatter)
+            cbar.ax.set_title("")
 
-        # 1つ目：タイトル（カラーバーの右外側、縦書き）
-        cbar.ax.text(
-            1.1, 0.5,
-            "最も出走回数が多いグレード",
-            va='center', ha='left', fontsize=12, fontweight='bold', rotation=90, transform=cbar.ax.transAxes
-        )
-        # 2つ目：例示（さらに右外側、縦書き・重ならないように間隔を広げる）
-        cbar.ax.text(
-            2, 0.5,  # さらに右へ
-            "※例：G1: 3回、G2: 5回、G3: 2回 → 主戦グレードはG2",
-            va='center', ha='left', fontsize=12, rotation=90, transform=cbar.ax.transAxes
-        )
+            # 1つ目：タイトル（カラーバーの右外側、縦書き）
+            cbar.ax.text(
+                1.1, 0.5,
+                "最も出走回数が多いクラス",
+                va='center', ha='left', fontsize=12, fontweight='bold', rotation=90, transform=cbar.ax.transAxes
+            )
+            # 2つ目：例示（さらに右外側、縦書き・重ならないように間隔を広げる）
+            cbar.ax.text(
+                2, 0.5,  # さらに右へ
+                "※例：G1: 3回、G2: 5回、G3: 2回 → 主戦クラスはG2",
+                va='center', ha='left', fontsize=12, rotation=90, transform=cbar.ax.transAxes
+            )
         
-        plt.legend()
+        # レース回数のサイズ凡例を追加
+        sizes_for_legend = [race_counts.min(), race_counts.quantile(0.5), race_counts.max()]
+        labels_for_legend = [f'{int(size)}回' for size in sizes_for_legend]
+        
+        # サイズ凡例用のマーカーサイズを計算
+        legend_sizes = []
+        for size in sizes_for_legend:
+            normalized_size = min_size + (size - race_counts.min()) / (race_counts.max() - race_counts.min()) * (max_size - min_size)
+            legend_sizes.append(normalized_size)
+        
+        # サイズ凡例の作成
+        legend_elements = []
+        for size, label, marker_size in zip(sizes_for_legend, labels_for_legend, legend_sizes):
+            legend_elements.append(plt.scatter([], [], s=marker_size, c='gray', alpha=0.6, 
+                                             edgecolors='black', linewidth=0.5, label=label))
+        
+        # 既存の凡例と組み合わせ
+        legend1 = plt.legend(handles=legend_elements, title="レース回数（点のサイズ）", 
+                           loc='upper left', bbox_to_anchor=(0, 1), frameon=True, fancybox=True, shadow=True)
+        plt.gca().add_artist(legend1)
+        
+        # 回帰直線の凡例
+        legend2 = plt.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
+        
+        # グラフ左下にレース回数の範囲情報を追加
+        info_text = f"レース回数範囲: {int(race_counts.min())}～{int(race_counts.max())}回\n平均: {race_counts.mean():.1f}回"
+        plt.text(0.02, 0.02, info_text, transform=plt.gca().transAxes, 
+                bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8),
+                verticalalignment='bottom', fontsize=10)
+        
         plt.tight_layout()
 
         self.save_plot(fig, f"{feature_name}_correlation.png")
@@ -130,10 +169,11 @@ class RacePlotter:
         bins = np.linspace(x_data.min(), x_data.max(), n_bins + 1)
         bin_centers = (bins[:-1] + bins[1:]) / 2
         
-        # 各ビンの平均値と標準誤差を計算
+        # 各ビンの平均値と標準誤差、レース回数統計を計算
         bin_means = []
         bin_stds = []
         bin_counts = []
+        bin_race_counts_mean = []  # 各ビンの平均レース回数
         
         for i in range(len(bins) - 1):
             mask = (x_data >= bins[i]) & (x_data < bins[i + 1])
@@ -142,13 +182,16 @@ class RacePlotter:
             
             if mask.sum() > 0:
                 bin_data = data[mask][y_column]
+                bin_race_data = data[mask]["出走回数"]
                 bin_means.append(bin_data.mean())
                 bin_stds.append(bin_data.std() / np.sqrt(len(bin_data)))  # 標準誤差
                 bin_counts.append(len(bin_data))
+                bin_race_counts_mean.append(bin_race_data.mean())  # 平均レース回数
             else:
                 bin_means.append(np.nan)
                 bin_stds.append(np.nan)
                 bin_counts.append(0)
+                bin_race_counts_mean.append(np.nan)
         
         # 有効なデータのみを抽出
         valid_mask = ~np.isnan(bin_means)
@@ -156,15 +199,25 @@ class RacePlotter:
         valid_means = np.array(bin_means)[valid_mask]
         valid_stds = np.array(bin_stds)[valid_mask]
         valid_counts = np.array(bin_counts)[valid_mask]
+        valid_race_counts = np.array(bin_race_counts_mean)[valid_mask]
         
         # エラーバー付きの散布図
         plt.errorbar(valid_centers, valid_means, yerr=valid_stds, 
                     fmt='o', markersize=8, capsize=5, capthick=2, 
                     color='blue', alpha=0.7, label='区間平均値')
         
-        # バブルサイズでデータ数を表現
-        plt.scatter(valid_centers, valid_means, s=valid_counts*5, 
-                   alpha=0.3, color='red', label='データ数（バブルサイズ）')
+        # バブルサイズでデータ数を表現（サイズをレース回数平均に比例させる）
+        max_race_count = valid_race_counts.max() if len(valid_race_counts) > 0 else 1
+        min_race_count = valid_race_counts.min() if len(valid_race_counts) > 0 else 1
+        bubble_sizes = 50 + (valid_race_counts - min_race_count) / (max_race_count - min_race_count) * 200
+        
+        scatter = plt.scatter(valid_centers, valid_means, s=bubble_sizes, 
+                   alpha=0.4, c=valid_race_counts, cmap='Reds', 
+                   edgecolors='black', linewidth=1, label='平均レース回数（バブルサイズ・色）')
+        
+        # カラーバーの追加
+        cbar = plt.colorbar(scatter)
+        cbar.set_label('平均レース回数', rotation=270, labelpad=20)
         
         # 線形回帰直線
         if len(valid_centers) > 1:
@@ -181,8 +234,14 @@ class RacePlotter:
         if y_column in ["win_rate", "place_rate"]:
             plt.ylim(-0.05, 1.05)  # 確率なので0-1の範囲に制限
         
+        # グラフ右上にレース回数統計情報を追加
+        race_stats_text = f"レース回数統計（区間別）:\n最小: {min_race_count:.1f}回\n最大: {max_race_count:.1f}回\n全体平均: {data['出走回数'].mean():.1f}回"
+        plt.text(0.98, 0.98, race_stats_text, transform=plt.gca().transAxes, 
+                bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8),
+                verticalalignment='top', horizontalalignment='right', fontsize=9)
+        
         plt.grid(True, alpha=0.3)
-        plt.legend()
+        plt.legend(loc='lower right')
         plt.tight_layout()
         
         self.save_plot(fig, f"{feature_name}_binned_correlation.png")
@@ -434,6 +493,65 @@ class RacePlotter:
         safe_target_name = target_name.replace('/', '_')
         self.save_plot(fig, f"{feature_name}_{safe_target_name}_continuous_regression.png")
 
+    def _visualize_correlations(self, horse_stats: pd.DataFrame, correlation_stats: Dict[str, Any]) -> None:
+        """
+        相関分析の結果を可視化します。
+        """
+        # 最高レベルと勝率の相関
+        self.plot_correlation_analysis(
+            data=horse_stats,
+            correlation=correlation_stats["correlation_win_max"],
+            model=correlation_stats["model_win_max"],
+            r2=correlation_stats["r2_win_max"],
+            feature_name="最高レースレベルと勝率",
+            x_column="最高レベル",
+            y_column="win_rate"
+        )
+
+        # 最高レベルと複勝率の相関
+        self.plot_correlation_analysis(
+            data=horse_stats,
+            correlation=correlation_stats["correlation_place_max"],
+            model=correlation_stats["model_place_max"],
+            r2=correlation_stats["r2_place_max"],
+            feature_name="最高レースレベルと複勝率",
+            x_column="最高レベル",
+            y_column="place_rate"
+        )
+
+        # 平均レベルと勝率の相関
+        self.plot_correlation_analysis(
+            data=horse_stats,
+            correlation=correlation_stats["correlation_win_avg"],
+            model=correlation_stats["model_win_avg"],
+            r2=correlation_stats["r2_win_avg"],
+            feature_name="平均レースレベルと勝率",
+            x_column="平均レベル",
+            y_column="win_rate"
+        )
+
+        # 平均レベルと複勝率の相関
+        self.plot_correlation_analysis(
+            data=horse_stats,
+            correlation=correlation_stats["correlation_place_avg"],
+            model=correlation_stats["model_place_avg"],
+            r2=correlation_stats["r2_place_avg"],
+            feature_name="平均レースレベルと複勝率",
+            x_column="平均レベル",
+            y_column="place_rate"
+        )
+
+        # 馬ごとの統計データを使った箱ひげ図分析
+        # 主戦クラス別の分析
+        if '主戦クラス' in horse_stats.columns:
+            self.plot_boxplot_analysis(
+                data=horse_stats,
+                groupby_column='主戦クラス',
+                value_columns=['平均レベル', '最高レベル', 'win_rate', 'place_rate'],
+                title_prefix="馬の主戦クラス別分析（馬統計）",
+                filename_prefix="horse_main_class_boxplot"
+            )
+
     def plot_logistic_regression(
         self,
         X,
@@ -482,4 +600,211 @@ class RacePlotter:
             y_pred=y_pred,
             feature_name=feature_name,
             title=title
+        )
+
+    def plot_boxplot_analysis(
+        self,
+        data: pd.DataFrame,
+        groupby_column: str,
+        value_columns: list,
+        title_prefix: str = "箱ひげ図分析",
+        filename_prefix: str = "boxplot"
+    ) -> None:
+        """
+        箱ひげ図による分析結果の可視化
+        
+        Parameters:
+        -----------
+        data : pd.DataFrame
+            分析対象データ
+        groupby_column : str
+            グループ化するカラム名
+        value_columns : list
+            分析対象の値カラム名のリスト
+        title_prefix : str
+            図のタイトルのプレフィックス
+        filename_prefix : str
+            保存ファイル名のプレフィックス
+        """
+        for value_col in value_columns:
+            if value_col not in data.columns:
+                continue
+                
+            # データの準備
+            plot_data = data[[groupby_column, value_col]].dropna()
+            if len(plot_data) == 0:
+                continue
+            
+            # 図の作成
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
+            
+            # 左側: 基本的な箱ひげ図
+            sns.boxplot(data=plot_data, x=groupby_column, y=value_col, ax=ax1)
+            ax1.set_title(f'{title_prefix}: {value_col}の分布')
+            ax1.set_xlabel(groupby_column)
+            ax1.set_ylabel(value_col)
+            ax1.tick_params(axis='x', rotation=45)
+            ax1.grid(True, alpha=0.3)
+            
+            # 右側: バイオリンプロット（分布の詳細確認）
+            sns.violinplot(data=plot_data, x=groupby_column, y=value_col, ax=ax2)
+            ax2.set_title(f'{title_prefix}: {value_col}の分布密度')
+            ax2.set_xlabel(groupby_column)
+            ax2.set_ylabel(value_col)
+            ax2.tick_params(axis='x', rotation=45)
+            ax2.grid(True, alpha=0.3)
+            
+            # 統計情報の追加
+            group_stats = plot_data.groupby(groupby_column)[value_col].agg(['count', 'mean', 'std', 'median'])
+            stats_text = "統計情報:\n"
+            for group, stats in group_stats.iterrows():
+                stats_text += f"{group}: N={stats['count']}, 平均={stats['mean']:.3f}, 中央値={stats['median']:.3f}\n"
+            
+            # 統計情報をプロットに追加
+            fig.text(0.02, 0.02, stats_text, fontsize=9, 
+                    bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8),
+                    verticalalignment='bottom')
+            
+            plt.tight_layout()
+            plt.subplots_adjust(bottom=0.15)  # 統計情報の表示スペースを確保
+            
+            # ファイル保存
+            safe_value_col = value_col.replace('/', '_').replace(' ', '_')
+            safe_groupby_col = groupby_column.replace('/', '_').replace(' ', '_')
+            filename = f"{filename_prefix}_{safe_groupby_col}_{safe_value_col}.png"
+            self.save_plot(fig, filename)
+
+    def plot_race_grade_distance_boxplot(
+        self,
+        df: pd.DataFrame
+    ) -> None:
+        """
+        レース格別・距離別の箱ひげ図分析
+        論文の「レース格別・距離別の基本統計量の比較」要求に対応
+        
+        Parameters:
+        -----------
+        df : pd.DataFrame
+            レースデータ（馬単位ではなくレース単位）
+        """
+        # 距離カテゴリの作成
+        df_analysis = df.copy()
+        
+        # 距離カテゴリ化
+        def categorize_distance(distance):
+            if distance <= 1400:
+                return "短距離(≤1400m)"
+            elif distance <= 1800:
+                return "マイル(1401-1800m)"
+            elif distance <= 2000:
+                return "中距離(1801-2000m)"
+            elif distance <= 2400:
+                return "中長距離(2001-2400m)"
+            else:
+                return "長距離(≥2401m)"
+        
+        df_analysis['距離カテゴリ'] = df_analysis['距離'].apply(categorize_distance)
+        
+        # レース格のカテゴリ化（数値からテキストへ）
+        grade_mapping = {
+            1: "G1", 2: "G2", 3: "G3", 4: "重賞", 
+            5: "特別戦", 6: "L", 99: "その他"
+        }
+        
+        # クラスカラムを特定
+        class_column = None
+        for col in ['クラス', 'クラスコード', '条件']:
+            if col in df_analysis.columns:
+                class_column = col
+                break
+        
+        if class_column:
+            df_analysis['レース格'] = df_analysis[class_column].map(grade_mapping).fillna("その他")
+        else:
+            # クラス情報がない場合はレースレベルで代用
+            def level_to_grade(level):
+                if level >= 8.5:
+                    return "G1相当"
+                elif level >= 7.5:
+                    return "G2相当"
+                elif level >= 6.5:
+                    return "G3相当"
+                elif level >= 5.5:
+                    return "重賞相当"
+                else:
+                    return "一般戦"
+            df_analysis['レース格'] = df_analysis['race_level'].apply(level_to_grade)
+        
+        # 成績カラムの作成
+        df_analysis['複勝'] = (df_analysis['着順'] <= 3).astype(int)
+        df_analysis['勝利'] = (df_analysis['着順'] == 1).astype(int)
+        
+        # 1. レース格別の箱ひげ図
+        self.plot_boxplot_analysis(
+            data=df_analysis,
+            groupby_column='レース格',
+            value_columns=['race_level'],
+            title_prefix="レース格別分析",
+            filename_prefix="grade_boxplot"
+        )
+        
+        # 2. 距離カテゴリ別の箱ひげ図
+        self.plot_boxplot_analysis(
+            data=df_analysis,
+            groupby_column='距離カテゴリ',
+            value_columns=['race_level'],
+            title_prefix="距離カテゴリ別分析",
+            filename_prefix="distance_boxplot"
+        )
+        
+        # 3. レース格×距離の組み合わせ分析
+        # データ量を考慮して主要な組み合わせのみ
+        major_grades = ["G1", "G2", "G3", "重賞", "特別戦"]
+        major_distances = ["短距離(≤1400m)", "マイル(1401-1800m)", "中距離(1801-2000m)"]
+        
+        filtered_data = df_analysis[
+            (df_analysis['レース格'].isin(major_grades)) & 
+            (df_analysis['距離カテゴリ'].isin(major_distances))
+        ]
+        
+        if len(filtered_data) > 0:
+            # レース格×距離の組み合わせカラムを作成
+            filtered_data['格×距離'] = filtered_data['レース格'] + " × " + filtered_data['距離カテゴリ']
+            
+            self.plot_boxplot_analysis(
+                data=filtered_data,
+                groupby_column='格×距離',
+                value_columns=['race_level'],
+                title_prefix="レース格×距離組み合わせ分析",
+                filename_prefix="grade_distance_boxplot"
+            )
+        
+        # 4. 馬単位での成績分析（馬ごとの統計を計算）
+        horse_stats = df_analysis.groupby('馬名').agg({
+            'race_level': ['mean', 'max'],
+            '複勝': 'mean',
+            '勝利': 'mean',
+            'レース格': lambda x: x.mode().iloc[0] if len(x.mode()) > 0 else "その他",
+            '距離カテゴリ': lambda x: x.mode().iloc[0] if len(x.mode()) > 0 else "その他"
+        }).reset_index()
+        
+        # カラム名を平坦化
+        horse_stats.columns = ['馬名', '平均レベル', '最高レベル', '複勝率', '勝率', '主戦格', '主戦距離']
+        
+        # 5. 馬ごとの主戦格別分析
+        self.plot_boxplot_analysis(
+            data=horse_stats,
+            groupby_column='主戦格',
+            value_columns=['平均レベル', '最高レベル', '複勝率', '勝率'],
+            title_prefix="馬の主戦格別分析",
+            filename_prefix="horse_grade_boxplot"
+        )
+        
+        # 6. 馬ごとの主戦距離別分析
+        self.plot_boxplot_analysis(
+            data=horse_stats,
+            groupby_column='主戦距離',
+            value_columns=['平均レベル', '最高レベル', '複勝率', '勝率'],
+            title_prefix="馬の主戦距離別分析",
+            filename_prefix="horse_distance_boxplot"
         ) 

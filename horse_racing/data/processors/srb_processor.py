@@ -12,6 +12,50 @@ from ..constants.jra_masters import JRA_MASTERS
 from .utils import convert_year_to_4digits
 import numpy as np
 
+def add_grade_name_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    数値グレードから「グレード名」列をグレード列の直後に追加する
+    
+    Args:
+        df: 処理対象DataFrame
+        
+    Returns:
+        グレード名列が追加されたDataFrame
+    """
+    # グレード変換マッピング
+    grade_mapping = {
+        1: 'Ｇ１',
+        2: 'Ｇ２', 
+        3: 'Ｇ３',
+        4: '重賞',
+        5: '特別',
+        6: 'Ｌ　（リステッド競走）'
+    }
+    
+    # グレード列が存在するかチェック
+    if 'グレード' not in df.columns:
+        return df
+    
+    # グレード列を数値型として保持
+    df['グレード'] = pd.to_numeric(df['グレード'], errors='coerce')
+    
+    # NaN値がある場合はデフォルト値（5: 特別）を設定
+    df['グレード'] = df['グレード'].fillna(5)
+    
+    # グレード名データを作成
+    grade_names = df['グレード'].map(grade_mapping).fillna('特別')
+    
+    # グレード名列が既に存在するかチェック
+    if 'グレード名' in df.columns:
+        # 既存の列を更新
+        df['グレード名'] = grade_names
+    else:
+        # グレード列の直後に「グレード名」列を挿入
+        grade_col_index = df.columns.get_loc('グレード')
+        df.insert(grade_col_index + 1, 'グレード名', grade_names)
+    
+    return df
+
 def process_srb_record(record, index):
     """
     SRBレコードを処理します
@@ -24,35 +68,19 @@ def process_srb_record(record, index):
         dict: 処理されたフィールドの辞書
     """
     try:
-        # 信頼性の高いフィールドから抽出
-        場コード = record[0:2].decode("shift_jis", errors="replace").strip()
-        try:
-            year_2digit = record[2:4].decode("shift_jis", errors="replace").strip()
-            year_4digit = convert_year_to_4digits(year_2digit, index)
-        except:
-            year_4digit = "2000"  # デフォルト値
-        
-        try:
-            回 = record[4:5].decode("shift_jis", errors="replace").strip()
-            if not 回.isdigit():
-                回 = "0"  # 解析不能な場合はデフォルト値
-        except:
-            回 = "0"
-            
-        try:
-            日 = record[5:6].decode("shift_jis", errors="replace").strip()
-            if not 日.isdigit():
-                日 = "0"  # 解析不能な場合はデフォルト値
-        except:
-            日 = "0"
-            
-        try:
-            Ｒ = record[6:8].decode("shift_jis", errors="replace").strip()
-            if not Ｒ.isdigit():
-                Ｒ = "00"  # 解析不能な場合はデフォルト値
-        except:
-            Ｒ = "00"
-        
+        # 信頼性の高いフィールドから抽出（エラー時は例外を発生させる）
+        場コード = record[0:2].decode("shift_jis", errors="strict").strip()
+        year_2digit = record[2:4].decode("shift_jis", errors="strict").strip()
+        year_4digit = convert_year_to_4digits(year_2digit, index)
+        回 = record[4:5].decode("shift_jis", errors="strict").strip()
+        日 = record[5:6].decode("shift_jis", errors="strict").strip()
+        Ｒ = record[6:8].decode("shift_jis", errors="strict").strip()
+
+        # 数字でない場合はデフォルト値を使用
+        if not 回.isdigit(): 回 = "0"
+        if not 日.isdigit(): 日 = "0"
+        if not Ｒ.isdigit(): Ｒ = "00"
+
         # レースIDを作成
         レースID = 場コード + year_4digit + 回 + 日 + Ｒ
         
@@ -61,136 +89,50 @@ def process_srb_record(record, index):
         
         # 結果辞書を初期化
         result = {
-            "場コード": 場コード,
-            "場名": 場名,
-            "年": year_4digit,
-            "回": 回,
-            "日": 日,
-            "Ｒ": Ｒ,
-            "レースID": レースID
+            "場コード": 場コード, "場名": 場名, "年": year_4digit, "回": 回,
+            "日": 日, "Ｒ": Ｒ, "レースID": レースID,
+            "１角バイアス": "", "２角バイアス": "", "向正バイアス": "", "３角バイアス": "",
+            "４角バイアス": "", "直線バイアス": "", "レースコメント": ""
         }
         
-        # ファイルの実際のフォーマットに合わせたデータ抽出
-        # バイアス情報は括弧付きの数字の並び（例：(*15,9)(3,8,12)13(10,14)(2,11)(4,5)1-7,6-16）
-        try:
-            # 実際のフォーマットからバイアス情報を抽出
-            # トラックバイアスを抽出するために、レコードのテキスト全体を取得
-            full_text = record.decode("shift_jis", errors="replace").strip()
-            
-            # レコードを空白で分割してバイアス情報を含む部分を抽出
-            # 実際のレコードではバイアス情報は括弧を含む文字列として存在
-            parts = full_text.split()
-            bias_info = None
-            race_comment = ""
-            
-            # 括弧を含む要素を探してバイアス情報として抽出
-            for i, part in enumerate(parts):
-                if "(" in part and ")" in part:
-                    # 複数の括弧がある場合は、それをバイアス情報として取得
-                    bias_info = part
-                    
-                    # レースコメントがあれば取得（バイアス情報の後にあるテキスト）
-                    if i + 1 < len(parts):
-                        race_comment = " ".join(parts[i+1:])
-                    break
-            
-            # バイアス情報が見つかった場合は、各コーナーのバイアス情報を抽出
-            if bias_info:
-                print(f"抽出されたバイアス情報: {bias_info}")  # デバッグ出力
-                
-                # バイアス情報からコーナー毎に抽出
-                # 記述フォーマットが "(数字,数字)(数字,数字)..." のような形式
-                first_corner_bias = ""
-                second_corner_bias = ""
-                homestr_bias = ""
-                third_corner_bias = ""
-                fourth_corner_bias = ""
-                straight_bias = ""
-                
-                # コーナー情報の抽出位置を特定
-                # 例：(*3,9)(6,10,16)(1,2,11)(4,15)13,5-12,14,7,8 の場合
-                # 1コーナー: (*3,9)
-                # 2コーナー: (6,10,16)
-                # 3コーナー: (1,2,11) 
-                # 4コーナー: (4,15)
-                # ホームストレッチ: 13,5-12,14,7,8
-                
-                # バイアス情報の分割（括弧で区切られた部分を抽出）
-                import re
-                bracket_parts = re.findall(r'\([^)]*\)', bias_info)
-                print(f"抽出された括弧部分: {bracket_parts}")  # デバッグ出力
-                
-                # 各コーナーのバイアス情報を設定
-                if len(bracket_parts) >= 1:
-                    first_corner_bias = bracket_parts[0]
-                if len(bracket_parts) >= 2:
-                    second_corner_bias = bracket_parts[1]
-                if len(bracket_parts) >= 3:
-                    third_corner_bias = bracket_parts[2]
-                if len(bracket_parts) >= 4:
-                    fourth_corner_bias = bracket_parts[3]
-                
-                # 直線・向正のバイアス（残りの部分）
-                remaining = bias_info
-                for part in bracket_parts:
-                    remaining = remaining.replace(part, '')
-                
-                # 残りの部分を直線バイアスとして使用
-                straight_bias = remaining.strip()
-                
-                # バイアス情報をセット
-                result.update({
-                    "１角バイアス": first_corner_bias,
-                    "２角バイアス": second_corner_bias,
-                    "向正バイアス": homestr_bias,  # 向正バイアス情報は別途抽出が必要
-                    "３角バイアス": third_corner_bias,
-                    "４角バイアス": fourth_corner_bias,
-                    "直線バイアス": straight_bias,
-                    "レースコメント": race_comment
-                })
-            else:
-                # バイアス情報が見つからない場合
-                result.update({
-                    "１角バイアス": "",
-                    "２角バイアス": "",
-                    "向正バイアス": "",
-                    "３角バイアス": "",
-                    "４角バイアス": "",
-                    "直線バイアス": "",
-                    "レースコメント": ""
-                })
-        except Exception as e:
-            # エラーが発生した場合は空の値を設定
-            print(f"バイアス情報の抽出に失敗しました: {str(e)}")
-            result.update({
-                "１角バイアス": "",
-                "２角バイアス": "",
-                "向正バイアス": "",
-                "３角バイアス": "",
-                "４角バイアス": "",
-                "直線バイアス": "",
-                "レースコメント": ""
-            })
+        import re
+        # ヘッダー以降のテキストをデコード
+        full_text = record[8:].decode("shift_jis", errors="replace").strip()
+
+        # バイアス情報とレースコメントを抽出
+        # バイアス情報は括弧で始まり、その後ろにコメントが続く場合がある
+        match = re.search(r'^(?P<bias>\(.*\)).*?(?P<comment>\s{2,}.*)?$', full_text)
         
+        bias_info = ""
+        race_comment = ""
+
+        if match:
+            bias_info = match.group('bias').strip()
+            if match.group('comment'):
+                race_comment = match.group('comment').strip()
+
+        if bias_info:
+            # 各コーナーのバイアス情報を抽出
+            bracket_parts = re.findall(r'\(([^)]*)\)', bias_info)
+            
+            result["１角バイアス"] = bracket_parts[0] if len(bracket_parts) > 0 else ""
+            result["２角バイアス"] = bracket_parts[1] if len(bracket_parts) > 1 else ""
+            result["３角バイアス"] = bracket_parts[2] if len(bracket_parts) > 2 else ""
+            result["４角バイアス"] = bracket_parts[3] if len(bracket_parts) > 3 else ""
+            
+            # 直線バイアス（括弧の外側）
+            result["直線バイアス"] = re.sub(r'\([^)]*\)', '', bias_info).strip()
+            result["レースコメント"] = race_comment
+
         return result
-    except Exception as e:
-        print(f"レコード処理中にエラーが発生: {str(e)}")
-        # 最低限の情報を持つ辞書を返す
+
+    except (UnicodeDecodeError, IndexError, ValueError) as e:
+        # デコードエラーやインデックスエラーは不正なレコードとして処理
+        # print(f"レコード処理中にエラーが発生: {str(e)}") # ログが冗長なためコメントアウト
         return {
-            "場コード": "",
-            "場名": "",
-            "年": "",
-            "回": "",
-            "日": "",
-            "Ｒ": "",
-            "レースID": "",
-            "１角バイアス": "",
-            "２角バイアス": "",
-            "向正バイアス": "",
-            "３角バイアス": "",
-            "４角バイアス": "",
-            "直線バイアス": "",
-            "レースコメント": ""
+            "場コード": "", "場名": "", "年": "", "回": "", "日": "", "Ｒ": "", "レースID": "",
+            "１角バイアス": "", "２角バイアス": "", "向正バイアス": "", "３角バイアス": "",
+            "４角バイアス": "", "直線バイアス": "", "レースコメント": ""
         }
 
 def format_srb_file(input_file, output_file):
@@ -336,13 +278,11 @@ def merge_srb_with_sed(separate_output=False, exclude_turf=False, turf_only=Fals
     sed_export_dir = Path("export/SED")
     sed_formatted_dir = Path("export/SED/formatted")  # formattedファイル用のディレクトリ
     merged_dir = Path("export/SED_SRB") if not separate_output else None
-    sed100105_dir = Path("export/SED100105")  # SED100105用のディレクトリ
     with_bias_dir = Path("export/with_bias")  # _with_biasファイル用のディレクトリ
     
     # マージディレクトリが存在しない場合は作成
     if not separate_output and merged_dir:
         merged_dir.mkdir(exist_ok=True, parents=True)
-    sed100105_dir.mkdir(exist_ok=True, parents=True)  # SED100105用のディレクトリを作成
     with_bias_dir.mkdir(exist_ok=True, parents=True)  # with_biasディレクトリを作成
     
     # SRB統合ファイルの読み込み
@@ -352,7 +292,7 @@ def merge_srb_with_sed(separate_output=False, exclude_turf=False, turf_only=Fals
         return False
         
     try:
-        srb_df = pd.read_csv(srb_all_file, encoding="utf-8")
+        srb_df = pd.read_csv(srb_all_file, encoding="utf-8", dtype=str)
         print(f"✅ SRB統合ファイルを読み込みました。（{len(srb_df)}レコード）")
         
         # SRBデータの全カラムを文字列型に変換
@@ -394,7 +334,7 @@ def merge_srb_with_sed(separate_output=False, exclude_turf=False, turf_only=Fals
     for sed_file in sed_files:
         try:
             # SEDファイルの読み込み
-            sed_df = pd.read_csv(sed_file, encoding="utf-8")
+            sed_df = pd.read_csv(sed_file, encoding="utf-8", dtype=str)
             print(f"\n処理中: {sed_file.name}（{len(sed_df)}レコード）")
             
             # 芝コースを除外する場合
@@ -487,14 +427,22 @@ def merge_srb_with_sed(separate_output=False, exclude_turf=False, turf_only=Fals
                 print("  ⚠️ すべてのバイアス情報が揃ったレコードがありませんでした。")
                 continue  # すべてのバイアス情報が揃っていない場合はスキップ
             
+            # 欠損値処理の実行（グレード推定処理含む）
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            from process_race_data import MissingValueHandler
+            missing_handler = MissingValueHandler()
+            filtered_df = missing_handler.handle_missing_values(filtered_df)
+            
+            # グレード名列の追加（既に追加済みの場合はスキップ）
+            if 'グレード名' not in filtered_df.columns:
+                filtered_df = add_grade_name_column(filtered_df)
+            
             # 結果の保存
             if separate_output:
-                # SED100105の場合は特別なフォルダに保存
-                if "SED100105" in sed_file.name:
-                    output_file = sed100105_dir / f"{sed_file.stem}_with_bias.csv"
-                else:
-                    # 通常の場合はwith_biasディレクトリに保存
-                    output_file = with_bias_dir / f"{sed_file.stem}_with_bias.csv"
+                # すべてのファイルをwith_biasディレクトリに保存
+                output_file = with_bias_dir / f"{sed_file.stem}_with_bias.csv"
                 
                 # 結合したデータを保存（フィルタリング済みのデータを使用）
                 filtered_df.to_csv(output_file, index=False, encoding="utf-8")
@@ -502,7 +450,7 @@ def merge_srb_with_sed(separate_output=False, exclude_turf=False, turf_only=Fals
                 
             else:
                 # 統合データを保存
-                output_file = merged_dir / f"{sed_file.stem}_with_bias.csv"
+                output_file = with_bias_dir / f"{sed_file.stem}_with_bias.csv"
                 filtered_df.to_csv(output_file, index=False, encoding="utf-8")
                 print(f"  ✓ 結果を {output_file} に保存しました。")
             
@@ -537,4 +485,4 @@ if __name__ == "__main__":
     process_all_srb_files(exclude_turf=args.exclude_turf, turf_only=args.turf_only)
     
     # SEDデータとSRBデータの紐づけ
-    merge_srb_with_sed() 
+    merge_srb_with_sed()

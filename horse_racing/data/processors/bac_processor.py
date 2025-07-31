@@ -136,7 +136,7 @@ def process_all_bac_files(exclude_turf=False, turf_only=False):
     def format_bac_file_wrapper(input_file, output_file):
         return format_bac_file(input_file, output_file, exclude_turf, turf_only)
     
-    process_all_files("BAC", "import/BAC", "export/BAC", format_bac_file_wrapper)
+    process_all_files("BAC", "import/BAC", "export/BAC/formatted", format_bac_file_wrapper)
 
 if __name__ == "__main__":
     import argparse
