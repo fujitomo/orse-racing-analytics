@@ -73,7 +73,7 @@ def analyze_by_periods(analyzer, periods, base_output_dir):
             logger.info(f"  📁 出力先: {period_config.output_dir}")
             
             # 期間別アナライザーを作成
-            period_analyzer = RaceLevelAnalyzer(period_config)
+            period_analyzer = RaceLevelAnalyzer(period_config, enable_time_analysis=analyzer.enable_time_analysis)
             
             # 期間別分析の実行
             logger.info(f"  📖 データ読み込み中...")
@@ -210,18 +210,20 @@ def generate_period_summary_report(all_results, output_dir):
 def main():
     """メイン処理"""
     parser = argparse.ArgumentParser(
-        description='レースレベル分析を実行します（3年間隔分析対応）',
+        description='レースレベル分析を実行します（3年間隔分析対応、RunningTime分析対応）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用例:
   python analyze_race_level.py export/with_bias
   python analyze_race_level.py export/with_bias --output-dir results/race_level_analysis
   python analyze_race_level.py export/with_bias --three-year-periods  # 3年間隔分析
+  python analyze_race_level.py export/with_bias --enable-time-analysis  # RunningTime分析
   
 分析内容:
   - レースレベル（グレード・賞金・距離による格付け）の計算
   - レースレベルと勝率・複勝率の相関分析
   - オプション: 3年間隔での時系列分析
+  - オプション: 走破タイム因果関係分析（論文仮説H1, H4検証）
         """
     )
     parser.add_argument('input_path', help='入力ファイルまたはディレクトリのパス')
@@ -232,6 +234,8 @@ def main():
     parser.add_argument('--end-date', help='分析終了日（YYYYMMDD形式）')
     parser.add_argument('--three-year-periods', action='store_true',
                        help='3年間隔での期間別分析を実行（デフォルトは全期間分析）')
+    parser.add_argument('--enable-time-analysis', action='store_true',
+                       help='走破タイム因果関係分析を実行（論文仮説H1, H4検証）')
     
     try:
         args = parser.parse_args()
@@ -249,6 +253,10 @@ def main():
             logger.info(f"📅 分析開始日: {args.start_date}")
         if args.end_date:
             logger.info(f"📅 分析終了日: {args.end_date}")
+        if args.enable_time_analysis:
+            logger.info(f"🏃 RunningTime分析: 有効")
+        else:
+            logger.info(f"🏃 RunningTime分析: 無効（--enable-time-analysisで有効化）")
 
         if args.three_year_periods:
             logger.info("📊 3年間隔での期間別分析を実行します...")
@@ -264,7 +272,7 @@ def main():
             )
             
             # データ読み込みと基本的な前処理（期間フィルタリングなし）
-            temp_analyzer = RaceLevelAnalyzer(temp_config)
+            temp_analyzer = RaceLevelAnalyzer(temp_config, enable_time_analysis=args.enable_time_analysis)
             logger.info("📖 全データ読み込み中...")
             temp_df = temp_analyzer.load_data()
             
@@ -347,7 +355,7 @@ def main():
             )
 
             # 分析の実行
-            analyzer = RaceLevelAnalyzer(config)
+            analyzer = RaceLevelAnalyzer(config, enable_time_analysis=args.enable_time_analysis)
             analyzer.df = analyzer.load_data()
             analyzer.df = analyzer.preprocess_data()
             analyzer.df = analyzer.calculate_feature()

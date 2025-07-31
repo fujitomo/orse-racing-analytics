@@ -1,178 +1,186 @@
-"""
-SEDプロセッサのテストモジュール
-"""
+import pytest
+import pandas as pd
+from pathlib import Path
 
 from horse_racing.data.processors.sed_processor import (
     process_sed_record,
     format_sed_file,
-    process_all_sed_files
+    process_all_sed_files,
 )
 
-def create_test_sed_record():
-    """テスト用のSEDレコードを作成"""
-    # 実際のSEDレコードのフォーマットに従ってテストデータを作成
-    record = (
-        b"01"      # 場コード(2)
-        + b"23"    # 年(2)
-        + b"1"     # 回(1)
-        + b"A"     # 日(1) - 16進数の10
-        + b"01"    # R(2)
-        + b"01"    # 馬番(2)
-        + b"12345678"  # 血統登録番号(8)
-        + b"20230101"  # 年月日(8)
-        + b"TestHorse" + b" " * 27  # 馬名(36)
-        + b"1200"  # 距離(4)
-        + b"1"     # 芝ダ障害コード(1)
-        + b"1"     # 右左(1)
-        + b"1"     # 内外(1)
-        + b"01"    # 馬場状態(2)
-        + b"01"    # 種別(2)
-        + b"01"    # 条件(2)
-        + b"000"   # 記号(3)
-        + b"1"     # 重量(1)
-        + b"1"     # グレード(1)
-        + b"TestRace" + b" " * 42  # レース名(50)
-        + b"12"    # 頭数(2)
-        + b"Test" + b" " * 4  # レース名略称(8)
-        + b"01"    # 着順(2)
-        + b"0"     # 異常区分(1)
-        + b"0120"  # タイム(4)
-        + b"054"   # 斤量(3)
-        + b"TestJockey " + b" " * 1  # 騎手名(12)
-        + b"TestTrainer" + b" " * 1  # 調教師名(12)
-        + b"001.5 "  # 確定単勝オッズ(6)
-        + b"01"      # 確定単勝人気順位(2)
-        + b"100"     # IDM(3)
-        + b"100"     # 素点(3)
-        + b"000"     # 馬場差(3)
-        + b"000"     # ペース(3)
-        + b"000"     # 出遅(3)
-        + b"000"     # 位置取(3)
-        + b"000"     # 不利(3)
-        + b"000"     # 前不利(3)
-        + b"000"     # 中不利(3)
-        + b"000"     # 後不利(3)
-        + b"000"     # レース(3)
-        + b"0"       # コース取り(1)
-        + b"0"       # 上昇度コード(1)
-        + b"00"      # クラスコード(2)
-        + b"0"       # 馬体コード(1)
-        + b"0"       # 気配コード(1)
-        + b"0"       # レースペース(1)
-        + b"0"       # 馬ペース(1)
-        + b"00000"   # テン指数(5)
-        + b"00000"   # 上がり指数(5)
-        + b"00000"   # ペース指数(5)
-        + b"00000"   # レースP指数(5)
-        + b"SecondHorse" + b" " * 1  # 1(2)着馬名(12)
-        + b"000"     # 1(2)着タイム差(3)
-        + b"000"     # 前3Fタイム(3)
-        + b"000"     # 後3Fタイム(3)
-        + b"Note" + b" " * 20  # 備考(24)
-        + b"00"      # 予備(2)
-        + b"001.5 "  # 確定複勝オッズ下(6)
-        + b"001.5 "  # 10時単勝オッズ(6)
-        + b"001.5 "  # 10時複勝オッズ(6)
-        + b"01"      # コーナー順位1(2)
-        + b"01"      # コーナー順位2(2)
-        + b"01"      # コーナー順位3(2)
-        + b"01"      # コーナー順位4(2)
-        + b"000"     # 前3F先頭差(3)
-        + b"000"     # 後3F先頭差(3)
-        + b"00001"   # 騎手コード(5)
-        + b"00001"   # 調教師コード(5)
-        + b"480"     # 馬体重(3)
-        + b"+02"     # 馬体重増減(3)
-        + b"1"       # 天候コード(1)
-        + b"1"       # コース(1)
-        + b"1"       # レース脚質(1)
-        + b"0000100"  # 単勝(7)
-        + b"0000100"  # 複勝(7)
-        + b"00100"    # 本賞金(5)
-        + b"00100"    # 収得賞金(5)
-        + b"00"       # レースペース流れ(2)
-        + b"00"       # 馬ペース流れ(2)
-        + b"0"        # 4角コース取り(1)
-        + b"1200"     # 発走時間(4)
-        + b"\n"       # 改行
-    )
-    return record
+@pytest.fixture
+def valid_sed_record():
+    """A valid SED binary record fixture."""
+    record_bytes = bytearray(374)
+    record_bytes[0:2] = b"06"  # 場コード: 中山
+    record_bytes[2:4] = b"23"  # 年: 2023
+    record_bytes[4:5] = b"0"   # 回
+    record_bytes[5:6] = b"1"   # 日 (16進数)
+    record_bytes[6:8] = b"1 "  # R
+    record_bytes[8:10] = b"01" # 馬番
+    record_bytes[10:18] = b"12345678" # 血統登録番号
+    record_bytes[18:26] = b"20230101" # 年月日
+    horse_name = "馬名1"
+    record_bytes[26:26+len(horse_name.encode("shift_jis"))] = horse_name.encode("shift_jis")
+    record_bytes[62:66] = b"1600" # 距離
+    record_bytes[66:67] = b"1"   # 芝ダ障害コード: 芝
+    record_bytes[67:68] = b"1"   # 右左: 右
+    record_bytes[68:69] = b"1"   # 内外: 通常(内)
+    record_bytes[69:71] = b"10"  # 馬場状態: 良
+    record_bytes[71:73] = b"11"  # 種別: 2歳
+    record_bytes[73:75] = b"04"  # 条件: 1勝クラス
+    record_bytes[75:78] = b"103" # 記号
+    record_bytes[78:79] = b"1"   # 重量: ハンデ
+    record_bytes[79:80] = b"1"   # グレード: G1
+    race_name = "レース名1"
+    record_bytes[80:80+len(race_name.encode("shift_jis"))] = race_name.encode("shift_jis")
+    record_bytes[130:132] = b"18" # 頭数
+    record_bytes[132:140] = "レース名略".encode("shift_jis") # レース名略称
+    record_bytes[140:142] = b"01" # 着順
+    record_bytes[142:143] = b"0"   # 異常区分
+    record_bytes[143:147] = b"1234" # タイム
+    record_bytes[147:150] = b"550" # 斤量
+    jockey_name = "騎手名1"
+    record_bytes[150:150+len(jockey_name.encode("shift_jis"))] = jockey_name.encode("shift_jis")
+    trainer_name = "調教師名1"
+    record_bytes[162:162+len(trainer_name.encode("shift_jis"))] = trainer_name.encode("shift_jis")
+    record_bytes[174:180] = b"123456" # 確定単勝オッズ
+    record_bytes[180:182] = b"01" # 確定単勝人気順位
+    record_bytes[182:185] = b"100" # IDM
+    record_bytes[185:188] = b"100" # 素点
+    record_bytes[188:191] = b"000" # 馬場差
+    record_bytes[191:194] = b"000" # ペース
+    record_bytes[194:197] = b"000" # 出遅
+    record_bytes[197:200] = b"000" # 位置取
+    record_bytes[200:203] = b"000" # 不利
+    record_bytes[203:206] = b"000" # 前不利
+    record_bytes[206:209] = b"000" # 中不利
+    record_bytes[209:212] = b"000" # 後不利
+    record_bytes[212:215] = b"000" # レース
+    record_bytes[215:216] = b"1"   # コース取り
+    record_bytes[216:217] = b"1"   # 上昇度コード
+    record_bytes[217:219] = b"01"  # クラスコード
+    record_bytes[219:220] = b"1"   # 馬体コード
+    record_bytes[220:221] = b"1"   # 気配コード
+    record_bytes[221:222] = b"1"   # レースペース
+    record_bytes[222:223] = b"1"   # 馬ペース
+    record_bytes[223:228] = b"10000" # テン指数
+    record_bytes[228:233] = b"10000" # 上がり指数
+    record_bytes[233:238] = b"10000" # ペース指数
+    record_bytes[238:243] = b"10000" # レースP指数
+    record_bytes[243:255] = "1着馬名1".encode("shift_jis")
+    record_bytes[255:258] = b"000" # 1(2)着タイム差
+    record_bytes[258:261] = b"000" # 前3Fタイム
+    record_bytes[261:264] = b"000" # 後3Fタイム
+    record_bytes[264:288] = "備考1".encode("shift_jis")
+    record_bytes[288:290] = b"00"  # 予備
+    record_bytes[290:296] = b"123456" # 確定複勝オッズ下
+    record_bytes[296:302] = b"123456" # 10時単勝オッズ
+    record_bytes[302:308] = b"123456" # 10時複勝オッズ
+    record_bytes[308:310] = b"01" # コーナー順位1
+    record_bytes[310:312] = b"01" # コーナー順位2
+    record_bytes[312:314] = b"01" # コーナー順位3
+    record_bytes[314:316] = b"01" # コーナー順位4
+    record_bytes[316:319] = b"000" # 前3F先頭差
+    record_bytes[319:322] = b"000" # 後3F先頭差
+    record_bytes[322:327] = b"12345" # 騎手コード
+    record_bytes[327:332] = b"12345" # 調教師コード
+    record_bytes[332:335] = b"500" # 馬体重
+    record_bytes[335:338] = b"+10" # 馬体重増減
+    record_bytes[338:339] = b"1"   # 天候コード
+    record_bytes[339:340] = b"1"   # コース
+    record_bytes[340:341] = b"1"   # レース脚質
+    record_bytes[341:348] = b"1234567" # 単勝
+    record_bytes[348:355] = b"1234567" # 複勝
+    record_bytes[355:360] = b"10000" # 本賞金
+    record_bytes[360:365] = b"10000" # 収得賞金
+    record_bytes[365:367] = b"01" # レースペース流れ
+    record_bytes[367:369] = b"01" # 馬ペース流れ
+    record_bytes[369:370] = b"1"   # 4角コース取り
+    record_bytes[370:374] = b"1200" # 発走時間
 
-def test_process_sed_record():
-    """process_sed_record関数のテスト"""
-    # テストデータの作成
-    record = create_test_sed_record()
-    
-    # テスト実行
-    result = process_sed_record(record, 1)
-    
-    # 結果の検証
-    assert result is not None
-    assert len(result) == 83  # フィールド数の確認
-    
-    # 主要フィールドの検証
-    assert result[0] == "札幌"  # 場コード
-    assert result[1] == "2023"  # 年
-    assert result[2] == "1"     # 回
-    assert result[3] == "10"    # 日（16進数からの変換）
-    assert result[4] == "01"    # R
-    assert result[8] == "TestHorse"  # 馬名
-    assert result[19] == "TestRace"  # レース名
+    return bytes(record_bytes)
 
-def test_format_sed_file(tmp_path):
-    """format_sed_file関数のテスト"""
-    # テストファイルの作成
-    test_file = tmp_path / "test_sed.txt"
-    record = create_test_sed_record()
-    test_file.write_bytes(record * 2)  # 2レコード書き込み
-    
-    # 出力ファイルのパス
-    output_file = tmp_path / "test_sed_formatted.csv"
-    
-    # テスト実行
-    result = format_sed_file(str(test_file), str(output_file))
-    
-    # 結果の検証
-    assert len(result) == 2  # 2レコードが処理されていることを確認
-    assert output_file.exists()  # 出力ファイルが作成されていることを確認
-    
-    # CSVファイルの内容を確認
-    with open(output_file, encoding="utf-8-sig") as f:
-        lines = f.readlines()
-        assert len(lines) == 3  # ヘッダー + 2レコード
-        assert "場コード,年,回,日" in lines[0]  # ヘッダーの確認
+@pytest.fixture
+def turf_sed_record(valid_sed_record):
+    """A SED binary record for a turf race."""
+    record_bytes = bytearray(valid_sed_record)
+    record_bytes[66] = ord('1')  # Set turf code to '1' (芝)
+    return bytes(record_bytes)
 
-def test_process_all_sed_files(tmp_path):
-    """process_all_sed_files関数のテスト"""
-    # テスト用のディレクトリ構造を作成
+@pytest.fixture
+def dirt_sed_record(valid_sed_record):
+    """A SED binary record for a dirt race."""
+    record_bytes = bytearray(valid_sed_record)
+    record_bytes[66] = ord('2')  # Set dirt code to '2' (ダート)
+    return bytes(record_bytes)
+
+@pytest.fixture
+def invalid_sed_record():
+    """An invalid SED binary record fixture."""
+    return b"invalid record"
+
+def test_process_sed_record_valid(valid_sed_record):
+    """Test processing a valid SED record."""
+    result = process_sed_record(valid_sed_record, 0)
+    assert result[0] == "06"  # 場コード
+    assert result[1] == "2023" # 年
+    assert result[3] == "1"   # 日 (16進数から変換)
+    assert result[10] == "芝"  # 芝ダ障害コード
+
+def test_process_sed_record_turf_filter(turf_sed_record, dirt_sed_record):
+    """Test the turf filtering options."""
+    assert process_sed_record(turf_sed_record, 0, exclude_turf=True) is None
+    assert process_sed_record(dirt_sed_record, 0, exclude_turf=True) is not None
+    assert process_sed_record(turf_sed_record, 0, turf_only=True) is not None
+    assert process_sed_record(dirt_sed_record, 0, turf_only=True) is None
+
+def test_process_sed_record_invalid(invalid_sed_record):
+    """Test processing an invalid SED record."""
+    assert process_sed_record(invalid_sed_record, 0) is None
+
+@pytest.fixture
+def sed_test_file(tmp_path, valid_sed_record):
+    """Create a dummy SED file for testing."""
+    p = tmp_path / "SED_test.txt"
+    p.write_bytes(valid_sed_record * 2)
+    return p
+
+def test_format_sed_file(sed_test_file, tmp_path):
+    """Test formatting a single SED file to CSV."""
+    output_file = tmp_path / "SED_test_formatted.csv"
+    format_sed_file(str(sed_test_file), str(output_file))
+
+    assert output_file.exists()
+    df = pd.read_csv(output_file, dtype={'場コード': str})
+    assert len(df) == 2
+    assert df.iloc[0]["場コード"] == "06"
+    assert df.iloc[0]["年"] == 2023
+
+@pytest.fixture
+def setup_sed_import_dir(tmp_path, valid_sed_record):
+    """Setup a dummy import directory for SED files."""
     import_dir = tmp_path / "import" / "SED"
-    (import_dir / "SED_2023").mkdir(parents=True)
+    import_dir.mkdir(parents=True, exist_ok=True)
+    (import_dir / "SED01.txt").write_bytes(valid_sed_record)
+    (import_dir / "SED02.txt").write_bytes(valid_sed_record)
+    return import_dir.parent.parent
+
+def test_process_all_sed_files(setup_sed_import_dir, monkeypatch):
+    """Test processing all SED files in the import directory."""
+    monkeypatch.chdir(setup_sed_import_dir)
     
-    # テストファイルの作成
-    test_files = [
-        "SED_2023/SED230101.txt",
-        "SED_2023/SED230102.txt"
-    ]
-    
-    record = create_test_sed_record()
-    for file_path in test_files:
-        test_file = import_dir / file_path
-        test_file.parent.mkdir(exist_ok=True)
-        test_file.write_bytes(record)
-    
-    # 出力ディレクトリ
-    export_dir = tmp_path / "export" / "SED"
-    
-    # カレントディレクトリを一時的に変更してテスト実行
-    import os
-    original_dir = os.getcwd()
-    os.chdir(tmp_path)
-    try:
-        process_all_sed_files()
-        
-        # 結果の検証
-        assert export_dir.exists()
-        output_files = list(export_dir.glob("*_formatted.csv"))
-        assert len(output_files) == len(test_files)
-    finally:
-        os.chdir(original_dir) 
+    # process_all_sed_files は formatted ディレクトリにファイルを出力する
+    (setup_sed_import_dir / "export" / "SED" / "formatted").mkdir(parents=True, exist_ok=True)
+
+    result = process_all_sed_files()
+    assert result is True
+
+    export_dir = setup_sed_import_dir / "export" / "SED" / "formatted"
+    assert (export_dir / "SED01_formatted.csv").exists()
+    assert (export_dir / "SED02_formatted.csv").exists()
+
+    df1 = pd.read_csv(export_dir / "SED01_formatted.csv")
+    df2 = pd.read_csv(export_dir / "SED02_formatted.csv")
+    assert len(df1) == 1
+    assert len(df2) == 1

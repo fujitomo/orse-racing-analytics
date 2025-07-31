@@ -12,7 +12,6 @@
 from horse_racing.data.processors.bac_processor import process_all_bac_files
 from horse_racing.data.processors.sed_processor import process_all_sed_files
 from horse_racing.data.processors.srb_processor import process_all_srb_files, merge_srb_with_sed
-from horse_racing.data.processors.race_level_processor import process_race_level_analysis_data
 import os
 import argparse
 import logging
@@ -23,6 +22,8 @@ from datetime import datetime
 from output_utils import OutputUtils
 from typing import Dict, Any, Tuple, List
 import numpy as np
+import re
+from collections import defaultdict
 
 # 実務レベルのログ設定
 def setup_logging(log_level='INFO', log_file=None):
@@ -424,20 +425,25 @@ class MissingValueHandler:
         """
         実務レベルのグレード推定処理
         賞金・レース名・出走頭数等からグレードを推定
+        推定できない場合は該当レコードを削除
         
         Args:
             df: 処理対象DataFrame
             grade_column: グレード列名
             
         Returns:
-            グレード推定済みDataFrame
+            グレード推定済みDataFrame（推定失敗レコードは削除済み）
         """
+        initial_rows = len(df)
         grade_missing_mask = df[grade_column].isnull()
+        initial_missing_count = grade_missing_mask.sum()
         
         if not grade_missing_mask.any():
             # 既存の数値グレードからグレード名列を作成
             df = self._add_grade_name_column(df, grade_column)
             return df
+        
+        logger.info(f"      📊 グレード欠損値: {initial_missing_count:,}件 ({initial_missing_count/initial_rows*100:.1f}%)")
         
         # 推定対象データ
         estimation_df = df[grade_missing_mask].copy()
@@ -446,23 +452,45 @@ class MissingValueHandler:
         if '本賞金' in df.columns:
             estimation_df = self._estimate_grade_from_prize(estimation_df, grade_column)
         
-        # 2. レース名からグレード推定
-        if 'レース名' in df.columns:
-            estimation_df = self._estimate_grade_from_race_name(estimation_df, grade_column)
+        # 2. レース名からグレード推定（コメントアウト - 欠損値対応を厳密化）
+        # if 'レース名' in df.columns:
+        #     estimation_df = self._estimate_grade_from_race_name(estimation_df, grade_column)
         
-        # 3. 出走頭数による補正
-        if '頭数' in df.columns:
-            estimation_df = self._adjust_grade_by_field_size(estimation_df, grade_column)
+        # 3. 出走頭数による補正（コメントアウト - 欠損値対応を厳密化）
+        # if '頭数' in df.columns:
+        #     estimation_df = self._adjust_grade_by_field_size(estimation_df, grade_column)
         
-        # 4. 距離による補正
-        if '距離' in df.columns:
-            estimation_df = self._adjust_grade_by_distance(estimation_df, grade_column)
+        # 4. 距離による補正（コメントアウト - 欠損値対応を厳密化）
+        # if '距離' in df.columns:
+        #     estimation_df = self._adjust_grade_by_distance(estimation_df, grade_column)
         
         # 推定結果を元のDataFrameに反映
         df.loc[grade_missing_mask, grade_column] = estimation_df[grade_column]
         
-        # 5. 数値グレードを保持しつつ「グレード名」列を作成
+        # 推定後の残存欠損値をチェック
+        remaining_missing_mask = df[grade_column].isnull()
+        remaining_missing_count = remaining_missing_mask.sum()
+        estimated_count = initial_missing_count - remaining_missing_count
+        
+        if estimated_count > 0:
+            logger.info(f"      ✅ グレード推定成功: {estimated_count:,}件")
+            self.processing_log.append(f"{grade_column}: 賞金・レース名から{estimated_count}件推定")
+        
+        # 残存欠損値（推定失敗）のレコードを削除
+        if remaining_missing_count > 0:
+            logger.info(f"      ❌ グレード推定失敗→削除: {remaining_missing_count:,}件 ({remaining_missing_count/initial_rows*100:.1f}%)")
+            df = df[~remaining_missing_mask]
+            self.processing_log.append(f"{grade_column}: 推定失敗により{remaining_missing_count}行削除")
+        
+        # 数値グレードを保持しつつ「グレード名」列を作成
         df = self._add_grade_name_column(df, grade_column)
+        
+        final_rows = len(df)
+        deleted_rows = initial_rows - final_rows
+        
+        if deleted_rows > 0:
+            logger.info(f"      📉 削除レコード統計: {deleted_rows:,}行削除 (削除率: {deleted_rows/initial_rows*100:.1f}%)")
+            logger.info(f"      📊 残存レコード: {final_rows:,}行 (残存率: {final_rows/initial_rows*100:.1f}%)")
         
         return df
     
@@ -525,9 +553,7 @@ class MissingValueHandler:
                 mask = (df['レース名'].str.contains(pattern, case=False, na=False)) & df[grade_column].isnull()
                 df.loc[mask, grade_column] = grade
         
-        # デフォルト：条件戦・未勝利戦
-        default_mask = df[grade_column].isnull()
-        df.loc[default_mask, grade_column] = 5  # 特別戦（より現実的なデフォルト）
+        # デフォルト値補完は行わない（推定失敗の場合は後でレコード削除）
         
         return df
     
@@ -596,17 +622,16 @@ class MissingValueHandler:
             3: 'Ｇ３',
             4: '重賞',
             5: '特別',
-            6: 'Ｌ'
+            6: 'Ｌ　（リステッド競走）'
         }
         
         # グレード列を数値型として保持（元の列はそのまま）
         df[grade_column] = pd.to_numeric(df[grade_column], errors='coerce')
         
-        # NaN値がある場合はデフォルト値（5: 特別）を設定
-        df[grade_column] = df[grade_column].fillna(5)
+        # NaN値のデフォルト補完は行わない
         
-        # グレード名データを作成
-        grade_names = df[grade_column].map(grade_mapping).fillna('特別')
+        # グレード名データを作成（NaN値はそのまま保持）
+        grade_names = df[grade_column].map(grade_mapping)
         
         # グレード名列が既に存在するかチェック
         if 'グレード名' in df.columns:
@@ -620,19 +645,25 @@ class MissingValueHandler:
         return df
     
     def _save_processing_log(self, df: pd.DataFrame):
-        """処理ログの保存"""
+        """処理ログの保存（追記モード対応）"""
         log_path = Path('export/missing_value_processing_log.txt')
         
         try:
-            with open(log_path, 'w', encoding='utf-8') as f:
-                f.write(f"欠損値処理ログ - {datetime.now()}\n")
-                f.write("=" * 50 + "\n\n")
+            # ログファイルが存在しない場合のみヘッダー作成
+            write_header = not log_path.exists()
+            
+            with open(log_path, 'a', encoding='utf-8') as f:  # 追記モードに変更
+                if write_header:
+                    f.write(f"欠損値処理ログ - {datetime.now()}\n")
+                    f.write("=" * 50 + "\n\n")
                 
+                # 各ファイルの処理ログを追記
                 for log_entry in self.processing_log:
                     f.write(f"• {log_entry}\n")
                 
-                f.write(f"\n最終データ形状: {df.shape}\n")
-                f.write(f"残存欠損値: {df.isnull().sum().sum()}件\n")
+                # 最終データ形状を追記
+                f.write(f"最終データ形状: {df.shape}\n")
+                f.write(f"残存欠損値: {df.isnull().sum().sum()}件\n\n")
             
             logger.info(f"   📝 処理ログ保存: {log_path}")
             
@@ -663,7 +694,6 @@ def ensure_export_dirs():
         'export/SRB', 
         'export/SED', 
         'export/with_bias',          # 実際のSED+SRB統合データ出力先
-        'export/race_level_analysis',  # 計画書第0段階用
         'export/quality_reports',     # データ品質レポート保存用
         'export/logs'                 # ログ保存用
     ]
@@ -696,9 +726,306 @@ def save_quality_report(quality_checker: DataQualityChecker):
     except Exception as e:
         logger.warning(f"⚠️ 品質レポート保存エラー: {str(e)}")
 
-def process_race_data(exclude_turf=False, turf_only=False, enable_race_level_analysis=False, 
-                     enable_missing_value_handling=True, enable_quality_check=True,
-                     race_level_analysis_only=False):
+def display_deletion_statistics():
+    """
+    グレード欠損による削除統計の表示
+    SEDとwith_biasディレクトリを比較して削除統計を出力
+    """
+    try:
+        from pathlib import Path
+        
+        # ディレクトリパス
+        sed_dir = Path('export/SED/formatted')
+        bias_dir = Path('export/with_bias')
+        
+        if not sed_dir.exists() or not bias_dir.exists():
+            logger.warning("⚠️ 比較用ディレクトリが見つかりません")
+            return
+        
+        # ファイル一覧取得
+        sed_files = list(sed_dir.glob('*.csv'))
+        bias_files = list(bias_dir.glob('*.csv'))
+        
+        if not sed_files or not bias_files:
+            logger.warning("⚠️ 比較用ファイルが見つかりません")
+            return
+        
+        # 統計を収集
+        total_sed = 0
+        total_bias = 0
+        total_deleted = 0
+        deletion_files = []
+        
+        # ファイル名でマッピング
+        sed_files_dict = {f.stem.replace('_formatted', ''): f for f in sed_files}
+        
+        for bias_file in bias_files:
+            base_name = bias_file.stem.replace('_formatted_with_bias', '')
+            
+            if base_name in sed_files_dict:
+                sed_file = sed_files_dict[base_name]
+                
+                try:
+                    # レコード数を数える（ヘッダー除く）
+                    with open(sed_file, 'r', encoding='utf-8') as f:
+                        sed_count = sum(1 for line in f) - 1
+                    
+                    with open(bias_file, 'r', encoding='utf-8') as f:
+                        bias_count = sum(1 for line in f) - 1
+                    
+                    deleted = sed_count - bias_count
+                    total_sed += sed_count
+                    total_bias += bias_count
+                    total_deleted += deleted
+                    
+                    if deleted > 0:
+                        deletion_rate = (deleted / sed_count * 100) if sed_count > 0 else 0
+                        deletion_files.append({
+                            'file': base_name,
+                            'deleted': deleted,
+                            'deletion_rate': deletion_rate
+                        })
+                
+                except Exception:
+                    continue
+        
+        # 統計表示
+        logger.info(f"📈 全体削除統計:")
+        logger.info(f"   📥 処理前総レコード: {total_sed:,}件")
+        logger.info(f"   📤 処理後総レコード: {total_bias:,}件")
+        logger.info(f"   ❌ 削除レコード数: {total_deleted:,}件")
+        logger.info(f"   📉 全体削除率: {(total_deleted/total_sed*100 if total_sed > 0 else 0):.2f}%")
+        logger.info(f"   🗂️ 削除発生ファイル数: {len(deletion_files)}")
+        logger.info(f"   📊 削除発生率: {(len(deletion_files)/len(sed_files_dict)*100 if sed_files_dict else 0):.1f}%")
+        
+        if deletion_files:
+            logger.info("\n📋 削除の多いファイル（上位10件）:")
+            deletion_files.sort(key=lambda x: x['deleted'], reverse=True)
+            for i, item in enumerate(deletion_files[:10], 1):
+                logger.info(f"   {i:2d}. {item['file']}: -{item['deleted']:,}件 (-{item['deletion_rate']:.1f}%)")
+        else:
+            logger.info("✅ グレード欠損による削除は発生していません")
+    
+    except Exception as e:
+        logger.warning(f"⚠️ 削除統計表示エラー: {str(e)}")
+
+def summarize_processing_log():
+    """
+    実務レベル欠損値処理ログのサマリー生成
+    冗長なログをまとめて統計情報を作成
+    """
+    log_file = Path('export/missing_value_processing_log.txt')
+    backup_file = Path('export/missing_value_processing_log_original.txt')
+    summary_file = Path('export/missing_value_processing_summary.txt')
+    
+    # ログファイルが存在しない場合はスキップ
+    if not log_file.exists():
+        logger.info("📝 欠損値処理ログが見つからないため、サマリー生成をスキップします")
+        return
+    
+    logger.info("📊 欠損値処理ログをサマリー形式に整理中...")
+    
+    try:
+        # ログ解析
+        stats = _parse_processing_log(log_file)
+        
+        if not stats:
+            logger.warning("⚠️ ログ解析に失敗しました")
+            return
+        
+        # サマリーレポート生成
+        _generate_summary_report(stats, summary_file)
+        
+        # 元ログをバックアップ
+        if backup_file.exists():
+            backup_file.unlink()  # 既存バックアップを削除
+        log_file.rename(backup_file)
+        
+        # サマリーを新しいログファイルに
+        summary_file.rename(log_file)
+        
+        logger.info("✅ 欠損値処理ログの整理完了")
+        logger.info(f"   📋 サマリー: {log_file}")
+        logger.info(f"   💾 バックアップ: {backup_file}")
+        logger.info(f"   📊 処理ファイル数: {stats['total_files']}ファイル")
+        
+        # 統計サマリーをログ出力
+        if stats['idm_deletions']:
+            total_idm = sum(stats['idm_deletions'])
+            logger.info(f"   🎯 IDM削除: {total_idm:,}行 ({len(stats['idm_deletions'])}ファイル)")
+        
+        if stats['grade_estimations']:
+            total_grade = sum(stats['grade_estimations'])
+            logger.info(f"   🏆 グレード推定: {total_grade:,}件 ({len(stats['grade_estimations'])}ファイル)")
+        
+    except Exception as e:
+        logger.warning(f"⚠️ ログサマリー生成エラー: {str(e)}")
+
+def _parse_processing_log(log_file: Path) -> Dict[str, Any]:
+    """ログファイルを解析して処理統計を作成"""
+    
+    # 統計情報格納用
+    stats = {
+        'idm_deletions': [],
+        'grade_estimations': [],
+        'median_imputations': defaultdict(list),
+        'dropped_columns': set(),
+        'categorical_imputations': defaultdict(list),
+        'other_imputations': defaultdict(list),
+        'total_files': 0,
+        'final_shapes': []
+    }
+    
+    try:
+        with open(log_file, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        logger.error(f"ログファイル読み込みエラー: {e}")
+        return None
+    
+    lines = content.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith('==') or line.startswith('欠損値処理ログ'):
+            continue
+            
+        # IDM削除
+        if 'IDM:' in line and '行を削除（重要列）' in line:
+            match = re.search(r'IDM: (\d+)行を削除', line)
+            if match:
+                stats['idm_deletions'].append(int(match.group(1)))
+        
+        # グレード推定
+        elif 'グレード:' in line and '推定→グレード名列追加' in line:
+            match = re.search(r'グレード: 賞金・レース名から(\d+)件推定', line)
+            if match:
+                stats['grade_estimations'].append(int(match.group(1)))
+        
+        # 中央値補完
+        elif 'medianで' in line and '件補完' in line:
+            match = re.search(r'• ([^:]+): medianで(\d+)件補完', line)
+            if match:
+                column_name = match.group(1)
+                count = int(match.group(2))
+                stats['median_imputations'][column_name].append(count)
+        
+        # 高欠損率による列削除
+        elif '高欠損率により列削除' in line:
+            match = re.search(r'• ([^:]+): 高欠損率により列削除', line)
+            if match:
+                stats['dropped_columns'].add(match.group(1))
+        
+        # カテゴリ補完（レース名、馬体重増減）
+        elif line.startswith('• レース名:') or line.startswith('• レース名略称:') or line.startswith('• 馬体重増減:'):
+            match = re.search(r'• ([^:]+): (.+)で(\d+)件補完', line)
+            if match:
+                column_name = match.group(1)
+                value = match.group(2)
+                count = int(match.group(3))
+                stats['categorical_imputations'][column_name].append((value, count))
+        
+        # その他の補完処理
+        elif '件補完' in line and 'median' not in line:
+            match = re.search(r'• ([^:]+): (.+)で(\d+)件補完', line)
+            if match:
+                column_name = match.group(1)
+                value = match.group(2)
+                count = int(match.group(3))
+                stats['other_imputations'][column_name].append((value, count))
+        
+        # 最終データ形状
+        elif '最終データ形状:' in line:
+            match = re.search(r'最終データ形状: \((\d+), (\d+)\)', line)
+            if match:
+                rows = int(match.group(1))
+                cols = int(match.group(2))
+                stats['final_shapes'].append((rows, cols))
+    
+    # ファイル数を推定（IDM削除の回数とグレード推定の回数の合計）
+    stats['total_files'] = len(stats['idm_deletions']) + len(stats['grade_estimations'])
+    
+    return stats
+
+def _generate_summary_report(stats: Dict[str, Any], output_file: Path):
+    """統計情報からサマリーレポートを生成"""
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write("=" * 80 + "\n")
+        f.write("📊 欠損値処理ログ サマリーレポート（実務レベル）\n")
+        f.write("=" * 80 + "\n")
+        f.write(f"生成日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        
+        # 処理ファイル数
+        f.write(f"📁 処理ファイル数: {stats['total_files']}ファイル\n\n")
+        
+        # IDM削除統計
+        if stats['idm_deletions']:
+            total_idm = sum(stats['idm_deletions'])
+            f.write("🎯 IDM欠損値削除処理:\n")
+            f.write(f"   • 処理回数: {len(stats['idm_deletions'])}回\n")
+            f.write(f"   • 総削除行数: {total_idm:,}行\n")
+            f.write(f"   • 平均削除行数: {total_idm/len(stats['idm_deletions']):.1f}行\n\n")
+        
+        # グレード推定統計
+        if stats['grade_estimations']:
+            total_grade = sum(stats['grade_estimations'])
+            f.write("🏆 グレード推定処理:\n")
+            f.write(f"   • 処理回数: {len(stats['grade_estimations'])}回\n")
+            f.write(f"   • 総推定件数: {total_grade:,}件\n")
+            f.write(f"   • 平均推定件数: {total_grade/len(stats['grade_estimations']):.1f}件\n\n")
+        
+        # 中央値補完統計
+        if stats['median_imputations']:
+            f.write("🔢 中央値補完処理:\n")
+            for column, counts in stats['median_imputations'].items():
+                total_count = sum(counts)
+                f.write(f"   • {column}: {len(counts)}回, 総補完{total_count:,}件 (平均{total_count/len(counts):.1f}件)\n")
+            f.write("\n")
+        
+        # 高欠損率列削除
+        if stats['dropped_columns']:
+            f.write("❌ 高欠損率により削除された列:\n")
+            sorted_columns = sorted(stats['dropped_columns'])
+            for i, column in enumerate(sorted_columns, 1):
+                f.write(f"   {i:2d}. {column}\n")
+            f.write(f"\n   📊 削除列数: {len(sorted_columns)}列\n\n")
+        
+        # カテゴリ補完統計
+        if stats['categorical_imputations']:
+            f.write("🏷️ カテゴリ補完処理:\n")
+            for column, values in stats['categorical_imputations'].items():
+                total_count = sum(count for _, count in values)
+                unique_values = len(set(value for value, _ in values))
+                f.write(f"   • {column}: {len(values)}回, 総補完{total_count:,}件, {unique_values}種類の値\n")
+            f.write("\n")
+        
+        # その他補完統計
+        if stats['other_imputations']:
+            f.write("🔧 その他補完処理:\n")
+            for column, values in stats['other_imputations'].items():
+                total_count = sum(count for _, count in values)
+                f.write(f"   • {column}: {len(values)}回, 総補完{total_count:,}件\n")
+            f.write("\n")
+        
+        # 最終データ統計
+        if stats['final_shapes']:
+            total_rows = sum(rows for rows, _ in stats['final_shapes'])
+            total_cols = sum(cols for _, cols in stats['final_shapes'])
+            avg_rows = total_rows / len(stats['final_shapes']) if stats['final_shapes'] else 0
+            avg_cols = total_cols / len(stats['final_shapes']) if stats['final_shapes'] else 0
+            
+            f.write("📊 最終データ統計:\n")
+            f.write(f"   • 総行数: {total_rows:,}行\n")
+            f.write(f"   • 平均行数: {avg_rows:.1f}行/ファイル\n")
+            f.write(f"   • 平均列数: {avg_cols:.1f}列/ファイル\n\n")
+        
+        f.write("=" * 80 + "\n")
+        f.write("🎉 実務レベル欠損値処理 完了サマリー\n")
+        f.write("=" * 80 + "\n")
+
+def process_race_data(exclude_turf=False, turf_only=False, 
+                     enable_missing_value_handling=True, enable_quality_check=True):
     """
     競馬レースデータの実務レベル処理（標準版）
     計画書Phase 0: データ整備の実装
@@ -706,10 +1033,8 @@ def process_race_data(exclude_turf=False, turf_only=False, enable_race_level_ana
     Args:
         exclude_turf (bool): 芝コースを除外するかどうか
         turf_only (bool): 芝コースのみを処理するかどうか
-        enable_race_level_analysis (bool): レースレベル分析用データ処理を実行するかどうか
         enable_missing_value_handling (bool): 戦略的欠損値処理を実行するかどうか
         enable_quality_check (bool): データ品質チェックを実行するかどうか
-        race_level_analysis_only (bool): レースレベル分析のみを実行するかどうか
     """
     logger.info("🏇 ■ 競馬レースデータの実務レベル処理を開始します ■")
     
@@ -721,55 +1046,10 @@ def process_race_data(exclude_turf=False, turf_only=False, enable_race_level_ana
         logger.error("❌ 芝コースを除外するオプションと芝コースのみを処理するオプションは同時に指定できません")
         return
     
-    # レースレベル分析のみを実行する場合の専用処理
-    if race_level_analysis_only:
-        logger.info("🔬 レースレベル分析専用モードで実行します")
-        
-        # 統合データの存在確認
-        with_bias_dir = Path('export/with_bias')
-        if not with_bias_dir.exists() or not list(with_bias_dir.glob('*.csv')):
-            logger.error("❌ 統合データが見つかりません。先に基本処理（--race-level-analysis）を実行してください。")
-            logger.error("   📁 必要なディレクトリ: export/with_bias/")
-            return False
-        
-        # 出力用ディレクトリの確認（レースレベル分析用のみ）
-        race_analysis_dir = Path('export/race_level_analysis')
-        race_analysis_dir.mkdir(parents=True, exist_ok=True)
-        
-        # システムコンポーネントの初期化
-        quality_checker = DataQualityChecker() if enable_quality_check else None
-        missing_handler = MissingValueHandler() if enable_missing_value_handling else None
-        
-        logger.info("🔬 Phase 0-6: レースレベル分析用特徴量エンジニアリング（専用モード）")
-        logger.info("📋 計画書2.2.2「分析で使う主要なものさし」に基づく包括的特徴量作成")
-        
-        race_level_result = process_race_level_analysis_data(
-            input_dir='export/with_bias',
-            output_dir='export/race_level_analysis',
-            exclude_turf=exclude_turf,
-            turf_only=turf_only,
-            enable_missing_value_handling=enable_missing_value_handling,
-            quality_checker=quality_checker,
-            missing_handler=missing_handler
-        )
-        
-        if race_level_result:
-            logger.info("✅ 【Phase 0-6のみ】レースレベル分析用データ処理完了")
-            logger.info("   📁 分析用データ: export/race_level_analysis/")
-            logger.info("   📊 特徴量サマリー: export/race_level_analysis/feature_summary.json")
-            logger.info("   🚀 Phase 1分析の準備完了")
-        else:
-            logger.error("❌ 【Phase 0-6のみ】レースレベル分析用データ処理に失敗しました")
-            return False
-        
-        logger.info("🎉 レースレベル分析専用処理が完了しました！")
-        return True
-    
     # 通常の処理設定のログ出力
     logger.info("📋 処理設定:")
     logger.info(f"   🌱 芝コース除外: {'はい' if exclude_turf else 'いいえ'}")
     logger.info(f"   🌱 芝コースのみ: {'はい' if turf_only else 'いいえ'}")
-    logger.info(f"   📊 レースレベル分析: {'有効' if enable_race_level_analysis else '無効'}")
     logger.info(f"   🔧 欠損値処理: {'有効' if enable_missing_value_handling else '無効'}")
     logger.info(f"   📈 品質チェック: {'有効' if enable_quality_check else '無効'}")
     
@@ -846,45 +1126,25 @@ def process_race_data(exclude_turf=False, turf_only=False, enable_race_level_ana
                 except Exception as e:
                     logger.warning(f"⚠️ 品質チェックエラー: {str(e)}")
         
-        # 6. レースレベル分析用特徴量エンジニアリング
-        if enable_race_level_analysis:
-            logger.info("\n" + "="*60)
-            logger.info("🔬 Phase 0-6: レースレベル分析用特徴量エンジニアリング")
-            logger.info("="*60)
-            logger.info("📋 計画書2.2.2「分析で使う主要なものさし」に基づく包括的特徴量作成")
-            
-            race_level_result = process_race_level_analysis_data(
-                input_dir='export/with_bias',
-                output_dir='export/race_level_analysis',
-                exclude_turf=exclude_turf,
-                turf_only=turf_only,
-                enable_missing_value_handling=enable_missing_value_handling,
-                quality_checker=quality_checker,
-                missing_handler=missing_handler
-            )
-            
-            if race_level_result:
-                logger.info("✅ 【Phase 0】 レースレベル分析用データ処理完了")
-                logger.info("   📁 分析用データ: export/race_level_analysis/")
-                logger.info("   📊 特徴量サマリー: export/race_level_analysis/feature_summary.json")
-                logger.info("   🚀 Phase 1分析の準備完了")
-                
-                logger.info("\n🎯 【次のステップ】:")
-                logger.info("   📈 基礎分析: python analyze_race_level.py export/race_level_analysis")
-                logger.info("   🕒 時系列分析: python analyze_race_level.py export/race_level_analysis --three-year-periods")
-                logger.info("   🏃 タイム分析: python analyze_race_level.py export/race_level_analysis --enable-time-analysis")
-                
-                monitor.log_system_status("特徴量エンジニアリング完了")
-                
-            else:
-                logger.error("❌ 【Phase 0】 レースレベル分析用データ処理に失敗しました")
-                return False
-        
         # 7. 品質レポートの保存
         if enable_quality_check and quality_checker:
             save_quality_report(quality_checker)
         
-        # 8. 処理完了サマリー
+        # 8. 欠損値処理ログのサマリー生成（実務レベル）
+        if enable_missing_value_handling:
+            logger.info("\n" + "="*60)
+            logger.info("📝 Phase 0-7: 欠損値処理ログの自動整理")
+            logger.info("="*60)
+            summarize_processing_log()
+        
+        # 9. グレード欠損削除統計の表示
+        if enable_missing_value_handling:
+            logger.info("\n" + "="*60)
+            logger.info("📊 Phase 0-8: グレード欠損削除統計")
+            logger.info("="*60)
+            display_deletion_statistics()
+        
+        # 10. 処理完了サマリー
         logger.info("\n" + "="*60)
         logger.info("🎉 Phase 0: データ整備 完了")
         logger.info("="*60)
@@ -897,10 +1157,6 @@ def process_race_data(exclude_turf=False, turf_only=False, enable_race_level_ana
         if Path('export/with_bias').exists():
             bias_files = list(Path('export/with_bias').glob('*.csv'))
             logger.info(f"   🔗 統合データ: {len(bias_files)}ファイル")
-        
-        if enable_race_level_analysis and Path('export/race_level_analysis').exists():
-            analysis_files = list(Path('export/race_level_analysis').glob('*.csv'))
-            logger.info(f"   📊 分析用データ: {len(analysis_files)}ファイル")
         
         if enable_quality_check and Path('export/quality_reports').exists():
             logger.info("   📈 品質レポート: export/quality_reports/")
@@ -917,35 +1173,25 @@ def process_race_data(exclude_turf=False, turf_only=False, enable_race_level_ana
 if __name__ == "__main__":
     # コマンドライン引数の解析
     parser = argparse.ArgumentParser(
-        description='競馬レースデータの実務レベル処理（計画書Phase 0：データ整備完全対応版）',
+        description='競馬レースデータの実務レベル処理（計画書Phase 0：データ整備対応版）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-🎯 使用例（実務レベル標準版）:
-  python process_race_data.py                                    # 基本処理のみ
-  python process_race_data.py --race-level-analysis              # Phase 0完全版（英語）
-  python process_race_data.py --レースレベル分析                    # Phase 0完全版（日本語）
-  python process_race_data.py --race-level-analysis-only         # レースレベル分析のみ実行（英語）
-  python process_race_data.py --レースレベル分析のみ                 # レースレベル分析のみ実行（日本語）
-  python process_race_data.py --turf-only --race-level-analysis  # 芝コースのみで実務レベル処理
+🎯 使用例:
+  python process_race_data.py                                    # 基本処理
+  python process_race_data.py --turf-only                      # 芝コースのみで処理
   python process_race_data.py --no-missing-handling              # 欠損値処理を無効化
   python process_race_data.py --no-quality-check                 # 品質チェックを無効化
-  
-🔬 レースレベル分析専用モード:
-  # 既存の統合データ（export/with_bias/）からレースレベル分析のみを実行
-  python process_race_data.py --race-level-analysis-only         # 高速実行
-  python process_race_data.py --レースレベル分析のみ --芝コースのみ     # 芝コースのみで分析
-  
-📊 Phase 0で作成される特徴量（計画書準拠）:
-  ✅ レースレベル: G1から未勝利までの段階分け + 距離補正
-  ✅ 馬能力: IDM・スピード指数等の統合指標（バイアス補正版含む）
-  ✅ トラックバイアス: 脚質・枠順・馬場状態の総合数値化
-  ✅ 走破タイム: 距離補正タイム、Z-score正規化、速度指標
-  ✅ 複勝率フラグ: is_win, is_placed
-  ✅ その他要因: 騎手・斤量・血統等のダミー変数化
-  
+
+🔧 このスクリプトの役割:
+  このスクリプトは、複数の形式の生レースデータ（BAC, SRB, SED）を読み込み、
+  それらを一つの整形されたデータセットに統合します。
+  最終的な成果物は `export/with_bias/` ディレクトリに出力され、
+  これが後続の分析スクリプト（例: analyze_horse_racelevel.py）の入力となります。
+
 🔧 実務レベルの品質管理:
-  ✅ 戦略的欠損値処理（CSV作成時）
+  ✅ 戦略的欠損値処理
   ✅ データ品質チェックとレポート
+  ✅ 欠損値処理ログの自動サマリー生成
   ✅ システム監視
   ✅ 段階的処理とログ出力
   ✅ エラーハンドリングと復旧機能
@@ -960,12 +1206,6 @@ if __name__ == "__main__":
                            help='芝コースのデータのみを処理する')
     
     # 機能オプション
-    parser.add_argument('--race-level-analysis', '--レースレベル分析', action='store_true', 
-                       help='【Phase 0】レースレベル分析用特徴量エンジニアリングを実行（計画書要件完全対応）')
-    
-    parser.add_argument('--race-level-analysis-only', '--レースレベル分析のみ', action='store_true',
-                       help='【Phase 0-6のみ】既存の統合データからレースレベル分析用特徴量エンジニアリングのみを実行')
-    
     parser.add_argument('--no-missing-handling', '--欠損値処理無効', action='store_true',
                        help='戦略的欠損値処理を無効化する')
     
@@ -982,10 +1222,8 @@ if __name__ == "__main__":
     
     # ログ設定の初期化
     log_file = args.log_file
-    race_level_analysis = args.race_level_analysis or getattr(args, 'レースレベル分析', False)
-    race_level_analysis_only = args.race_level_analysis_only or getattr(args, 'レースレベル分析のみ', False)
     
-    if log_file is None and (race_level_analysis or race_level_analysis_only):
+    if log_file is None:
         # 自動ログファイル設定（ディレクトリ作成も含む）
         log_dir = Path('export/logs')
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -1004,10 +1242,8 @@ if __name__ == "__main__":
     success = process_race_data(
         exclude_turf=args.exclude_turf, 
         turf_only=args.turf_only,
-        enable_race_level_analysis=race_level_analysis,
         enable_missing_value_handling=not args.no_missing_handling,
-        enable_quality_check=not args.no_quality_check,
-        race_level_analysis_only=race_level_analysis_only
+        enable_quality_check=not args.no_quality_check
     )
     
     if success:

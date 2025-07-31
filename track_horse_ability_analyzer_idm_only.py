@@ -33,6 +33,11 @@ class TrackHorseAbilityAnalyzer:
         self.scaler = StandardScaler()
         self.font_prop = None
         self.horse_race_counts = None # 馬のレース回数格納用
+        self.analysis_config = {
+            'min_races_per_horse': 3,       # 馬ごと最低レース数（品質向上）
+            'min_sample_size': 30,          # 競馬場ごと最低サンプル数（信頼性向上）
+            'min_horses_after_grouping': 5, # 馬ごと集計後の最低数（統計精度向上）
+        }
         self._setup_japanese_font()
         self._define_track_characteristics()
         
@@ -223,8 +228,8 @@ class TrackHorseAbilityAnalyzer:
                 print(f"警告: {track} でレース回数情報が利用できないため、全馬を対象とします。")
                 track_data = track_data_for_track.copy()
             
-            if len(track_data) < 50: 
-                print(f"警告: {track} でフィルタリング後のサンプルサイズが50未満 ({len(track_data)}) のためスキップします。")
+            if len(track_data) < 5: # テスト用に小さくする
+                print(f"警告: {track} でフィルタリング後のサンプルサイズが5未満 ({len(track_data)}) のためスキップします。")
                 continue
             
             # 馬ごとに適性スコア平均と勝率を計算

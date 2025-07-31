@@ -610,6 +610,7 @@ p値: {results['correlation_pvalue']:.4f}
         surface_type = "芝レース限定" if self.turf_only else "全レース（芝・ダート）"
         
         # Windows環境での文字化けを防ぐためUTF-8 BOM付きで保存
+        print(f"レポートを保存します: {report_path}")
         with open(report_path, 'w', encoding='utf-8-sig') as f:
             f.write(f"# 競馬場別馬番と勝率の関係分析レポート（{period_years}年期間・{surface_type}）\n\n")
             f.write(f"生成日時: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")

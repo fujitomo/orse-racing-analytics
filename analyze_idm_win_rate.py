@@ -4,6 +4,8 @@ IDMと勝率の相関分析を行うスクリプト
 """
 
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg') # Use a non-interactive backend
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path

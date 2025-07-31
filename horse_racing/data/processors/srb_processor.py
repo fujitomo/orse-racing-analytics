@@ -12,6 +12,50 @@ from ..constants.jra_masters import JRA_MASTERS
 from .utils import convert_year_to_4digits
 import numpy as np
 
+def add_grade_name_column(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    数値グレードから「グレード名」列をグレード列の直後に追加する
+    
+    Args:
+        df: 処理対象DataFrame
+        
+    Returns:
+        グレード名列が追加されたDataFrame
+    """
+    # グレード変換マッピング
+    grade_mapping = {
+        1: 'Ｇ１',
+        2: 'Ｇ２', 
+        3: 'Ｇ３',
+        4: '重賞',
+        5: '特別',
+        6: 'Ｌ　（リステッド競走）'
+    }
+    
+    # グレード列が存在するかチェック
+    if 'グレード' not in df.columns:
+        return df
+    
+    # グレード列を数値型として保持
+    df['グレード'] = pd.to_numeric(df['グレード'], errors='coerce')
+    
+    # NaN値がある場合はデフォルト値（5: 特別）を設定
+    df['グレード'] = df['グレード'].fillna(5)
+    
+    # グレード名データを作成
+    grade_names = df['グレード'].map(grade_mapping).fillna('特別')
+    
+    # グレード名列が既に存在するかチェック
+    if 'グレード名' in df.columns:
+        # 既存の列を更新
+        df['グレード名'] = grade_names
+    else:
+        # グレード列の直後に「グレード名」列を挿入
+        grade_col_index = df.columns.get_loc('グレード')
+        df.insert(grade_col_index + 1, 'グレード名', grade_names)
+    
+    return df
+
 def process_srb_record(record, index):
     """
     SRBレコードを処理します
@@ -382,6 +426,18 @@ def merge_srb_with_sed(separate_output=False, exclude_turf=False, turf_only=Fals
             else:
                 print("  ⚠️ すべてのバイアス情報が揃ったレコードがありませんでした。")
                 continue  # すべてのバイアス情報が揃っていない場合はスキップ
+            
+            # 欠損値処理の実行（グレード推定処理含む）
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            from process_race_data import MissingValueHandler
+            missing_handler = MissingValueHandler()
+            filtered_df = missing_handler.handle_missing_values(filtered_df)
+            
+            # グレード名列の追加（既に追加済みの場合はスキップ）
+            if 'グレード名' not in filtered_df.columns:
+                filtered_df = add_grade_name_column(filtered_df)
             
             # 結果の保存
             if separate_output:

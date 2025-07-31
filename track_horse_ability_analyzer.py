@@ -683,6 +683,7 @@ class TrackHorseAbilityAnalyzer:
                 race_counts_valid = race_counts[valid_mask]
 
                 # データの多様性検証
+                print(f"DEBUG: {track} - len(aptitude_scores_valid): {len(aptitude_scores_valid)}, len(np.unique(aptitude_scores_valid)): {len(np.unique(aptitude_scores_valid))}, len(np.unique(win_rates_valid)): {len(np.unique(win_rates_valid))}")
                 if (len(aptitude_scores_valid) < 2 or 
                     len(np.unique(aptitude_scores_valid)) < 2 or 
                     len(np.unique(win_rates_valid)) < 2):

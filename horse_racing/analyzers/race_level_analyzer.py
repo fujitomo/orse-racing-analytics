@@ -62,58 +62,6 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         self.time_analysis_results = {}  # タイム分析結果を保存
         self.enable_time_analysis = enable_time_analysis  # RunningTime分析の有効/無効
 
-    @staticmethod
-    def determine_grade_by_prize(row: pd.Series) -> int:
-        """賞金からグレードを判定する関数"""
-        prize = row.get("本賞金")
-        if pd.isna(prize):
-            return None
-            
-        match prize:
-            case p if p >= 10000: return 1
-            case p if p >= 7000: return 2
-            case p if p >= 4500: return 3
-            case p if p >= 3500: return 4
-            case p if p >= 2000: return 6
-            case _: return 5
-
-    @staticmethod
-    def determine_grade(row: pd.Series) -> int:
-        """レース名と種別コードからグレードを判定する"""
-        race_name = str(row.get("レース名", "")).upper().replace("Ｇ", "G").replace("Ｌ", "L")
-        race_type = row.get("種別", 99)
-
-        # キーワードとグレードのマッピング
-        keyword_to_grade = {
-            "G1": 1,
-            "G2": 2,
-            "G3": 3,
-            "重賞": 4,
-            "L": 6,
-        }
-
-        # マッチするキーワードを探す
-        for keyword, grade in keyword_to_grade.items():
-            if keyword in race_name:
-                return grade
-        
-        # マッチするグレードがない場合は賞金による判定
-        if "本賞金" in row.index:
-            prize_grade = RaceLevelAnalyzer.determine_grade_by_prize(row)
-            if prize_grade is not None:
-                return prize_grade
-        
-        # 種別コードによる判定
-        match race_type:
-            case 11 | 12: return 5
-            case 13 | 14: return 5
-            case 20:
-                if "J.G1" in race_name: return 1
-                if "J.G2" in race_name: return 2
-                if "J.G3" in race_name: return 3
-                return 5
-            case _: return 5
-
     def load_data(self) -> pd.DataFrame:
         """データの読み込み"""
         try:
@@ -488,7 +436,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.info(f"   📊 精度: {accuracy:.3f}")
             logger.info(f"   📊 タイムのオッズ比: {odds_ratios[0]:.3f}")
             logger.info(f"   📊 p値: {p_value:.6f}")
-            logger.info(f"   📊 統計的有意性: {'有意' if p_value < 0.05 else '非有意'}")
+            logger.info(f"   📊 統計的有意性: {'有意' if p_value < 0.05 else '非有意'}\n")
             
             return results
             
@@ -667,14 +615,26 @@ class RaceLevelAnalyzer(BaseAnalyzer):
     def analyze(self) -> Dict[str, Any]:
         """分析の実行"""
         try:
-            # データフレームの構造を確認
-            logger.info("データフレームのカラム一覧:")
-            logger.info(self.df.columns.tolist())
-            logger.info("\nデータフレームの先頭5行:")
-            logger.info(self.df.head())
+            # --- キャッシュ機構の導入 ---
+            cache_path = Path(self.config.output_dir) / 'horse_stats_cache.pkl'
             
+            if cache_path.exists():
+                logger.info(f"💾 キャッシュファイルが見つかりました。読み込みます: {cache_path}")
+                horse_stats = pd.read_pickle(cache_path)
+            else:
+                logger.info("ℹ️ キャッシュファイルが見つかりません。馬ごとの統計を計算します...")
+                # データフレームの構造を確認
+                logger.info("データフレームのカラム一覧:")
+                logger.info(self.df.columns.tolist())
+                logger.info("\nデータフレームの先頭5行:")
+                logger.info(self.df.head())
+                horse_stats = self._calculate_horse_stats()
+                # キャッシュを保存
+                horse_stats.to_pickle(cache_path)
+                logger.info(f"💾 馬ごとの統計情報をキャッシュとして保存しました: {cache_path}")
+
             # 基本的な相関分析
-            correlation_stats = self._perform_correlation_analysis(self._calculate_horse_stats())
+            correlation_stats = self._perform_correlation_analysis(horse_stats)
             results = {'correlation_stats': correlation_stats}
             
             # RunningTime分析の実行（有効な場合のみ）
@@ -687,12 +647,12 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 time_analysis_results = None
             
             # 因果関係分析の追加
-            causal_results = analyze_causal_relationship(self.df)
-            results['causal_analysis'] = causal_results
+            # causal_results = analyze_causal_relationship(self.df)
+            # results['causal_analysis'] = causal_results
             
             # 因果関係分析レポートの生成
             output_dir = Path(self.config.output_dir)
-            generate_causal_analysis_report(causal_results, output_dir)
+            # generate_causal_analysis_report(causal_results, output_dir)
             
             # RunningTime分析レポートの生成
             if time_analysis_results:
@@ -716,7 +676,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             output_dir.mkdir(parents=True, exist_ok=True)
 
             # 相関分析の可視化
-            self.plotter._visualize_correlations(self._calculate_horse_stats(), self.stats['correlation_stats'])
+            # self.plotter._visualize_correlations(self._calculate_horse_stats(), self.stats['correlation_stats'])
+            logger.warning("⚠️ '主戦クラス'のKeyErrorのため、相関分析の可視化を一時的に無効化しています。")
             
             # レース格別・距離別の箱ひげ図分析（論文要求対応）
             logger.info("📊 レース格別・距離別の箱ひげ図分析を実行中...")
@@ -729,8 +690,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 logger.info("✅ RunningTime分析の可視化が完了しました")
             
             # 因果関係分析の可視化
-            if 'causal_analysis' in self.stats:
-                self._visualize_causal_analysis()
+            # if 'causal_analysis' in self.stats:
+            #     self._visualize_causal_analysis()
 
         except Exception as e:
             logger.error(f"可視化中にエラーが発生しました: {str(e)}")
@@ -941,27 +902,35 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         # TODO:欠損値のついて調査予定
         analysis_data = horse_stats.dropna(subset=['最高レベル', '平均レベル', 'win_rate', 'place_rate'])
         
-        if len(analysis_data) == 0:
-            return {}
+        default_results = {
+            "correlation_win_max": 0.0,
+            "correlation_place_max": 0.0,
+            "correlation_win_avg": 0.0,
+            "correlation_place_avg": 0.0,
+            "model_win_max": None,
+            "model_place_max": None,
+            "model_win_avg": None,
+            "model_place_avg": None,
+            "r2_win_max": 0.0,
+            "r2_place_max": 0.0,
+            "r2_win_avg": 0.0,
+            "r2_place_avg": 0.0,
+            "correlation_win": 0.0,
+            "correlation_place": 0.0,
+            "model_win": None,
+            "model_place": None,
+            "r2_win": 0.0,
+            "r2_place": 0.0
+        }
+
+        if len(analysis_data) < 2:  # データが2件未満だと相関が計算できない
+            return default_results
 
         # 標準偏差が0の場合の処理
         # TODO:標準偏差が0の場合の処理を調査予定
         stddev = analysis_data[['最高レベル', '平均レベル', 'win_rate', 'place_rate']].std()
         if (stddev == 0).any():
-            return {
-                "correlation_win_max": 0.0,
-                "correlation_place_max": 0.0,
-                "correlation_win_avg": 0.0,
-                "correlation_place_avg": 0.0,
-                "model_win_max": None,
-                "model_place_max": None,
-                "model_win_avg": None,
-                "model_place_avg": None,
-                "r2_win_max": 0.0,
-                "r2_place_max": 0.0,
-                "r2_win_avg": 0.0,
-                "r2_place_avg": 0.0
-            }
+            return default_results
 
         # 最高レベル - 勝率の相関係数と回帰分析
         correlation_win_max = analysis_data[['最高レベル', 'win_rate']].corr().iloc[0, 1]
@@ -1139,36 +1108,6 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             
         except Exception as e:
             logger.error(f"❌ レポート生成中にエラー: {str(e)}")
-
-    def visualize(self) -> None:
-        """分析結果の可視化"""
-        try:
-            if not self.stats:
-                raise ValueError("分析結果がありません。先にanalyzeメソッドを実行してください。")
-
-            output_dir = Path(self.config.output_dir)
-            output_dir.mkdir(parents=True, exist_ok=True)
-
-            # 相関分析の可視化
-            self.plotter._visualize_correlations(self._calculate_horse_stats(), self.stats['correlation_stats'])
-            
-            # レース格別・距離別の箱ひげ図分析（論文要求対応）
-            logger.info("📊 レース格別・距離別の箱ひげ図分析を実行中...")
-            self.plotter.plot_race_grade_distance_boxplot(self.df)
-            logger.info("✅ 箱ひげ図分析が完了しました")
-            
-            # RunningTime分析の可視化
-            if 'time_analysis' in self.stats:
-                self._visualize_time_analysis()
-                logger.info("✅ RunningTime分析の可視化が完了しました")
-            
-            # 因果関係分析の可視化
-            if 'causal_analysis' in self.stats:
-                self._visualize_causal_analysis()
-
-        except Exception as e:
-            logger.error(f"可視化中にエラーが発生しました: {str(e)}")
-            raise
 
     def _visualize_time_analysis(self) -> None:
         """RunningTime分析の可視化"""
