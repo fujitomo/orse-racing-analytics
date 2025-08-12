@@ -47,8 +47,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
 
     # レースレベル計算の重み付け定義
     LEVEL_WEIGHTS = {
-        "grade_weight": 0.60,
-        "prize_weight": 0.40,
+        "grade_weight": 0.50,
+        "venue_weight": 0.20,
+        "prize_weight": 0.30,
         "field_size_weight": 0.10,
         "competition_weight": 0.20,
     }
@@ -170,42 +171,10 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         df["is_placed"] = df["着順"] <= 3
 
         # 基本レベルの計算
-        grade_level = self._calculate_grade_level(df)
-        prize_level = self._calculate_prize_level(df)
-
-        # 重み付け合算
-        df["race_level"] = (
-            grade_level * self.LEVEL_WEIGHTS["grade_weight"] +
-            prize_level * self.LEVEL_WEIGHTS["prize_weight"]
-        )
-
-        # 距離による基本補正
-        distance_weights = {
-            (0, 1400): 0.85,     # スプリント
-            (1401, 1800): 1.00,  # マイル
-            (1801, 2000): 1.35,  # 中距離
-            (2001, 2400): 1.45,  # 中長距離
-            (2401, 9999): 1.25,  # 長距離
-        }
-
-        # 距離帯による基本補正を適用
-        for (min_dist, max_dist), weight in distance_weights.items():
-            mask = (df["距離"] >= min_dist) & (df["距離"] <= max_dist)
-            df.loc[mask, "race_level"] *= weight
-
-        # 2000m特別ボーナス
-        mask_2000m = (df["距離"] >= 1900) & (df["距離"] <= 2100)
-        df.loc[mask_2000m, "race_level"] *= 1.35
-
-        # グレードと距離の相互作用を考慮
-        if self.class_column and self.class_column in df.columns:
-            high_grade_mask = df[self.class_column].isin([1, 2, 3])  # G1, G2, G3
-            optimal_distance_mask = (df["距離"] >= 1800) & (df["距離"] <= 2400)
-            df.loc[high_grade_mask & optimal_distance_mask, "race_level"] *= 1.15
-
-        # 最終的な正規化（0-10の範囲に収める）
-        df["race_level"] = self.normalize_values(df["race_level"])
-
+        df["grade_level"] = self._calculate_grade_level(df)
+        df["venue_level"] = self._calculate_venue_level(df)
+        df["prize_level"] = self._calculate_prize_level(df)
+        
         # RunningTime分析機能を追加（有効な場合のみ）
         if self.enable_time_analysis:
             df = self.calculate_running_time_features(df)
@@ -632,10 +601,70 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 # キャッシュを保存
                 horse_stats.to_pickle(cache_path)
                 logger.info(f"💾 馬ごとの統計情報をキャッシュとして保存しました: {cache_path}")
+            
+            # --- 動的な重み計算 ---
+            logger.info("⚖️ 特徴量の重みを動的に計算中...")
+            horse_stats_for_weights = horse_stats.dropna(subset=['平均レベル', '平均場所レベル', 'place_rate'])
+            
+            # 各レベルと複勝率の相関を計算
+            corr_grade = horse_stats_for_weights['平均レベル'].corr(horse_stats_for_weights['place_rate'])
+            corr_venue = horse_stats_for_weights['平均場所レベル'].corr(horse_stats_for_weights['place_rate'])
+            
+            # prize_levelはレース単位なので、馬ごとの平均を計算して相関を取る
+            prize_level_stats = self.df.groupby('馬名')['prize_level'].mean().reset_index()
+            horse_stats_for_weights = pd.merge(horse_stats_for_weights, prize_level_stats, on='馬名')
+            corr_prize = horse_stats_for_weights['prize_level'].corr(horse_stats_for_weights['place_rate'])
+
+            # 相関係数を2乗して重みを計算 (NaNは0に)
+            r2_grade = np.nan_to_num(corr_grade**2)
+            r2_venue = np.nan_to_num(corr_venue**2)
+            r2_prize = np.nan_to_num(corr_prize**2)
+            
+            total_r2 = r2_grade + r2_venue + r2_prize
+            
+            if total_r2 > 0:
+                dynamic_weights = {
+                    "grade_weight": r2_grade / total_r2,
+                    "venue_weight": r2_venue / total_r2,
+                    "prize_weight": r2_prize / total_r2
+                }
+            else:
+                # 相関が0の場合は均等割
+                dynamic_weights = {
+                    "grade_weight": 1/3,
+                    "venue_weight": 1/3,
+                    "prize_weight": 1/3
+                }
+            
+            logger.info(f"📊 計算された動的重み: {dynamic_weights}")
+            
+            # --- race_level の再計算 ---
+            logger.info("🔄 動的重みを用いてrace_levelを再計算中...")
+            self.df['race_level'] = (
+                self.df['grade_level'] * dynamic_weights['grade_weight'] +
+                self.df['venue_level'] * dynamic_weights['venue_weight'] +
+                self.df['prize_level'] * dynamic_weights['prize_weight']
+            )
+            
+            # 距離による補正を適用
+            distance_weights = {
+                (0, 1400): 0.85, (1401, 1800): 1.00, (1801, 2000): 1.35,
+                (2001, 2400): 1.45, (2401, 9999): 1.25
+            }
+            for (min_dist, max_dist), weight in distance_weights.items():
+                mask = (self.df["距離"] >= min_dist) & (self.df["距離"] <= max_dist)
+                self.df.loc[mask, "race_level"] *= weight
+
+            # 最終的な正規化
+            self.df["race_level"] = self.normalize_values(self.df["race_level"])
+
+            # --- 再計算後の統計情報で分析 ---
+            logger.info("🔄 再計算後の統計情報で最終分析を実行中...")
+            final_horse_stats = self._calculate_horse_stats()
 
             # 基本的な相関分析
-            correlation_stats = self._perform_correlation_analysis(horse_stats)
-            results = {'correlation_stats': correlation_stats}
+            correlation_stats = self._perform_correlation_analysis(final_horse_stats)
+            results = {'correlation_stats': correlation_stats, 'dynamic_weights': dynamic_weights}
             
             # RunningTime分析の実行（有効な場合のみ）
             if self.enable_time_analysis:
@@ -836,9 +865,44 @@ class RaceLevelAnalyzer(BaseAnalyzer):
 
         return self.normalize_values(grade_level)
 
+    def _calculate_venue_level(self, df: pd.DataFrame) -> pd.Series:
+        """競馬場に基づくレベルを計算"""
+        prize_col = next((c for c in ['1着賞金(1着算入賞金込み)', '1着賞金', '本賞金'] if c in df.columns), None)
+        if prize_col is None or '場名' not in df.columns:
+            return pd.Series([0.0] * len(df), index=df.index)
+
+        venue_prize = df.groupby('場名')[prize_col].median()
+        
+        # MinMaxScalerと同様の正規化
+        min_prize = venue_prize.min()
+        max_prize = venue_prize.max()
+        if max_prize == min_prize:
+             venue_points = venue_prize.apply(lambda x: 0)
+        else:
+             venue_points = (venue_prize - min_prize) / (max_prize - min_prize) * 9.0
+
+        df['venue_level'] = df['場名'].map(venue_points).fillna(0)
+        return self.normalize_values(df['venue_level'])
+
     def _calculate_prize_level(self, df: pd.DataFrame) -> pd.Series:
-        """賞金に基づくレベルを計算"""
-        prize_level = np.log1p(df["1着賞金"]) / np.log1p(df["1着賞金"].max()) * 9.95
+        """賞金に基づくレベルを計算（列名の違いに対する互換対応）"""
+        # 賞金列候補を優先順に探索
+        prize_candidates = [
+            '1着賞金(1着算入賞金込み)',
+            '1着賞金',
+            '本賞金'
+        ]
+        prize_col = next((c for c in prize_candidates if c in df.columns), None)
+        if prize_col is None:
+            # 賞金情報がない場合は0系列を返す
+            return pd.Series([0.0] * len(df), index=df.index)
+
+        prizes = pd.to_numeric(df[prize_col], errors='coerce').fillna(0)
+        max_val = prizes.max()
+        if max_val <= 0:
+            return pd.Series([0.0] * len(df), index=df.index)
+
+        prize_level = np.log1p(prizes) / np.log1p(max_val) * 9.95
         return self.normalize_values(prize_level)
 
     def _calculate_horse_stats(self) -> pd.DataFrame:
@@ -851,6 +915,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         # 馬ごとの基本統計
         agg_dict = {
             "race_level": ["max", "mean"],
+            "venue_level": ["max", "mean"],
             "is_win": "sum",
             "is_placed": "sum",
             "着順": "count"
@@ -864,9 +929,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
 
         # カラム名の整理
         if self.class_column and self.class_column in self.df.columns:
-            horse_stats.columns = ["馬名", "最高レベル", "平均レベル", "勝利数", "複勝数", "出走回数", "主戦クラス"]
+            horse_stats.columns = ["馬名", "最高レベル", "平均レベル", "最高場所レベル", "平均場所レベル", "勝利数", "複勝数", "出走回数", "主戦クラス"]
         else:
-            horse_stats.columns = ["馬名", "最高レベル", "平均レベル", "勝利数", "複勝数", "出走回数"]
+            horse_stats.columns = ["馬名", "最高レベル", "平均レベル", "最高場所レベル", "平均場所レベル", "勝利数", "複勝数", "出走回数"]
         
         # レース回数がmin_races回以上の馬のみをフィルタリング
         min_races = self.config.min_races if hasattr(self.config, 'min_races') else 3
@@ -900,21 +965,33 @@ class RaceLevelAnalyzer(BaseAnalyzer):
     def _perform_correlation_analysis(self, horse_stats: pd.DataFrame) -> Dict[str, Any]:
         """相関分析を実行"""
         # TODO:欠損値のついて調査予定
-        analysis_data = horse_stats.dropna(subset=['最高レベル', '平均レベル', 'win_rate', 'place_rate'])
+        analysis_data = horse_stats.dropna(subset=['最高レベル', '平均レベル', '最高場所レベル', '平均場所レベル', 'win_rate', 'place_rate'])
         
         default_results = {
             "correlation_win_max": 0.0,
             "correlation_place_max": 0.0,
             "correlation_win_avg": 0.0,
             "correlation_place_avg": 0.0,
+            "correlation_win_venue_max": 0.0,
+            "correlation_place_venue_max": 0.0,
+            "correlation_win_venue_avg": 0.0,
+            "correlation_place_venue_avg": 0.0,
             "model_win_max": None,
             "model_place_max": None,
             "model_win_avg": None,
             "model_place_avg": None,
+            "model_win_venue_max": None,
+            "model_place_venue_max": None,
+            "model_win_venue_avg": None,
+            "model_place_venue_avg": None,
             "r2_win_max": 0.0,
             "r2_place_max": 0.0,
             "r2_win_avg": 0.0,
             "r2_place_avg": 0.0,
+            "r2_win_venue_max": 0.0,
+            "r2_place_venue_max": 0.0,
+            "r2_win_venue_avg": 0.0,
+            "r2_place_venue_avg": 0.0,
             "correlation_win": 0.0,
             "correlation_place": 0.0,
             "model_win": None,
@@ -928,7 +1005,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
 
         # 標準偏差が0の場合の処理
         # TODO:標準偏差が0の場合の処理を調査予定
-        stddev = analysis_data[['最高レベル', '平均レベル', 'win_rate', 'place_rate']].std()
+        stddev = analysis_data[['最高レベル', '平均レベル', '最高場所レベル', '平均場所レベル', 'win_rate', 'place_rate']].std()
         if (stddev == 0).any():
             return default_results
 
@@ -962,6 +1039,27 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         model_place_avg.fit(X_place_avg, y_place)
         r2_place_avg = model_place_avg.score(X_place_avg, y_place)
 
+        # 場所レベルの相関
+        correlation_win_venue_max = analysis_data[['最高場所レベル', 'win_rate']].corr().iloc[0, 1]
+        X_win_venue_max = analysis_data['最高場所レベル'].values.reshape(-1, 1)
+        model_win_venue_max = LinearRegression().fit(X_win_venue_max, y_win)
+        r2_win_venue_max = model_win_venue_max.score(X_win_venue_max, y_win)
+
+        correlation_place_venue_max = analysis_data[['最高場所レベル', 'place_rate']].corr().iloc[0, 1]
+        X_place_venue_max = analysis_data['最高場所レベル'].values.reshape(-1, 1)
+        model_place_venue_max = LinearRegression().fit(X_place_venue_max, y_place)
+        r2_place_venue_max = model_place_venue_max.score(X_place_venue_max, y_place)
+
+        correlation_win_venue_avg = analysis_data[['平均場所レベル', 'win_rate']].corr().iloc[0, 1]
+        X_win_venue_avg = analysis_data['平均場所レベル'].values.reshape(-1, 1)
+        model_win_venue_avg = LinearRegression().fit(X_win_venue_avg, y_win)
+        r2_win_venue_avg = model_win_venue_avg.score(X_win_venue_avg, y_win)
+
+        correlation_place_venue_avg = analysis_data[['平均場所レベル', 'place_rate']].corr().iloc[0, 1]
+        X_place_venue_avg = analysis_data['平均場所レベル'].values.reshape(-1, 1)
+        model_place_venue_avg = LinearRegression().fit(X_place_venue_avg, y_place)
+        r2_place_venue_avg = model_place_venue_avg.score(X_place_venue_avg, y_place)
+
         return {
             # 最高レベル系
             "correlation_win_max": correlation_win_max,
@@ -977,6 +1075,19 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             "model_place_avg": model_place_avg,
             "r2_win_avg": r2_win_avg,
             "r2_place_avg": r2_place_avg,
+            # 場所レベル系
+            "correlation_win_venue_max": correlation_win_venue_max,
+            "correlation_place_venue_max": correlation_place_venue_max,
+            "correlation_win_venue_avg": correlation_win_venue_avg,
+            "correlation_place_venue_avg": correlation_place_venue_avg,
+            "model_win_venue_max": model_win_venue_max,
+            "model_place_venue_max": model_place_venue_max,
+            "model_win_venue_avg": model_win_venue_avg,
+            "model_place_venue_avg": model_place_venue_avg,
+            "r2_win_venue_max": r2_win_venue_max,
+            "r2_place_venue_max": r2_place_venue_max,
+            "r2_win_venue_avg": r2_win_venue_avg,
+            "r2_place_venue_avg": r2_place_venue_avg,
             # 後方互換性のため既存のキーも残す
             "correlation_win": correlation_win_max,
             "correlation_place": correlation_place_max,

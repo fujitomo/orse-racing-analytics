@@ -19,7 +19,7 @@ import time
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
-from output_utils import OutputUtils
+
 from typing import Dict, Any, Tuple, List
 import numpy as np
 import re
@@ -98,7 +98,7 @@ class DataQualityChecker:
             
             # 3. 重複チェック
             logger.info("   🔄 重複チェック中...")
-            report['duplicates'] = df.duplicated().sum()
+            report['duplicates'] = int(df.duplicated().sum())
             
             # 4. 外れ値検出（数値列のみ）
             logger.info("   📈 外れ値検出中...")
@@ -131,8 +131,8 @@ class DataQualityChecker:
         missing_percentages = (missing_counts / len(df)) * 100
         
         analysis = {
-            'total_missing_cells': missing_counts.sum(),
-            'columns_with_missing': missing_counts[missing_counts > 0].to_dict(),
+            'total_missing_cells': int(missing_counts.sum()),
+            'columns_with_missing': {k: int(v) for k, v in missing_counts[missing_counts > 0].to_dict().items()},
             'missing_percentages': missing_percentages[missing_percentages > 0].to_dict(),
             'critical_columns': []  # 50%以上欠損の列
         }
@@ -163,7 +163,7 @@ class DataQualityChecker:
                 upper_bound = Q3 + 1.5 * IQR
                 
                 outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
-                outlier_counts[col] = len(outliers)
+                outlier_counts[col] = int(len(outliers))
         
         return outlier_counts
     
@@ -325,31 +325,43 @@ class MissingValueHandler:
         
         numeric_columns = df.select_dtypes(include=[np.number]).columns
         
-        for column in numeric_columns:
+        # 賞金関連の列を欠損値処理の対象から除外（欠損が多くて削除されるのを防ぐ）
+        prize_columns = [
+            '2着賞金', '3着賞金', '4着賞金', '5着賞金',
+            '1着算入賞金', '2着算入賞金',
+            '1着賞金(1着算入賞金込み)', '2着賞金(2着算入賞金込み)', '平均賞金'
+        ]
+        columns_to_process = [
+            col for col in numeric_columns 
+            if col not in prize_columns
+        ]
+
+        for column in columns_to_process:
             missing_count = df[column].isnull().sum()
-            missing_rate = missing_count / len(df)
+            missing_rate = missing_count / len(df) if len(df) > 0 else 0
             
             if missing_count > 0:
                 # グレード列の特別処理（実務レベル）
                 if column in ['グレード', 'grade', 'レースグレード']:
-                    logger.info(f"      • {column}: 実務レベルグレード推定処理を実行")
-                    df = self._estimate_grade_from_features(df, column)
+                    # logger.info(f"      • {column}: 実務レベルグレード推定処理を実行")
+                    # df = self._estimate_grade_from_features(df, column)
                     
-                    # 推定後の欠損数をチェック
-                    remaining_missing = df[column].isnull().sum()
-                    estimated_count = missing_count - remaining_missing
+                    # # 推定後の欠損数をチェック
+                    # remaining_missing = df[column].isnull().sum()
+                    # estimated_count = missing_count - remaining_missing
                     
-                    if estimated_count > 0:
-                        logger.info(f"      • {column}: {estimated_count:,}件を賞金・レース名から推定補完")
-                        self.processing_log.append(f"{column}: 賞金・レース名から{estimated_count}件推定→グレード名列追加")
+                    # if estimated_count > 0:
+                    #     logger.info(f"      • {column}: {estimated_count:,}件を賞金・レース名から推定補完")
+                    #     self.processing_log.append(f"{column}: 賞金・レース名から{estimated_count}件推定→グレード名列追加")
                     
-                    # 残りの欠損値は中央値で補完（数値で処理後、グレード名列追加）
-                    if remaining_missing > 0:
-                        fill_value = df[column].median()
-                        # 数値で補完してからグレード名列追加処理に委ねる
-                        df[column] = df[column].fillna(fill_value)
-                        logger.info(f"      • {column}: 残り{remaining_missing:,}件をmedian({fill_value})で補完後、グレード名列追加")
-                        self.processing_log.append(f"{column}: median補完{remaining_missing}件→グレード名列追加")
+                    # # 残りの欠損値は中央値で補完（数値で処理後、グレード名列追加）
+                    # if remaining_missing > 0:
+                    #     fill_value = df[column].median()
+                    #     # 数値で補完してからグレード名列追加処理に委ねる
+                    #     df[column] = df[column].fillna(fill_value)
+                    #     logger.info(f"      • {column}: 残り{remaining_missing:,}件をmedian({fill_value})で補完後、グレード名列追加")
+                    #     self.processing_log.append(f"{column}: median補完{remaining_missing}件→グレード名列追加")
+                    pass  # ユーザー指示によりグレードの欠損値処理を無効化
                 
                 elif missing_rate > max_missing_rate:
                     logger.warning(f"      • {column}: 欠損率{missing_rate:.1%} > {max_missing_rate:.1%} → 列削除")
@@ -693,7 +705,7 @@ def ensure_export_dirs():
         'export/BAC', 
         'export/SRB', 
         'export/SED', 
-        'export/with_bias',          # 実際のSED+SRB統合データ出力先
+        'export/dataset',          # 実際のSED+SRB統合データ出力先
         'export/quality_reports',     # データ品質レポート保存用
         'export/logs'                 # ログ保存用
     ]
@@ -729,14 +741,14 @@ def save_quality_report(quality_checker: DataQualityChecker):
 def display_deletion_statistics():
     """
     グレード欠損による削除統計の表示
-    SEDとwith_biasディレクトリを比較して削除統計を出力
+    SEDとdatasetディレクトリを比較して削除統計を出力
     """
     try:
         from pathlib import Path
         
         # ディレクトリパス
         sed_dir = Path('export/SED/formatted')
-        bias_dir = Path('export/with_bias')
+        bias_dir = Path('export/dataset')
         
         if not sed_dir.exists() or not bias_dir.exists():
             logger.warning("⚠️ 比較用ディレクトリが見つかりません")
@@ -760,7 +772,7 @@ def display_deletion_statistics():
         sed_files_dict = {f.stem.replace('_formatted', ''): f for f in sed_files}
         
         for bias_file in bias_files:
-            base_name = bias_file.stem.replace('_formatted_with_bias', '')
+            base_name = bias_file.stem.replace('_formatted_dataset', '')
             
             if base_name in sed_files_dict:
                 sed_file = sed_files_dict[base_name]
@@ -1104,7 +1116,7 @@ def process_race_data(exclude_turf=False, turf_only=False,
         logger.info("✅ データ統合完了:")
         logger.info("   📁 SEDデータ: export/SED/")
         logger.info("   📁 SRBデータ: export/SRB/")
-        logger.info("   📁 統合データ: export/with_bias/")
+        logger.info("   📁 統合データ: export/dataset/")
         
         monitor.log_system_status("データ統合完了")
         
@@ -1115,7 +1127,7 @@ def process_race_data(exclude_turf=False, turf_only=False,
             logger.info("="*60)
             
             # サンプルファイルで品質チェック実行
-            sample_files = list(Path('export/with_bias').glob('*.csv'))
+            sample_files = list(Path('export/dataset').glob('*.csv'))
             if sample_files:
                 sample_file = sample_files[0]
                 logger.info(f"📄 サンプルファイルで品質チェック: {sample_file.name}")
@@ -1154,8 +1166,8 @@ def process_race_data(exclude_turf=False, turf_only=False,
         monitor.log_system_status("全処理完了")
         
         logger.info("\n📁 生成されたデータ:")
-        if Path('export/with_bias').exists():
-            bias_files = list(Path('export/with_bias').glob('*.csv'))
+        if Path('export/dataset').exists():
+            bias_files = list(Path('export/dataset').glob('*.csv'))
             logger.info(f"   🔗 統合データ: {len(bias_files)}ファイル")
         
         if enable_quality_check and Path('export/quality_reports').exists():
@@ -1185,7 +1197,7 @@ if __name__ == "__main__":
 🔧 このスクリプトの役割:
   このスクリプトは、複数の形式の生レースデータ（BAC, SRB, SED）を読み込み、
   それらを一つの整形されたデータセットに統合します。
-  最終的な成果物は `export/with_bias/` ディレクトリに出力され、
+  最終的な成果物は `export/dataset/` ディレクトリに出力され、
   これが後続の分析スクリプト（例: analyze_horse_racelevel.py）の入力となります。
 
 🔧 実務レベルの品質管理:

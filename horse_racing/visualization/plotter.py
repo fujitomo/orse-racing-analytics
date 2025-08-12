@@ -541,6 +541,28 @@ class RacePlotter:
             y_column="place_rate"
         )
 
+        # 最高場所レベルと複勝率の相関
+        self.plot_correlation_analysis(
+            data=horse_stats,
+            correlation=correlation_stats["correlation_place_venue_max"],
+            model=correlation_stats["model_place_venue_max"],
+            r2=correlation_stats["r2_place_venue_max"],
+            feature_name="最高場所レベルと複勝率",
+            x_column="最高場所レベル",
+            y_column="place_rate"
+        )
+
+        # 平均場所レベルと複勝率の相関
+        self.plot_correlation_analysis(
+            data=horse_stats,
+            correlation=correlation_stats["correlation_place_venue_avg"],
+            model=correlation_stats["model_place_venue_avg"],
+            r2=correlation_stats["r2_place_venue_avg"],
+            feature_name="平均場所レベルと複勝率",
+            x_column="平均場所レベル",
+            y_column="place_rate"
+        )
+
         # 馬ごとの統計データを使った箱ひげ図分析
         # 主戦クラス別の分析
         if '主戦クラス' in horse_stats.columns:

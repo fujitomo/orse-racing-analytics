@@ -263,196 +263,129 @@ def process_all_srb_files(exclude_turf=False, turf_only=False):
 
 def merge_srb_with_sed(separate_output=False, exclude_turf=False, turf_only=False):
     """
-    SRBデータとSEDデータを紐づけます。
-    レースIDをキーにして紐づけを行い、SRBのトラックバイアス情報をSEDデータに追加します。
-    すべてのバイアス情報（１角バイアス、２角バイアス、向正バイアス、３角バイアス、４角バイアス、直線バイアス、レースコメント）に
-    値がある場合のみデータを保持します。
+    SEDデータとBACデータを紐づけます。(SRBデータは結合しません)
+    指定されたキー（場コード, 回, 年月日, R）で紐づけを行い、
+    BACの賞金情報等をSEDデータに追加します。
     
     Args:
-        separate_output (bool): Trueの場合、SEDデータとSRBデータを別々のフォルダに出力します。
+        separate_output (bool): この引数は現在使用されていません。
         exclude_turf (bool): 芝コースを除外するかどうか
         turf_only (bool): 芝コースのみを処理するかどうか
     """
     # エクスポートディレクトリのパス
-    srb_export_dir = Path("export/SRB")
-    sed_export_dir = Path("export/SED")
-    sed_formatted_dir = Path("export/SED/formatted")  # formattedファイル用のディレクトリ
-    merged_dir = Path("export/SED_SRB") if not separate_output else None
-    with_bias_dir = Path("export/with_bias")  # _with_biasファイル用のディレクトリ
-    
-    # マージディレクトリが存在しない場合は作成
-    if not separate_output and merged_dir:
-        merged_dir.mkdir(exist_ok=True, parents=True)
-    with_bias_dir.mkdir(exist_ok=True, parents=True)  # with_biasディレクトリを作成
-    
-    # SRB統合ファイルの読み込み
-    srb_all_file = srb_export_dir / "formatted/SRB_ALL_formatted.csv"
-    if not srb_all_file.exists():
-        print("⚠️ SRB統合ファイルが見つかりません。先にSRBファイルの処理を実行してください。")
-        return False
-        
+    sed_formatted_dir = Path("export/SED/formatted")
+    dataset_dir = Path("export/dataset")
+    bac_formatted_dir = Path("export/BAC/formatted")
+
+    dataset_dir.mkdir(exist_ok=True, parents=True)
+
+    # --- BACデータの読み込みと集約 ---
     try:
-        srb_df = pd.read_csv(srb_all_file, encoding="utf-8", dtype=str)
-        print(f"✅ SRB統合ファイルを読み込みました。（{len(srb_df)}レコード）")
+        bac_files = list(bac_formatted_dir.glob("*.csv"))
+        if not bac_files:
+            print("⚠️ BACフォーマット済みファイルが見つかりません。")
+            return False
         
-        # SRBデータの全カラムを文字列型に変換
-        for col in srb_df.columns:
-            srb_df[col] = srb_df[col].astype(str)
+        # 結合に必要な列のみを読み込む
+        bac_cols = [
+            '場コード', '回', '年月日', 'R', '1着賞金', '2着賞金', '3着賞金', '4着賞金', '5着賞金', 'グレード', 'レース名', '頭数',
+            '1着賞金(1着算入賞金込み)', '2着賞金(2着算入賞金込み)', '平均賞金'
+        ]
+        bac_df_list = []
+        for f in bac_files:
+            try:
+                # `usecols`で列が存在しない場合のエラーをハンドリング
+                df = pd.read_csv(f, dtype=str)
+                cols_to_use = [col for col in bac_cols if col in df.columns]
+                bac_df_list.append(df[cols_to_use])
+            except Exception as e:
+                print(f"⚠️ BACファイル {f.name} の読み込み中にエラー: {e}")
+                continue
+
+        if not bac_df_list:
+            print("⚠️ 有効なBACデータが読み込めませんでした。")
+            return False
+
+        bac_df = pd.concat(bac_df_list, ignore_index=True)
         
-        # SRBデータのレースIDを使用する
-        print(f"SRBデータのレースIDサンプル: {srb_df['レースID'].head(5).tolist()}")
+        # データ型を適切に変換
+        bac_df['1着賞金'] = pd.to_numeric(bac_df['1着賞金'], errors='coerce').fillna(0)
+        bac_df['2着賞金'] = pd.to_numeric(bac_df['2着賞金'], errors='coerce').fillna(0)
+        bac_df['3着賞金'] = pd.to_numeric(bac_df['3着賞金'], errors='coerce').fillna(0)
+        bac_df['4着賞金'] = pd.to_numeric(bac_df['4着賞金'], errors='coerce').fillna(0)
+        bac_df['5着賞金'] = pd.to_numeric(bac_df['5着賞金'], errors='coerce').fillna(0)
+        bac_df['1着賞金(1着算入賞金込み)'] = pd.to_numeric(bac_df['1着賞金(1着算入賞金込み)'], errors='coerce').fillna(0)
+        bac_df['2着賞金(2着算入賞金込み)'] = pd.to_numeric(bac_df['2着賞金(2着算入賞金込み)'], errors='coerce').fillna(0)
+        bac_df['平均賞金'] = pd.to_numeric(bac_df['平均賞金'], errors='coerce').fillna(0)
+        
+        # 結合キー
+        join_keys = ['場コード', '回', '年月日', 'R']
+
+        # 結合キーがすべて存在することを確認
+        if not all(key in bac_df.columns for key in join_keys):
+            print(f"⚠️ BACデータに結合キー {join_keys} が揃っていません。")
+            return False
+
+        # キーで重複を排除（1着賞金が最大のレコードを残す）
+        bac_agg_df = bac_df.sort_values('1着賞金', ascending=False).drop_duplicates(subset=join_keys)
+        
+        print(f"✅ BACデータを読み込み、集約しました。（{len(bac_agg_df)}ユニークレース）")
     except Exception as e:
-        print(f"⚠️ SRB統合ファイルの読み込みに失敗しました: {str(e)}")
+        print(f"⚠️ BACデータの読み込みまたは集約に失敗しました: {str(e)}")
         import traceback
         traceback.print_exc()
         return False
     
-    # 必要なカラムのみ抽出
-    bias_columns = ['レースID', '１角バイアス', '２角バイアス', '向正バイアス', 
-                    '３角バイアス', '４角バイアス', '直線バイアス', 'レースコメント']
-    srb_bias_df = srb_df[bias_columns].copy()
-    
-    # SRBのバイアス情報を確認（デバッグ用）
-    srb_sample = srb_bias_df.head(5)
-    print("SRBバイアス情報サンプル:")
-    for _, row in srb_sample.iterrows():
-        print(f"レースID: {row['レースID']}, １角: {row['１角バイアス']}, ２角: {row['２角バイアス']}")
-    
-    # 重複を排除（同じレースIDのデータが複数ある場合）
-    srb_bias_df = srb_bias_df.drop_duplicates(subset=['レースID'])
-    print(f"重複排除後のSRBデータ数: {len(srb_bias_df)}")
-    
-    # SEDフォーマット済みファイルの処理
+    # --- SEDフォーマット済みファイルの処理 ---
     processed_count = 0
-    matched_race_count = 0
-    sed_files = list(sed_formatted_dir.glob("SED*_formatted.csv"))  # formattedディレクトリから検索
+    sed_files = list(sed_formatted_dir.glob("SED*_formatted.csv"))
     print(f"\n処理対象のSEDファイル数: {len(sed_files)}")
-    print("処理対象ファイル:")
-    for file in sed_files:
-        print(f"- {file.name}")
     
     for sed_file in sed_files:
         try:
-            # SEDファイルの読み込み
             sed_df = pd.read_csv(sed_file, encoding="utf-8", dtype=str)
             print(f"\n処理中: {sed_file.name}（{len(sed_df)}レコード）")
             
-            # 芝コースを除外する場合
+            # BAC由来の賞金と重複するため、SED側の賞金カラムを削除
+            prize_cols_to_drop = ['本賞金', '収得賞金', '1着賞金']
+            sed_df = sed_df.drop(columns=[col for col in prize_cols_to_drop if col in sed_df.columns])
+            
+            # (芝・ダートのフィルタリング処理は変更なし)
             if exclude_turf and '芝ダ障害コード' in sed_df.columns:
-                original_len = len(sed_df)
                 sed_df = sed_df[sed_df['芝ダ障害コード'] != '芝']
-                excluded = original_len - len(sed_df)
-                print(f"芝コースを除外: {excluded}件のレコードを除外しました（{len(sed_df)}件残り）")
-                
-            # 芝コースのみを処理する場合
             if turf_only and '芝ダ障害コード' in sed_df.columns:
-                original_len = len(sed_df)
                 sed_df = sed_df[sed_df['芝ダ障害コード'] == '芝']
-                excluded = original_len - len(sed_df)
-                print(f"芝コース以外を除外: {excluded}件のレコードを除外しました（{len(sed_df)}件残り）")
+
+            # SED側の結合キーの存在確認と作成
+            # '年'が2桁の場合のみ4桁に変換
+            if sed_df['年'].str.len().max() == 2:
+                sed_df['年'] = sed_df['年'].apply(lambda x: convert_year_to_4digits(x, sed_file.name))
             
-            # デバッグ情報：SEDデータのカラムを表示
-            print("\nSEDデータのカラム:")
-            print(sed_df.columns.tolist())
-            
-            # 全カラムを文字列型に変換
-            for col in sed_df.columns:
-                sed_df[col] = sed_df[col].astype(str)
-            
-            # SEDデータにレースIDを作成（紐づけ用）
-            # 場コード + 年 + 回 + 日 + R の形式
-            sed_df['レースID'] = sed_df['場コード'] + sed_df['年'] + sed_df['回'] + sed_df['日'] + sed_df['R']
-            
-            # デバッグ情報：SEDデータのサンプルを表示
-            print("\nSEDデータのサンプル（最初の5レコード）:")
-            print(sed_df[['レースID', '馬名', '着順', '場コード', '年', '回', '日', 'R']].head())
-            
-            # デバッグ情報：SRBデータのサンプルを表示
-            print("\nSRBデータのサンプル（最初の5レコード）:")
-            print(srb_bias_df[['レースID', '１角バイアス', '２角バイアス']].head())
-            
-            # データ結合: 左外部結合（SEDデータにSRBデータを紐づける）
+            # 'R'を2桁ゼロ埋め
+            if 'R' in sed_df.columns:
+                sed_df['R'] = sed_df['R'].str.zfill(2)
+
+            if not all(key in sed_df.columns for key in join_keys):
+                print(f"  ⚠️ SEDファイル {sed_file.name} に結合キー {join_keys} が揃っていません。スキップします。")
+                continue
+
+            # データ結合: SEDデータに集約済みBACデータを紐づける
             merged_df = pd.merge(
                 sed_df,
-                srb_bias_df,
-                on='レースID',
+                bac_agg_df,
+                on=join_keys,
                 how='left'
             )
             
-            # バイアス情報がすべて揃っているデータのみを抽出
-            bias_columns = ['１角バイアス', '２角バイアス', '向正バイアス', '３角バイアス', '４角バイアス', '直線バイアス', 'レースコメント']
-            
-            # 各カラムについて、NaN値または空文字列でないかをチェック
-            # すべての列がNaNでないAND空文字列でないレコードを選択する
-            has_all_bias_info = merged_df[bias_columns].apply(lambda x: ~x.isna() & (x.str.strip() != ''), axis=0).all(axis=1)
-            
-            # バイアス情報詳細のデバッグ出力
-            print("\n詳細なバイアス情報チェック:")
-            sample_indices = merged_df.sample(min(5, len(merged_df))).index
-            for idx in sample_indices:
-                row = merged_df.loc[idx]
-                print(f"レースID: {row['レースID']}, レース名: {row.get('レース名', 'N/A')}")
-                for col in bias_columns:
-                    value = row[col]
-                    is_na = pd.isna(value)
-                    is_empty = False if is_na else value.strip() == ''
-                    status = "❌ NaN" if is_na else ("❌ 空文字" if is_empty else "✓ 有効")
-                    print(f"  {col}: [{status}] {value if not is_na else 'NaN'}")
-                print(f"  結果: {'✓ 保持' if not is_na and not is_empty else '❌ 除外'}")
-                print("  " + "-" * 50)
-            
-            # バイアス情報がすべて揃っているデータのみを抽出
-            filtered_df = merged_df[has_all_bias_info]
-            
-            if len(filtered_df) == 0:
-                print(f"  ⚠️ {sed_file.name} のすべてのレコードでバイアス情報のすべての項目が揃っていないため、出力をスキップします。")
-                continue
-                
-            print(f"  ✓ すべてのバイアス情報が揃っているデータ: {len(filtered_df)} レコード（{len(merged_df) - len(filtered_df)} レコードを除外）")
-            
-            # デバッグ情報：バイアス情報の状態を表示
-            print("\nバイアス情報の状態:")
-            for col in bias_columns:
-                non_empty = filtered_df[col].notna().sum()
-                non_empty_str = (filtered_df[col].str.strip() != '').sum()
-                print(f"  {col}: 非NaN値={non_empty}, 非空文字列={non_empty_str}")
-            
-            # マッチしたレース数をカウント
-            matched_races = len(filtered_df) > 0
-            if matched_races:
-                matched_count = len(filtered_df)
-                matched_race_count += len(filtered_df['レースID'].unique())
-                print(f"  ✓ {matched_count} レコードのトラックバイアス情報が完全に紐づきました。")
-            else:
-                print("  ⚠️ すべてのバイアス情報が揃ったレコードがありませんでした。")
-                continue  # すべてのバイアス情報が揃っていない場合はスキップ
-            
             # 欠損値処理の実行（グレード推定処理含む）
-            import sys
-            import os
-            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
             from process_race_data import MissingValueHandler
             missing_handler = MissingValueHandler()
-            filtered_df = missing_handler.handle_missing_values(filtered_df)
-            
-            # グレード名列の追加（既に追加済みの場合はスキップ）
-            if 'グレード名' not in filtered_df.columns:
-                filtered_df = add_grade_name_column(filtered_df)
-            
+            final_df = missing_handler.handle_missing_values(merged_df)
+
             # 結果の保存
-            if separate_output:
-                # すべてのファイルをwith_biasディレクトリに保存
-                output_file = with_bias_dir / f"{sed_file.stem}_with_bias.csv"
-                
-                # 結合したデータを保存（フィルタリング済みのデータを使用）
-                filtered_df.to_csv(output_file, index=False, encoding="utf-8")
-                print(f"  ✓ データを {output_file} に保存しました。")
-                
-            else:
-                # 統合データを保存
-                output_file = with_bias_dir / f"{sed_file.stem}_with_bias.csv"
-                filtered_df.to_csv(output_file, index=False, encoding="utf-8")
-                print(f"  ✓ 結果を {output_file} に保存しました。")
+            output_file = dataset_dir / f"{sed_file.stem}_dataset.csv"
+            final_df.to_csv(output_file, index=False, encoding="utf-8")
+            print(f"  ✓ データを {output_file} に保存しました。")
             
             processed_count += 1
             
@@ -461,17 +394,14 @@ def merge_srb_with_sed(separate_output=False, exclude_turf=False, turf_only=Fals
             import traceback
             traceback.print_exc()
     
-    # 処理結果の報告
+    # --- 処理結果の報告 ---
     if processed_count > 0:
-        print(f"\n✅ 合計 {processed_count} 件のSEDファイルにトラックバイアス情報を追加しました。")
-        print(f"✅ 合計 {matched_race_count} レースのバイアス情報をマッチングしました。")
-        if separate_output:
-            print("✅ SEDデータとSRBデータを別々のフォルダに出力しました。")
+        print(f"\n✅ 合計 {processed_count} 件のSEDファイルにBAC情報を追加しました。")
         return True
     else:
         print("\n⚠️ SEDファイルの処理に失敗しました。")
         return False
-
+    
 if __name__ == "__main__":
     import argparse
     

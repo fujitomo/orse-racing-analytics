@@ -47,11 +47,45 @@ def process_bac_record(record, index, exclude_turf=False, turf_only=False):
             
         # 芝コースのみ処理する場合
         if turf_only and 芝ダ障害コード != "芝":
-            print(f"芝コース以外を除外: レコード {index}")
+            # print(f"芝コース以外を除外: レコード {index}") # ログが冗長なためコメントアウト
             return None
 
+        # レースIDを生成
+        レースID = (
+            場コード + 
+            year_4digit + 
+            record[4:5].decode("shift_jis", errors="ignore").strip() + 
+            record[5:6].decode("shift_jis", errors="ignore").strip() + 
+            record[6:8].decode("shift_jis", errors="ignore").strip()
+        )
+
+        # 賞金フィールドのデコードと数値変換
+        try:
+            prize1 = int(record[125:130].decode("shift_jis", errors="ignore").strip())
+            prize2 = int(record[130:135].decode("shift_jis", errors="ignore").strip())
+            prize3 = int(record[135:140].decode("shift_jis", errors="ignore").strip())
+            prize4 = int(record[140:145].decode("shift_jis", errors="ignore").strip())
+            prize5 = int(record[145:150].decode("shift_jis", errors="ignore").strip())
+            added_prize1 = int(record[150:155].decode("shift_jis", errors="ignore").strip())
+            added_prize2 = int(record[155:160].decode("shift_jis", errors="ignore").strip())
+        except ValueError:
+            # 数値変換に失敗した場合は、0として扱う
+            prize1, prize2, prize3, prize4, prize5, added_prize1, added_prize2 = 0, 0, 0, 0, 0, 0, 0
+
+        # 1着賞金(1着算入賞金込み) の計算
+        total_first_prize = prize1 + added_prize1
+
+        # 2着賞金(2着算入賞金込み) の計算
+        total_second_prize = prize2 + added_prize2
+
+        # 平均賞金の計算
+        total_prize_pool = prize1 + prize2 + prize3 + prize4 + prize5 + added_prize1 + added_prize2
+        average_prize = total_prize_pool / 5 if total_prize_pool > 0 else 0
+
         fields = [
-            場名,  # 場コード
+            レースID, # レースIDを追加
+            場コード,
+            場名,
             year_4digit,  # 年（4桁）
             record[4:5].decode("shift_jis", errors="ignore").strip(),  # 回
             record[5:6].decode("shift_jis", errors="ignore").strip(),  # 日
@@ -75,15 +109,18 @@ def process_bac_record(record, index, exclude_turf=False, turf_only=False):
             record[98:106].decode("shift_jis", errors="ignore").strip(),  # レース名短縮（8バイト）
             record[106:124].decode("shift_jis", errors="ignore").strip(),  # レース名９文字（18バイト）
             JRA_MASTERS["データ区分"].get(record[124:125].decode("shift_jis", errors="ignore").strip()),  # データ区分（1バイト）
-            record[125:130].decode("shift_jis", errors="ignore").strip(),  # 1着賞金（5バイト）
-            record[130:135].decode("shift_jis", errors="ignore").strip(),  # 2着賞金（5バイト）
-            record[135:140].decode("shift_jis", errors="ignore").strip(),  # 3着賞金（5バイト）
-            record[140:145].decode("shift_jis", errors="ignore").strip(),  # 4着賞金（5バイト）
-            record[145:150].decode("shift_jis", errors="ignore").strip(),  # 5着賞金（5バイト）
-            record[150:155].decode("shift_jis", errors="ignore").strip(),  # 1着算入賞金（5バイト）
-            record[155:160].decode("shift_jis", errors="ignore").strip(),  # 2着算入賞金（5バイト）
+            prize1,  # 1着賞金
+            prize2,  # 2着賞金
+            prize3,  # 3着賞金
+            prize4,  # 4着賞金
+            prize5,  # 5着賞金
+            added_prize1,  # 1着算入賞金
+            added_prize2,  # 2着算入賞金
             record[160:176].decode("shift_jis", errors="ignore").strip(),  # 馬券発売フラグ（16バイト）
-            record[176:177].decode("shift_jis", errors="ignore").strip()  # WIN5フラグ（1バイト）
+            record[176:177].decode("shift_jis", errors="ignore").strip(),  # WIN5フラグ（1バイト）
+            total_first_prize, # 1着賞金(1着算入賞金込み)
+            total_second_prize, # 2着賞金(2着算入賞金込み)
+            average_prize # 平均賞金
         ]
 
         # 必須フィールドの検証
@@ -111,11 +148,12 @@ def format_bac_file(input_file, output_file, exclude_turf=False, turf_only=False
     """
     # ヘッダー定義
     headers = [
-        "場コード", "年", "回", "日", "R", "年月日", "発走時間", "距離",
+        "レースID", "場コード", "場名", "年", "回", "日", "R", "年月日", "発走時間", "距離",
         "芝ダ障害コード", "右左", "内外", "種別", "条件", "記号", "重量", "グレード",
         "レース名", "回数", "頭数", "コース", "開催区分", "レース名短縮", "レース名９文字",
         "データ区分", "1着賞金", "2着賞金", "3着賞金", "4着賞金", "5着賞金",
-        "1着算入賞金", "2着算入賞金", "馬券発売フラグ", "WIN5フラグ"
+        "1着算入賞金", "2着算入賞金", "馬券発売フラグ", "WIN5フラグ",
+        "1着賞金(1着算入賞金込み)", "2着賞金(2着算入賞金込み)", "平均賞金"
     ]
     
     # process_recordに芝コース除外オプションを渡す
