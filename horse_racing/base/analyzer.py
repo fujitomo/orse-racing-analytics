@@ -28,8 +28,16 @@ class BaseAnalyzer(ABC):
 
     def _setup_output_dir(self) -> None:
         """出力ディレクトリの設定"""
-        self.output_dir = Path(self.config.output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.output_dir = Path(self.config.output_dir)
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # ディレクトリが正常に作成されたか確認
+            if not self.output_dir.exists() or not self.output_dir.is_dir():
+                raise OSError(f"出力ディレクトリの作成に失敗しました: {self.output_dir}")
+                
+        except (OSError, PermissionError) as e:
+            raise OSError(f"出力ディレクトリの設定でエラーが発生しました: {e}") from e
 
     @abstractmethod
     def load_data(self) -> pd.DataFrame:

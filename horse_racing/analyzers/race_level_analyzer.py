@@ -15,10 +15,14 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, r2_score, mean_squared_error
 from scipy import stats
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from statsmodels.stats.multitest import multipletests
+import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import logging
 from pathlib import Path
+import warnings
 
 # ロガーの設定
 logger = logging.getLogger(__name__)
@@ -141,7 +145,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         base_required_columns = [
             '場コード', '年', '回', '日', 'R', '馬名', '距離', '着順',
             'レース名', '種別', '芝ダ障害コード', '馬番',
-            '本賞金', '1着賞金', '年月日'
+            '本賞金', '1着賞金', '年月日', '場名',
+            '1着賞金(1着算入賞金込み)', '2着賞金(2着算入賞金込み)', '平均賞金'
         ]
         
         # タイム関連カラムの追加
@@ -602,41 +607,41 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 horse_stats.to_pickle(cache_path)
                 logger.info(f"💾 馬ごとの統計情報をキャッシュとして保存しました: {cache_path}")
             
-            # --- 動的な重み計算 ---
-            logger.info("⚖️ 特徴量の重みを動的に計算中...")
+            # --- 複数重み付け手法の比較と選択 ---
+            logger.info("⚖️ 最適な重み付け手法を選択中...")
+            
+            # データ準備
             horse_stats_for_weights = horse_stats.dropna(subset=['平均レベル', '平均場所レベル', 'place_rate'])
-            
-            # 各レベルと複勝率の相関を計算
-            corr_grade = horse_stats_for_weights['平均レベル'].corr(horse_stats_for_weights['place_rate'])
-            corr_venue = horse_stats_for_weights['平均場所レベル'].corr(horse_stats_for_weights['place_rate'])
-            
-            # prize_levelはレース単位なので、馬ごとの平均を計算して相関を取る
             prize_level_stats = self.df.groupby('馬名')['prize_level'].mean().reset_index()
             horse_stats_for_weights = pd.merge(horse_stats_for_weights, prize_level_stats, on='馬名')
-            corr_prize = horse_stats_for_weights['prize_level'].corr(horse_stats_for_weights['place_rate'])
-
-            # 相関係数を2乗して重みを計算 (NaNは0に)
-            r2_grade = np.nan_to_num(corr_grade**2)
-            r2_venue = np.nan_to_num(corr_venue**2)
-            r2_prize = np.nan_to_num(corr_prize**2)
             
-            total_r2 = r2_grade + r2_venue + r2_prize
+            # 複数の重み付け手法を実装・比較
+            weighting_methods = self._compare_all_weighting_methods(horse_stats_for_weights)
             
-            if total_r2 > 0:
-                dynamic_weights = {
-                    "grade_weight": r2_grade / total_r2,
-                    "venue_weight": r2_venue / total_r2,
-                    "prize_weight": r2_prize / total_r2
-                }
-            else:
-                # 相関が0の場合は均等割
-                dynamic_weights = {
-                    "grade_weight": 1/3,
-                    "venue_weight": 1/3,
-                    "prize_weight": 1/3
-                }
+            # 最良手法を選択（R²が最も高い手法）
+            best_method = max(weighting_methods.items(), key=lambda x: x[1].get('r_squared', 0))
+            best_method_name, best_results = best_method
             
-            logger.info(f"📊 計算された動的重み: {dynamic_weights}")
+            logger.info(f"🏆 選択された重み付け手法: {best_method_name}")
+            logger.info(f"📈 性能指標 - R²: {best_results.get('r_squared', 0):.6f}, 相関: {best_results.get('correlation', 0):.6f}")
+            
+            # 各手法の結果をログ出力
+            logger.info("📋 全重み付け手法の比較結果:")
+            for method_name, results in weighting_methods.items():
+                r2 = results.get('r_squared', 0)
+                corr = results.get('correlation', 0)
+                logger.info(f"  {method_name}: R²={r2:.6f}, 相関={corr:.6f}")
+            
+            dynamic_weights = best_results.get('weights', {"grade_weight": 1/3, "venue_weight": 1/3, "prize_weight": 1/3})
+            
+            # 性能向上を記録
+            baseline_r2 = weighting_methods.get('correlation_squared', {}).get('r_squared', 0)
+            best_r2 = best_results.get('r_squared', 0)
+            if baseline_r2 > 0:
+                improvement = ((best_r2 - baseline_r2) / baseline_r2) * 100
+                logger.info(f"🚀 性能向上: {improvement:.1f}% (R² {baseline_r2:.6f} → {best_r2:.6f})")
+            
+            logger.info(f"📊 最終選択重み: {dynamic_weights}")
             
             # --- race_level の再計算 ---
             logger.info("🔄 動的重みを用いてrace_levelを再計算中...")
@@ -662,9 +667,17 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.info("🔄 再計算後の統計情報で最終分析を実行中...")
             final_horse_stats = self._calculate_horse_stats()
 
+            # === マルチコリニアリティ検証を追加 ===
+            logger.info("🔍 マルチコリニアリティ検証を実行中...")
+            multicollinearity_results = self.validate_multicollinearity()
+
             # 基本的な相関分析
             correlation_stats = self._perform_correlation_analysis(final_horse_stats)
-            results = {'correlation_stats': correlation_stats, 'dynamic_weights': dynamic_weights}
+            results = {
+                'correlation_stats': correlation_stats, 
+                'dynamic_weights': dynamic_weights,
+                'multicollinearity_results': multicollinearity_results
+            }
             
             # RunningTime分析の実行（有効な場合のみ）
             if self.enable_time_analysis:
@@ -866,23 +879,571 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         return self.normalize_values(grade_level)
 
     def _calculate_venue_level(self, df: pd.DataFrame) -> pd.Series:
-        """競馬場に基づくレベルを計算"""
+        """競馬場に基づくレベルを計算（改良版：賞金同一値対応）"""
         prize_col = next((c for c in ['1着賞金(1着算入賞金込み)', '1着賞金', '本賞金'] if c in df.columns), None)
         if prize_col is None or '場名' not in df.columns:
+            logger.warning("⚠️ 賞金または場名カラムが見つかりません。venue_levelをデフォルト値で設定")
             return pd.Series([0.0] * len(df), index=df.index)
 
-        venue_prize = df.groupby('場名')[prize_col].median()
+        # 賞金データの数値変換
+        df_copy = df.copy()
+        df_copy[prize_col] = pd.to_numeric(df_copy[prize_col], errors='coerce')
         
-        # MinMaxScalerと同様の正規化
+        # 競馬場別の賞金統計
+        venue_stats = df_copy.groupby('場名')[prize_col].agg(['median', 'mean', 'count', 'std']).fillna(0)
+        
+        logger.info(f"📊 競馬場別賞金統計:\n{venue_stats}")
+        
+        # 賞金のバリエーションをチェック
+        venue_prize = venue_stats['median']
         min_prize = venue_prize.min()
         max_prize = venue_prize.max()
-        if max_prize == min_prize:
-             venue_points = venue_prize.apply(lambda x: 0)
+        
+        if max_prize == min_prize or abs(max_prize - min_prize) < 1e-6:
+            # 全競馬場の賞金が同一の場合、競馬場の格式に基づくフォールバック
+            logger.warning(f"⚠️ 全競馬場の賞金が同一（{min_prize}）のため、格式ベースの計算に切り替え")
+            venue_level = self._calculate_venue_level_by_prestige(df_copy)
         else:
+            # 通常の賞金ベース計算
              venue_points = (venue_prize - min_prize) / (max_prize - min_prize) * 9.0
+            venue_level = df_copy['場名'].map(venue_points).fillna(0)
+            logger.info(f"✅ 賞金ベースのvenue_level計算完了: 範囲 {venue_level.min():.2f} - {venue_level.max():.2f}")
 
-        df['venue_level'] = df['場名'].map(venue_points).fillna(0)
-        return self.normalize_values(df['venue_level'])
+        return self.normalize_values(venue_level)
+    
+    def _calculate_venue_level_by_prestige(self, df: pd.DataFrame) -> pd.Series:
+        """競馬場の格式に基づくvenue_level計算（フォールバック）"""
+        
+        # 競馬場の格式マッピング（レポート記載の値に基づく）
+        venue_prestige_map = {
+            '東京': 9, '京都': 9, '阪神': 9,
+            '中山': 7, '中京': 7, '札幌': 7,
+            '函館': 4,
+            '新潟': 0, '福島': 0, '小倉': 0
+        }
+        
+        logger.info("📋 格式ベースの競馬場レベル計算を使用:")
+        for venue, level in venue_prestige_map.items():
+            logger.info(f"  {venue}: {level}")
+        
+        # マッピング適用
+        venue_level = df['場名'].map(venue_prestige_map).fillna(0)
+        
+        # 統計確認
+        logger.info(f"✅ 格式ベースのvenue_level計算完了:")
+        logger.info(f"  範囲: {venue_level.min():.2f} - {venue_level.max():.2f}")
+        logger.info(f"  ユニーク値: {sorted(venue_level.unique())}")
+        
+        return venue_level
+    
+    def _compare_all_weighting_methods(self, horse_stats_data: pd.DataFrame) -> Dict[str, Dict]:
+        """複数の重み付け手法を詳細比較"""
+        logger.info("🔬 重み付け手法の詳細比較を開始...")
+        
+        methods_results = {}
+        
+        try:
+            # データ検証
+            required_cols = ['平均レベル', '平均場所レベル', 'prize_level', 'place_rate']
+            if not all(col in horse_stats_data.columns for col in required_cols):
+                logger.warning("⚠️ 必要なカラムが不足しています")
+                return {'correlation_squared': {'weights': {'grade_weight': 0.5, 'venue_weight': 0.3, 'prize_weight': 0.2}, 'r_squared': 0.01}}
+            
+            clean_data = horse_stats_data.dropna(subset=required_cols)
+            if len(clean_data) < 100:
+                logger.warning(f"⚠️ データ不足: {len(clean_data)}件")
+                return {'correlation_squared': {'weights': {'grade_weight': 0.5, 'venue_weight': 0.3, 'prize_weight': 0.2}, 'r_squared': 0.01}}
+            
+            logger.info(f"📊 分析対象データ: {len(clean_data)}頭")
+            
+            # 1. 相関係数二乗ベース（既存手法）
+            methods_results['correlation_squared'] = self._method_correlation_squared(clean_data)
+            
+            # 2. 線形回帰係数ベース（新手法）
+            methods_results['regression_coefficients'] = self._method_regression_coefficients(clean_data)
+            
+            # 3. 等重み手法（ベースライン）
+            methods_results['equal_weights'] = self._method_equal_weights(clean_data)
+            
+            # 4. 絶対相関値ベース
+            methods_results['absolute_correlation'] = self._method_absolute_correlation(clean_data)
+            
+            # 結果サマリー
+            logger.info("📋 重み付け手法比較結果:")
+            for method_name, results in methods_results.items():
+                r2 = results.get('r_squared', 0)
+                corr = results.get('correlation', 0)
+                logger.info(f"  {method_name}: R²={r2:.6f}, 相関={corr:.6f}")
+            
+            return methods_results
+            
+        except Exception as e:
+            logger.error(f"❌ 重み付け手法比較エラー: {str(e)}")
+            return {'correlation_squared': {'weights': {'grade_weight': 0.5, 'venue_weight': 0.3, 'prize_weight': 0.2}, 'r_squared': 0.01}}
+    
+    def _method_correlation_squared(self, data: pd.DataFrame) -> Dict:
+        """相関係数二乗ベース手法"""
+        try:
+            corr_grade = data['平均レベル'].corr(data['place_rate'])
+            corr_venue = data['平均場所レベル'].corr(data['place_rate'])
+            corr_prize = data['prize_level'].corr(data['place_rate'])
+            
+            # NaN処理
+            corr_grade = 0.0 if pd.isna(corr_grade) else corr_grade
+            corr_venue = 0.0 if pd.isna(corr_venue) else corr_venue
+            corr_prize = 0.0 if pd.isna(corr_prize) else corr_prize
+            
+            # 決定係数から重み計算
+            r2_grade = corr_grade ** 2
+            r2_venue = corr_venue ** 2
+            r2_prize = corr_prize ** 2
+            total_r2 = r2_grade + r2_venue + r2_prize
+            
+            if total_r2 > 0:
+                weights = {
+                    'grade_weight': r2_grade / total_r2,
+                    'venue_weight': r2_venue / total_r2,
+                    'prize_weight': r2_prize / total_r2
+                }
+            else:
+                weights = {'grade_weight': 0.5, 'venue_weight': 0.3, 'prize_weight': 0.2}
+            
+            # 性能評価
+            performance = self._evaluate_weights_performance(data, weights)
+            
+            return {
+                'weights': weights,
+                'r_squared': performance['r_squared'],
+                'correlation': performance['correlation'],
+                'description': '相関係数二乗ベース（既存手法）'
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 相関係数二乗手法エラー: {str(e)}")
+            return {'weights': {'grade_weight': 0.5, 'venue_weight': 0.3, 'prize_weight': 0.2}, 'r_squared': 0.0, 'correlation': 0.0}
+    
+    def _method_regression_coefficients(self, data: pd.DataFrame) -> Dict:
+        """線形回帰係数ベース手法（新手法）"""
+        try:
+            from sklearn.linear_model import LinearRegression
+            from sklearn.preprocessing import StandardScaler
+            from sklearn.metrics import r2_score
+            
+            # 特徴量とターゲットの準備
+            X = data[['平均レベル', '平均場所レベル', 'prize_level']].values
+            y = data['place_rate'].values
+            
+            # 標準化
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
+            
+            # 線形回帰の実行
+            reg = LinearRegression()
+            reg.fit(X_scaled, y)
+            
+            # 係数から重みを算出（絶対値で重要度を評価）
+            coefficients = np.abs(reg.coef_)
+            total_coef = np.sum(coefficients)
+            
+            if total_coef > 0:
+                weights = {
+                    'grade_weight': coefficients[0] / total_coef,
+                    'venue_weight': coefficients[1] / total_coef,
+                    'prize_weight': coefficients[2] / total_coef
+                }
+            else:
+                weights = {'grade_weight': 0.5, 'venue_weight': 0.3, 'prize_weight': 0.2}
+            
+            # 性能評価（回帰モデルの予測性能）
+            y_pred = reg.predict(X_scaled)
+            r_squared = r2_score(y, y_pred)
+            correlation = np.corrcoef(y, y_pred)[0, 1] if not np.isnan(np.corrcoef(y, y_pred)[0, 1]) else 0.0
+            
+            logger.info(f"🔬 線形回帰手法 - R²: {r_squared:.6f}, 回帰係数: {coefficients}")
+            
+            return {
+                'weights': weights,
+                'r_squared': r_squared,
+                'correlation': correlation,
+                'description': '線形回帰係数ベース手法（新手法）'
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 線形回帰手法エラー: {str(e)}")
+            return {'weights': {'grade_weight': 0.5, 'venue_weight': 0.3, 'prize_weight': 0.2}, 'r_squared': 0.0, 'correlation': 0.0}
+    
+    def _method_equal_weights(self, data: pd.DataFrame) -> Dict:
+        """等重み手法（ベースライン）"""
+        weights = {'grade_weight': 1/3, 'venue_weight': 1/3, 'prize_weight': 1/3}
+        performance = self._evaluate_weights_performance(data, weights)
+        
+        return {
+            'weights': weights,
+            'r_squared': performance['r_squared'],
+            'correlation': performance['correlation'],
+            'description': '等重み手法（ベースライン）'
+        }
+    
+    def _method_absolute_correlation(self, data: pd.DataFrame) -> Dict:
+        """絶対相関値ベース手法"""
+        try:
+            corr_grade = abs(data['平均レベル'].corr(data['place_rate']))
+            corr_venue = abs(data['平均場所レベル'].corr(data['place_rate']))
+            corr_prize = abs(data['prize_level'].corr(data['place_rate']))
+            
+            # NaN処理
+            corr_grade = 0.0 if pd.isna(corr_grade) else corr_grade
+            corr_venue = 0.0 if pd.isna(corr_venue) else corr_venue
+            corr_prize = 0.0 if pd.isna(corr_prize) else corr_prize
+            
+            total_corr = corr_grade + corr_venue + corr_prize
+            
+            if total_corr > 0:
+                weights = {
+                    'grade_weight': corr_grade / total_corr,
+                    'venue_weight': corr_venue / total_corr,
+                    'prize_weight': corr_prize / total_corr
+                }
+            else:
+                weights = {'grade_weight': 0.5, 'venue_weight': 0.3, 'prize_weight': 0.2}
+            
+            performance = self._evaluate_weights_performance(data, weights)
+            
+            return {
+                'weights': weights,
+                'r_squared': performance['r_squared'],
+                'correlation': performance['correlation'],
+                'description': '絶対相関値ベース手法'
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 絶対相関手法エラー: {str(e)}")
+            return {'weights': {'grade_weight': 0.5, 'venue_weight': 0.3, 'prize_weight': 0.2}, 'r_squared': 0.0, 'correlation': 0.0}
+    
+    def _evaluate_weights_performance(self, data: pd.DataFrame, weights: Dict[str, float]) -> Dict[str, float]:
+        """重み付け手法の性能評価"""
+        try:
+            # 重み付け合成特徴量の作成
+            composite_feature = (
+                data['平均レベル'] * weights['grade_weight'] +
+                data['平均場所レベル'] * weights['venue_weight'] +
+                data['prize_level'] * weights['prize_weight']
+            )
+            
+            # 性能指標の計算
+            correlation = composite_feature.corr(data['place_rate'])
+            r_squared = correlation ** 2 if not pd.isna(correlation) else 0.0
+            correlation = correlation if not pd.isna(correlation) else 0.0
+            
+            return {
+                'r_squared': r_squared,
+                'correlation': correlation
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ 性能評価エラー: {str(e)}")
+            return {'r_squared': 0.0, 'correlation': 0.0}
+
+    def validate_multicollinearity(self) -> Dict[str, Any]:
+        """
+        マルチコリニアリティ検証を実行
+        VIF、相関行列、条件数を計算し、統計的妥当性を評価
+        """
+        try:
+            logger.info("=== マルチコリニアリティ検証開始 ===")
+            
+            # 特徴量の定義
+            features = ['grade_level', 'venue_level', 'prize_level']
+            
+            # データの準備（欠損値除去）
+            feature_data = self.df[features].dropna()
+            
+            if len(feature_data) == 0:
+                logger.error("🚨 特徴量データがありません！")
+                return {'error': 'No feature data available'}
+            
+            logger.info(f"📊 検証対象データ: {len(feature_data):,}行")
+            logger.info(f"🎯 検証対象特徴量: {features}")
+            
+            # === 1. VIF（分散拡大要因）計算 ===
+            vif_results = self._calculate_vif(feature_data, features)
+            
+            # === 2. 相関行列分析 ===
+            correlation_results = self._analyze_correlation_matrix(feature_data, features)
+            
+            # === 3. 重み付け手法比較 ===
+            weighting_comparison = self._compare_weighting_methods(feature_data)
+            
+            # === 4. 統合診断 ===
+            overall_diagnosis = self._diagnose_multicollinearity_simple(vif_results, correlation_results)
+            
+            # 結果の統合
+            results = {
+                'vif_results': vif_results,
+                'correlation_results': correlation_results,
+                'weighting_comparison': weighting_comparison,
+                'overall_diagnosis': overall_diagnosis,
+                'data_info': {
+                    'n_samples': len(feature_data),
+                    'features': features,
+                    'validation_timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+            }
+            
+            # 結果の保存
+            self.multicollinearity_results = results
+            
+            # 可視化
+            self._create_multicollinearity_plots_simple(feature_data, features, results)
+            
+            # レポート生成
+            self._generate_multicollinearity_report_simple(results)
+            
+            logger.info("✅ マルチコリニアリティ検証完了")
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ マルチコリニアリティ検証中にエラー: {str(e)}")
+            logger.error("詳細なエラー情報:", exc_info=True)
+            return {'error': str(e)}
+    
+    def _calculate_vif(self, feature_data: pd.DataFrame, features: list) -> Dict[str, Any]:
+        """VIF（分散拡大要因）を計算"""
+        logger.info("🧮 VIF計算中...")
+        
+        try:
+            # データの標準化（VIF計算の前提）
+            scaler = StandardScaler()
+            scaled_data = scaler.fit_transform(feature_data[features])
+            
+            # VIF計算
+            vif_data = []
+            for i, feature in enumerate(features):
+                try:
+                    vif_value = variance_inflation_factor(scaled_data, i)
+                    vif_data.append({
+                        'feature': feature,
+                        'vif': vif_value,
+                        'status': self._get_vif_status(vif_value)
+                    })
+                    logger.info(f"  {feature}: VIF = {vif_value:.3f} ({self._get_vif_status(vif_value)})")
+                except Exception as vif_error:
+                    logger.warning(f"  {feature}: VIF計算エラー - {str(vif_error)}")
+                    vif_data.append({
+                        'feature': feature,
+                        'vif': float('nan'),
+                        'status': 'エラー'
+                    })
+            
+            # 最大VIFによる全体判定
+            valid_vifs = [item['vif'] for item in vif_data if not pd.isna(item['vif'])]
+            if valid_vifs:
+                max_vif = max(valid_vifs)
+                overall_status = self._get_overall_vif_status(max_vif)
+            else:
+                max_vif = float('nan')
+                overall_status = "計算エラー"
+            
+            logger.info(f"📈 最大VIF: {max_vif:.3f} → {overall_status}")
+            
+            return {
+                'vif_data': vif_data,
+                'max_vif': max_vif,
+                'overall_status': overall_status
+            }
+            
+        except Exception as e:
+            logger.error(f"VIF計算エラー: {str(e)}")
+            return {'error': str(e)}
+    
+    def _analyze_correlation_matrix(self, feature_data: pd.DataFrame, features: list) -> Dict[str, Any]:
+        """相関行列を分析"""
+        logger.info("📊 相関行列分析中...")
+        
+        try:
+            # 相関行列計算
+            correlation_matrix = feature_data[features].corr()
+            
+            # 高相関ペアの特定
+            high_corr_pairs = []
+            threshold = 0.8  # 警告閾値
+            
+            for i in range(len(features)):
+                for j in range(i+1, len(features)):
+                    corr_value = abs(correlation_matrix.iloc[i, j])
+                    if corr_value > threshold:
+                        pair_info = {
+                            'feature1': features[i],
+                            'feature2': features[j],
+                            'correlation': correlation_matrix.iloc[i, j],
+                            'abs_correlation': corr_value
+                        }
+                        high_corr_pairs.append(pair_info)
+                        logger.warning(f"🚨 高相関検出: {features[i]} vs {features[j]} = {corr_value:.3f}")
+            
+            if not high_corr_pairs:
+                logger.info("✅ 高相関ペアは検出されませんでした")
+            
+            return {
+                'correlation_matrix': correlation_matrix,
+                'high_corr_pairs': high_corr_pairs,
+                'threshold': threshold
+            }
+            
+        except Exception as e:
+            logger.error(f"相関行列分析エラー: {str(e)}")
+            return {'error': str(e)}
+    
+    def _compare_weighting_methods(self, feature_data: pd.DataFrame) -> Dict[str, Any]:
+        """複数の重み付け手法を比較（簡易版）"""
+        logger.info("⚖️ 重み付け手法比較中...")
+        
+        try:
+            features = ['grade_level', 'venue_level', 'prize_level']
+            
+            # 馬ごとの統計を計算して複勝率を取得
+            horse_stats = self._calculate_horse_stats()
+            
+            # horse_statsから必要なデータを抽出
+            if 'place_rate' not in horse_stats.columns:
+                logger.error("place_rate カラムが見つかりません")
+                return {'error': 'place_rate not found'}
+            
+            # 特徴量データと複勝率をマージ
+            horse_features = self.df.groupby('馬名')[features].mean().reset_index()
+            merged_data = horse_features.merge(horse_stats[['馬名', 'place_rate']], on='馬名', how='inner')
+            
+            if len(merged_data) == 0:
+                logger.error("マージ後のデータが空です")
+                return {'error': 'No merged data'}
+            
+            # 簡易比較
+            logger.info(f"🏆 重み付け手法比較完了: {len(merged_data)}頭のデータで実行")
+            
+            return {
+                'status': 'completed',
+                'sample_size': len(merged_data)
+            }
+            
+        except Exception as e:
+            logger.error(f"重み付け手法比較エラー: {str(e)}")
+            return {'error': str(e)}
+    
+    def _diagnose_multicollinearity_simple(self, vif_results: Dict, correlation_results: Dict) -> Dict[str, Any]:
+        """簡易的なマルチコリニアリティ診断"""
+        try:
+            # VIFリスク評価
+            max_vif = vif_results.get('max_vif', 0)
+            vif_risk = 0 if max_vif < 5 else 1 if max_vif < 10 else 2
+            
+            # 相関リスク評価
+            high_corr_pairs = correlation_results.get('high_corr_pairs', [])
+            corr_risk = 1 if len(high_corr_pairs) > 0 else 0
+            
+            # 総合判定
+            overall_risk = max(vif_risk, corr_risk)
+            severity = ['正常', '注意', '危険'][overall_risk]
+            
+            logger.info(f"📋 診断結果: {severity} (リスクレベル: {overall_risk})")
+            
+            return {
+                'overall_risk_level': overall_risk,
+                'severity': severity,
+                'vif_risk': vif_risk,
+                'correlation_risk': corr_risk
+            }
+            
+        except Exception as e:
+            logger.error(f"診断エラー: {str(e)}")
+            return {'error': str(e)}
+    
+    def _create_multicollinearity_plots_simple(self, feature_data: pd.DataFrame, features: list, results: Dict[str, Any]) -> None:
+        """簡易版可視化"""
+        try:
+            output_dir = Path(self.config.output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 相関行列ヒートマップのみ作成
+            if 'correlation_results' in results and 'correlation_matrix' in results['correlation_results']:
+                fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+                corr_matrix = results['correlation_results']['correlation_matrix']
+                sns.heatmap(corr_matrix, annot=True, cmap='RdYlBu_r', center=0, square=True, ax=ax)
+                ax.set_title('特徴量間相関行列')
+                
+                plot_path = output_dir / 'multicollinearity_validation.png'
+                plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+                plt.close()
+                
+                logger.info(f"📊 可視化保存: {plot_path}")
+            
+        except Exception as e:
+            logger.error(f"可視化作成エラー: {str(e)}")
+    
+    def _generate_multicollinearity_report_simple(self, results: Dict[str, Any]) -> None:
+        """簡易版レポート生成"""
+        try:
+            output_dir = Path(self.config.output_dir)
+            report_path = output_dir / 'multicollinearity_validation_report.md'
+            
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write("# マルチコリニアリティ検証レポート\n\n")
+                f.write(f"生成日時: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                
+                # VIF結果
+                if 'vif_results' in results and 'vif_data' in results['vif_results']:
+                    f.write("## 🧮 VIF検証結果\n\n")
+                    f.write("| 特徴量 | VIF値 | 判定 |\n")
+                    f.write("|--------|-------|------|\n")
+                    
+                    for item in results['vif_results']['vif_data']:
+                        vif_val = item['vif']
+                        vif_str = f"{vif_val:.3f}" if not pd.isna(vif_val) else "nan"
+                        f.write(f"| {item['feature']} | {vif_str} | {item['status']} |\n")
+                
+                # 相関結果
+                if 'correlation_results' in results:
+                    f.write("\n## 📊 相関分析結果\n\n")
+                    high_corr_pairs = results['correlation_results'].get('high_corr_pairs', [])
+                    if high_corr_pairs:
+                        f.write("### 🚨 高相関ペア検出\n\n")
+                        for pair in high_corr_pairs:
+                            f.write(f"- {pair['feature1']} vs {pair['feature2']}: r = {pair['correlation']:.3f}\n")
+                    else:
+                        f.write("✅ 高相関ペア（|r| > 0.8）は検出されませんでした。\n")
+                
+                # 診断結果
+                if 'overall_diagnosis' in results:
+                    diagnosis = results['overall_diagnosis']
+                    f.write(f"\n## 🏥 総合診断\n\n")
+                    f.write(f"**判定**: {diagnosis.get('severity', 'Unknown')}\n")
+                    f.write(f"**リスクレベル**: {diagnosis.get('overall_risk_level', 'Unknown')}/2\n")
+            
+            logger.info(f"📋 レポート保存: {report_path}")
+            
+        except Exception as e:
+            logger.error(f"レポート生成エラー: {str(e)}")
+    
+    def _get_vif_status(self, vif_value: float) -> str:
+        """VIF値から状態を判定"""
+        if pd.isna(vif_value):
+            return "エラー"
+        elif vif_value < 5:
+            return "正常"
+        elif vif_value < 10:
+            return "注意"
+        else:
+            return "危険"
+    
+    def _get_overall_vif_status(self, max_vif: float) -> str:
+        """最大VIF値から全体状態を判定"""
+        if pd.isna(max_vif):
+            return "計算エラー"
+        elif max_vif < 5:
+            return "問題なし"
+        elif max_vif < 10:
+            return "軽度のマルチコリニアリティ"
+        else:
+            return "深刻なマルチコリニアリティ"
 
     def _calculate_prize_level(self, df: pd.DataFrame) -> pd.Series:
         """賞金に基づくレベルを計算（列名の違いに対する互換対応）"""

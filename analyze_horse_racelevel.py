@@ -76,11 +76,15 @@ def analyze_by_periods(analyzer, periods, base_output_dir):
         logger.info(f"期間 {period_name} の分析開始...")
         
         try:
+            # 期間別出力ディレクトリの作成
+            period_output_dir = base_output_dir / period_name
+            period_output_dir.mkdir(parents=True, exist_ok=True)
+            
             # 期間別の設定を作成
             period_config = AnalysisConfig(
                 input_path=analyzer.config.input_path,
                 min_races=analyzer.config.min_races,
-                output_dir=str(base_output_dir / period_name),
+                output_dir=str(period_output_dir),
                 date_str=analyzer.config.date_str,
                 start_date=f"{start_year}0101" if start_year else None,
                 end_date=f"{end_year}1231" if end_year else None
@@ -299,9 +303,15 @@ def main():
         logger.info(f"🖥️ ログレベル: {args.log_level}")
         logger.info(f"📝 ログファイル: {log_file}")
 
-        # 出力ディレクトリの作成
+        # 出力ディレクトリの作成（親ディレクトリも含めて確実に作成）
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 出力ディレクトリが書き込み可能かチェック
+        if not output_dir.exists() or not output_dir.is_dir():
+            raise FileNotFoundError(f"出力ディレクトリの作成に失敗しました: {output_dir}")
+        
+        logger.info(f"📁 出力ディレクトリ確認済み: {output_dir.absolute()}")
 
         logger.info(f"📁 入力パス: {args.input_path}")
         logger.info(f"📊 出力ディレクトリ: {args.output_dir}")
