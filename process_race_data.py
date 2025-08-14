@@ -12,7 +12,6 @@
 from horse_racing.data.processors.bac_processor import process_all_bac_files
 from horse_racing.data.processors.sed_processor import process_all_sed_files
 from horse_racing.data.processors.srb_processor import process_all_srb_files, merge_srb_with_sed
-import os
 import argparse
 import logging
 import time
@@ -280,7 +279,6 @@ class MissingValueHandler:
         return {
             'critical_columns': {
                 '着順': 'drop',  # 着順が欠損の行は削除
-                'タイム': 'drop',  # タイムが欠損の行は削除
                 '距離': 'drop',   # 距離が欠損の行は削除
                 '馬名': 'drop',   # 馬名が欠損の行は削除
                 'IDM': 'drop'     # IDMが欠損の行は削除
@@ -294,7 +292,9 @@ class MissingValueHandler:
                 'unknown_label': '不明',
                 'max_missing_rate': 0.8  # 80%以上欠損の列は削除
             },
-            'remaining_strategy': 'drop'  # 残存欠損値は行削除
+            # 残存欠損値は重要列サブセットでのみ行削除（実務レポート方針）
+            'remaining_strategy': 'drop_subset',
+            'remaining_subset': ['着順', '距離', '馬名', 'IDM', 'グレード']
         }
     
     def _handle_critical_columns(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
@@ -316,13 +316,18 @@ class MissingValueHandler:
         return df
     
     def _handle_numeric_columns(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
-        """数値列の欠損値処理（グレード専用処理含む）"""
+        """数値列の欠損値処理"""
         logger.info("   🔢 数値列の欠損値処理中...")
         
         numeric_config = config.get('numeric_columns', {})
         method = numeric_config.get('method', 'median')
         max_missing_rate = numeric_config.get('max_missing_rate', 0.5)
         
+        # グレード列が文字列でも推定ロジックが動くように数値化を試みる
+        for grade_col in ['グレード', 'grade', 'レースグレード']:
+            if grade_col in df.columns:
+                df[grade_col] = pd.to_numeric(df[grade_col], errors='coerce')
+
         numeric_columns = df.select_dtypes(include=[np.number]).columns
         
         # 賞金関連の列を欠損値処理の対象から除外（欠損が多くて削除されるのを防ぐ）
@@ -343,25 +348,21 @@ class MissingValueHandler:
             if missing_count > 0:
                 # グレード列の特別処理（実務レベル）
                 if column in ['グレード', 'grade', 'レースグレード']:
-                    # logger.info(f"      • {column}: 実務レベルグレード推定処理を実行")
-                    # df = self._estimate_grade_from_features(df, column)
+                    logger.info(f"      • {column}: 実務レベルグレード推定処理を実行")
+                    df = self._estimate_grade_from_features(df, column)
                     
-                    # # 推定後の欠損数をチェック
-                    # remaining_missing = df[column].isnull().sum()
-                    # estimated_count = missing_count - remaining_missing
+                    # 推定後の欠損数をチェック
+                    remaining_missing = df[column].isnull().sum()
+                    estimated_count = missing_count - remaining_missing
                     
-                    # if estimated_count > 0:
-                    #     logger.info(f"      • {column}: {estimated_count:,}件を賞金・レース名から推定補完")
-                    #     self.processing_log.append(f"{column}: 賞金・レース名から{estimated_count}件推定→グレード名列追加")
+                    if estimated_count > 0:
+                        logger.info(f"      • {column}: {estimated_count:,}件を賞金・レース名から推定補完")
+                        self.processing_log.append(f"{column}: 賞金・レース名から{estimated_count}件推定→グレード名列追加")
                     
-                    # # 残りの欠損値は中央値で補完（数値で処理後、グレード名列追加）
-                    # if remaining_missing > 0:
-                    #     fill_value = df[column].median()
-                    #     # 数値で補完してからグレード名列追加処理に委ねる
-                    #     df[column] = df[column].fillna(fill_value)
-                    #     logger.info(f"      • {column}: 残り{remaining_missing:,}件をmedian({fill_value})で補完後、グレード名列追加")
-                    #     self.processing_log.append(f"{column}: median補完{remaining_missing}件→グレード名列追加")
-                    pass  # ユーザー指示によりグレードの欠損値処理を無効化
+                    # 推定できなかった分はNaNのまま残す（残存欠損値処理で行削除される）
+                    if remaining_missing > 0:
+                        logger.info(f"      • {column}: 推定不可能な{remaining_missing:,}件はNaNのまま保持（後続処理で行削除）")
+                        self.processing_log.append(f"{column}: 推定不可能{remaining_missing}件→NaN保持→行削除対象")
                 
                 elif missing_rate > max_missing_rate:
                     logger.warning(f"      • {column}: 欠損率{missing_rate:.1%} > {max_missing_rate:.1%} → 列削除")
@@ -393,8 +394,11 @@ class MissingValueHandler:
         categorical_columns = df.select_dtypes(include=['object', 'category']).columns
         
         for column in categorical_columns:
+            # グレードはモード補完の対象から除外（推定ロジックに委ねる）
+            if column in ['グレード', 'grade', 'レースグレード', 'グレード名']:
+                continue
             missing_count = df[column].isnull().sum()
-            missing_rate = missing_count / len(df)
+            missing_rate = missing_count / len(df) if len(df) > 0 else 0
             
             if missing_count > 0:
                 if missing_rate > max_missing_rate:
@@ -402,14 +406,15 @@ class MissingValueHandler:
                     df = df.drop(columns=[column])
                     self.processing_log.append(f"{column}: 高欠損率により列削除")
                 else:
-                    if method == 'mode' and not df[column].mode().empty:
-                        fill_value = df[column].mode()[0]
+                    if method == 'mode':
+                        mode_values = df[column].mode()
+                        fill_value = mode_values.iloc[0] if not mode_values.empty else unknown_label
                     else:
                         fill_value = unknown_label
                     
                     df[column] = df[column].fillna(fill_value)
-                    logger.info(f"      • {column}: {missing_count:,}件を'{fill_value}'で補完")
-                    self.processing_log.append(f"{column}: {fill_value}で{missing_count}件補完")
+                    logger.info(f"      • {column}: {missing_count:,}件を{method}({fill_value})で補完")
+                    self.processing_log.append(f"{column}: {method}で{missing_count}件補完")
         
         return df
     
@@ -430,6 +435,16 @@ class MissingValueHandler:
                 if dropped_rows > 0:
                     logger.info(f"      • 残存欠損値のある{dropped_rows:,}行を削除")
                     self.processing_log.append(f"残存欠損値: {dropped_rows}行削除")
+            elif strategy == 'drop_subset':
+                subset = config.get('remaining_subset', [])
+                subset = [col for col in subset if col in df.columns]
+                if subset:
+                    initial_rows = len(df)
+                    df = df.dropna(subset=subset)
+                    dropped_rows = initial_rows - len(df)
+                    if dropped_rows > 0:
+                        logger.info(f"      • 重要列({', '.join(subset)})の残存欠損{dropped_rows:,}行を削除")
+                        self.processing_log.append(f"残存欠損(重要列): {dropped_rows}行削除")
         
         return df
     
@@ -507,28 +522,37 @@ class MissingValueHandler:
         return df
     
     def _estimate_grade_from_prize(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """賞金からグレード推定（実務レベル基準）"""
-        if '本賞金' not in df.columns:
-            return df
-        
-        # 賞金を数値型に変換
-        df['本賞金'] = pd.to_numeric(df['本賞金'], errors='coerce')
-        
-        # 実務レベル賞金基準（単位：万円）
-        # 実際の競馬界の賞金体系に基づく
-        prize_grade_mapping = [
-            (15000, 1),    # G1: 1億5千万円以上
-            (6000, 2),     # G2: 6千万円以上
-            (4000, 3),     # G3: 4千万円以上
-            (1500, 4),     # 重賞: 1千5百万円以上
-            (500, 5),      # 特別: 500万円以上
-            (0, 6)         # その他: 500万円未満
+        """賞金からグレード推定（実務レポートに基づく基準）
+        優先列: 1着賞金(1着算入賞金込み) → 1着賞金 → 平均賞金
+        しきい値は万円スケールを想定（データのスケール差異はそのまま比較）
+        """
+        # 利用可能な賞金列の決定（優先順）
+        candidate_prize_cols = [
+            '1着賞金(1着算入賞金込み)',
+            '1着賞金',
+            '平均賞金'
         ]
-        
-        for min_prize, grade in prize_grade_mapping:
-            mask = (df['本賞金'] >= min_prize) & df[grade_column].isnull()
-            df.loc[mask, grade_column] = grade
-        
+        prize_col = next((c for c in candidate_prize_cols if c in df.columns), None)
+        if prize_col is None:
+            return df
+
+        # 数値化
+        df[prize_col] = pd.to_numeric(df[prize_col], errors='coerce')
+
+        # しきい値（万円）: レポート記載の中央値を参考に上位→下位の順で適用
+        # G1はテーブル中央値に基づき高閾値を設定
+        thresholds = [
+            (16500, 1),  # G1
+            (8550, 2),   # G2
+            (5700, 3),   # G3
+            (3000, 6),   # L（リステッド）
+            (1200, 5)    # 特別/OP
+        ]
+
+        for min_prize, grade_value in thresholds:
+            mask = (df[prize_col] >= min_prize) & df[grade_column].isnull()
+            df.loc[mask, grade_column] = grade_value
+
         return df
     
     def _estimate_grade_from_race_name(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
@@ -802,7 +826,7 @@ def display_deletion_statistics():
                     continue
         
         # 統計表示
-        logger.info(f"📈 全体削除統計:")
+        logger.info("📈 全体削除統計:")
         logger.info(f"   📥 処理前総レコード: {total_sed:,}件")
         logger.info(f"   📤 処理後総レコード: {total_bias:,}件")
         logger.info(f"   ❌ 削除レコード数: {total_deleted:,}件")
@@ -1067,7 +1091,6 @@ def process_race_data(exclude_turf=False, turf_only=False,
     
     # システムコンポーネントの初期化
     quality_checker = DataQualityChecker() if enable_quality_check else None
-    missing_handler = MissingValueHandler() if enable_missing_value_handling else None
     
     # 出力用ディレクトリの確認
     ensure_export_dirs()
