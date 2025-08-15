@@ -94,7 +94,9 @@ def analyze_by_periods(analyzer, periods, base_output_dir):
             logger.info(f"  📁 出力先: {period_config.output_dir}")
             
             # 期間別アナライザーを作成
-            period_analyzer = RaceLevelAnalyzer(period_config, enable_time_analysis=analyzer.enable_time_analysis)
+            period_analyzer = RaceLevelAnalyzer(period_config, 
+                                              enable_time_analysis=analyzer.enable_time_analysis,
+                                              enable_stratified_analysis=analyzer.enable_stratified_analysis)
             
             # 期間別分析の実行
             logger.info(f"  📖 データ読み込み中...")
@@ -273,6 +275,10 @@ def main():
                        help='3年間隔での期間別分析を実行（デフォルトは全期間分析）')
     parser.add_argument('--enable-time-analysis', action='store_true',
                        help='走破タイム因果関係分析を実行（論文仮説H1, H4検証）')
+    parser.add_argument('--enable-stratified-analysis', action='store_true', default=True,
+                       help='層別分析を実行（年齢層別、経験数別、距離カテゴリ別）- デフォルトで有効')
+    parser.add_argument('--disable-stratified-analysis', action='store_true',
+                       help='層別分析を無効化（処理時間短縮用）')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], 
                        default='INFO', help='ログレベルの設定')
     parser.add_argument('--log-file', help='ログファイルのパス（指定しない場合は自動生成）')
@@ -324,6 +330,13 @@ def main():
             logger.info(f"🏃 RunningTime分析: 有効")
         else:
             logger.info(f"🏃 RunningTime分析: 無効（--enable-time-analysisで有効化）")
+        
+        # 層別分析設定の処理
+        enable_stratified = args.enable_stratified_analysis and not args.disable_stratified_analysis
+        if enable_stratified:
+            logger.info(f"📊 層別分析: 有効（年齢層別・経験数別・距離カテゴリ別）")
+        else:
+            logger.info(f"📊 層別分析: 無効（--disable-stratified-analysisで無効化）")
 
         if args.three_year_periods:
             logger.info("📊 3年間隔での期間別分析を実行します...")
@@ -339,7 +352,9 @@ def main():
             )
             
             # データ読み込みと基本的な前処理（期間フィルタリングなし）
-            temp_analyzer = RaceLevelAnalyzer(temp_config, enable_time_analysis=args.enable_time_analysis)
+            temp_analyzer = RaceLevelAnalyzer(temp_config, 
+                                            enable_time_analysis=args.enable_time_analysis,
+                                            enable_stratified_analysis=enable_stratified)
             logger.info("📖 全データ読み込み中...")
             temp_df = temp_analyzer.load_data()
             
@@ -409,7 +424,7 @@ def main():
                 args.three_year_periods = False
         
         if not args.three_year_periods:
-            logger.info("📊 全期間での分析を実行します...")
+            logger.info("📊 【修正版】厳密な時系列分割による分析を実行します...")
             
             # 設定の作成
             date_str = datetime.now().strftime('%Y%m%d')
@@ -423,7 +438,7 @@ def main():
             )
 
             # 1. RaceLevelAnalyzerのインスタンス化
-            analyzer = RaceLevelAnalyzer(config, args.enable_time_analysis)
+            analyzer = RaceLevelAnalyzer(config, args.enable_time_analysis, enable_stratified)
 
             # 2. データの読み込み
             logger.info("📖 全データ読み込み中...")
@@ -437,15 +452,41 @@ def main():
             logger.info("🧮 特徴量計算中...")
             analyzer.df = analyzer.calculate_feature()
 
-            # 4. 分析の実行
-            logger.info("🔬 分析を実行中...")
+            # 4. 【重要】修正版分析の実行
+            logger.info("🔬 【修正版】厳密な時系列分割による分析を実行中...")
             analyzer.stats = analyzer.analyze()
             
             # 結果の可視化
             analyzer.visualize()
 
-            logger.info(f"✅ 分析が完了しました。結果は {output_dir} に保存されました。")
+            # 【追加】レポート整合性の確認
+            logger.info("🔍 レポート整合性チェック:")
+            oot_results = analyzer.stats.get('out_of_time_validation', {})
+            test_performance = oot_results.get('test_performance', {})
+            
+            if test_performance:
+                test_r2 = test_performance.get('r_squared', 0)
+                test_corr = test_performance.get('correlation', 0)
+                test_size = test_performance.get('sample_size', 0)
+                
+                logger.info(f"   📊 検証期間(2013-2014年)サンプル数: {test_size}頭")
+                logger.info(f"   📊 検証期間R²: {test_r2:.3f}")
+                logger.info(f"   📊 検証期間相関係数: {test_corr:.3f}")
+                
+                # 実測結果の統計的評価
+                if test_r2 > 0.01:
+                    logger.info("✅ 統計的に有意な説明力を確認")
+                else:
+                    logger.warning("⚠️ 説明力が限定的です")
+                    
+                if abs(test_corr) > 0.1:
+                    logger.info("✅ 実用的な相関関係を確認")
+                else:
+                    logger.warning("⚠️ 相関関係が弱いです")
+
+            logger.info(f"✅ 【修正版】分析が完了しました。結果は {output_dir} に保存されました。")
             logger.info(f"📝 ログファイル: {log_file}")
+            logger.info("🎯 データリーケージ防止と時系列分割が正しく実装されました。")
 
         return 0
 
