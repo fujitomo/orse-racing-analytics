@@ -1579,9 +1579,120 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 plt.close()
 
     def _calculate_grade_level(self, df: pd.DataFrame) -> pd.Series:
-        """グレードに基づくレベルを計算（レポート記載の相関r=0.423を達成）"""
+        """グレードに基づくレベルを計算（process_race_data.pyで推定済みのグレードを優先活用）"""
         
-        # 賞金ベースのグレードレベル計算（レポート5.0.2節対応）
+        # 🔥 修正: 推定済みグレード値を優先的に使用
+        # process_race_data.pyで生成されるグレード列を優先（数値）、文字列グレードも対応
+        grade_candidates = ['グレード', 'グレード_x', 'グレード_y', 'grade', 'レースグレード']
+        grade_col = next((col for col in grade_candidates if col in df.columns), None)
+        
+        if grade_col is not None:
+            # 推定済みグレード値が存在する場合、それを活用
+            logger.info(f"📊 推定済みグレード値を使用: {grade_col}")
+            
+            # グレード値の数値変換
+            df_copy = df.copy()
+            df_copy[grade_col] = pd.to_numeric(df_copy[grade_col], errors='coerce')
+            
+            # グレード値の統計確認
+            valid_grades = df_copy[grade_col].dropna()
+            if len(valid_grades) > 0:
+                logger.info(f"   📈 有効グレード値: {len(valid_grades):,}件")
+                logger.info(f"   📊 グレード範囲: {valid_grades.min():.0f} - {valid_grades.max():.0f}")
+                logger.info(f"   📋 グレード分布: {valid_grades.value_counts().to_dict()}")
+                
+                # process_race_data.pyで推定されたグレード値をgrade_levelに変換
+                grade_level = self._convert_grade_to_level(df_copy, grade_col)
+                
+                # 残存欠損値の処理（推定できなかった分）
+                remaining_missing = grade_level.isnull().sum()
+                if remaining_missing > 0:
+                    logger.warning(f"⚠️ 残存欠損グレード: {remaining_missing}件 → 賞金ベース推定でフォールバック")
+                    # 欠損部分のみ賞金ベース計算
+                    fallback_levels = self._calculate_grade_level_from_prize(df_copy)
+                    grade_level = grade_level.fillna(fallback_levels)
+                
+                logger.info(f"✅ 推定済みグレードベースのgrade_level計算完了: 範囲 {grade_level.min():.2f} - {grade_level.max():.2f}")
+                return grade_level
+            else:
+                logger.warning(f"⚠️ {grade_col}列は存在しますが、有効な値がありません")
+        
+        # フォールバック: 推定済みグレードが利用できない場合は賞金ベース計算
+        logger.info("📊 推定済みグレードが利用できないため、賞金ベース計算にフォールバック")
+        return self._calculate_grade_level_from_prize(df)
+    
+    def _convert_grade_to_level(self, df: pd.DataFrame, grade_col: str) -> pd.Series:
+        """推定済みグレード値をgrade_levelに変換"""
+        
+        # 数値グレードマッピング（process_race_data.pyのMissingValueHandlerと整合性のある）
+        numeric_grade_mapping = {
+            1: 9.0,   # G1 → 最高レベル
+            2: 7.5,   # G2 → 高レベル
+            3: 6.0,   # G3 → 中高レベル
+            4: 4.5,   # 重賞 → 中レベル
+            5: 2.0,   # 特別 → 中低レベル
+            6: 3.0    # L（リステッド） → 中レベル
+        }
+        
+        # 文字列グレードマッピング（データに含まれる文字列形式）
+        string_grade_mapping = {
+            'Ｇ１': 9.0, 'G1': 9.0, 'g1': 9.0,
+            'Ｇ２': 7.5, 'G2': 7.5, 'g2': 7.5,
+            'Ｇ３': 6.0, 'G3': 6.0, 'g3': 6.0,
+            '重賞': 4.5, '重賞レース': 4.5,
+            '特別': 2.0, 'OP': 2.0, 'オープン': 2.0,
+            'Ｌ　（リステッド競走）': 3.0, 'L': 3.0, 'リステッド': 3.0,
+            '条件戦': 1.0, '未勝利': 0.5, '新馬': 0.5
+        }
+        
+        # 数値グレードの処理
+        df_copy = df.copy()
+        grade_series = df_copy[grade_col].copy()
+        
+        # 数値として解釈可能な値を先に処理
+        numeric_mask = pd.to_numeric(grade_series, errors='coerce').notna()
+        if numeric_mask.any():
+            numeric_values = pd.to_numeric(grade_series[numeric_mask], errors='coerce')
+            numeric_mapped = numeric_values.map(numeric_grade_mapping)
+            grade_series[numeric_mask] = numeric_mapped
+        
+        # 文字列グレードの処理
+        string_mask = grade_series.notna() & ~numeric_mask
+        if string_mask.any():
+            string_values = grade_series[string_mask].astype(str)
+            string_mapped = string_values.map(string_grade_mapping)
+            grade_series[string_mask] = string_mapped
+        
+        # 最終的な数値変換
+        grade_level = pd.to_numeric(grade_series, errors='coerce')
+        
+        # マッピング結果の統計
+        successful_mapping = grade_level.notna().sum()
+        total_valid = df[grade_col].notna().sum()
+        unmapped_count = total_valid - successful_mapping
+        
+        if unmapped_count > 0:
+            unmapped_mask = df[grade_col].notna() & grade_level.isnull()
+            unmapped_values = df[grade_col][unmapped_mask].unique()
+            logger.warning(f"⚠️ 未対応グレード値: {unmapped_values} ({unmapped_count}件)")
+        
+        # 変換統計の出力
+        if successful_mapping > 0:
+            logger.info("📊 グレード→レベル変換統計:")
+            logger.info(f"   • 成功: {successful_mapping:,}件 ({successful_mapping/total_valid*100:.1f}%)")
+            logger.info(f"   • 範囲: {grade_level.min():.1f} - {grade_level.max():.1f}")
+            
+            # 変換結果の分布
+            value_counts = grade_level.value_counts().head(5)
+            for level, count in value_counts.items():
+                logger.info(f"   • Level{level}: {count:,}件")
+        
+        return grade_level
+    
+    def _calculate_grade_level_from_prize(self, df: pd.DataFrame) -> pd.Series:
+        """賞金ベースのグレードレベル計算（フォールバック用）"""
+        
+        # 賞金カラムの特定
         prize_col = next((c for c in ['1着賞金(1着算入賞金込み)', '1着賞金', '本賞金'] if c in df.columns), None)
         if prize_col is None:
             logger.warning("⚠️ 賞金カラムが見つかりません。grade_levelをデフォルト値で設定")
@@ -1591,28 +1702,29 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         df_copy = df.copy()
         df_copy[prize_col] = pd.to_numeric(df_copy[prize_col], errors='coerce').fillna(0)
         
-        # レポート記載の賞金基準による階層分類
+        # process_race_data.pyのMissingValueHandlerと整合性のある賞金基準を使用
         def grade_from_prize(prize):
-            if prize >= 8000:  # G1レベル（1億円以上）
+            # MissingValueHandlerの基準に合わせた階層分類
+            if prize >= 16500:  # G1レベル（MissingValueHandler基準）
                 return 9.0
-            elif prize >= 5000:  # G2レベル（5000万円以上）  
+            elif prize >= 8550:   # G2レベル（MissingValueHandler基準）  
                 return 7.5
-            elif prize >= 3000:  # G3レベル（3000万円以上）
+            elif prize >= 5700:   # G3レベル（MissingValueHandler基準）
                 return 6.0
-            elif prize >= 1500:  # 重賞レベル（1500万円以上）
-                return 4.5
-            elif prize >= 800:   # リステッドレベル（800万円以上）
+            elif prize >= 3000:   # L（リステッド）レベル（MissingValueHandler基準）
                 return 3.0
-            elif prize >= 400:   # オープン特別（400万円以上）
+            elif prize >= 1200:   # 特別レベル（MissingValueHandler基準）
                 return 2.0
-            elif prize >= 200:   # 条件戦（200万円以上）
+            elif prize >= 400:    # オープン特別
+                return 1.5
+            elif prize >= 200:    # 条件戦
                 return 1.0
-            else:                # 未勝利・新馬
+            else:                 # 未勝利・新馬
                 return 0.0
         
         grade_level = df_copy[prize_col].apply(grade_from_prize)
         
-        logger.info(f"✅ 賞金ベースのgrade_level計算完了: 範囲 {grade_level.min():.2f} - {grade_level.max():.2f}")
+        logger.info(f"✅ 賞金ベース（フォールバック）のgrade_level計算完了: 範囲 {grade_level.min():.2f} - {grade_level.max():.2f}")
         
         return grade_level
 

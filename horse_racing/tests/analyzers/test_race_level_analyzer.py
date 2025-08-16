@@ -21,8 +21,7 @@ def mock_config(tmp_path):
         min_races=3,
         confidence_level=0.95,
         start_date=datetime(2023, 1, 1),
-        end_date=datetime(2023, 12, 31),
-        causal_analysis_enabled=True
+        end_date=datetime(2023, 12, 31)
     )
 
 @pytest.fixture
@@ -34,7 +33,7 @@ def dummy_df():
         '回': [1, 1, 1, 2, 2, 2],
         '日': [1, 2, 1, 1, 2, 1],
         'R': [1, 2, 1, 1, 2, 1],
-        '馬名': ['HorseA', 'HorseA', 'HorseA', 'HorseA', 'HorseA', 'HorseA', 'HorseB', 'HorseB', 'HorseB', 'HorseB'],
+        '馬名': ['HorseA', 'HorseA', 'HorseB', 'HorseA', 'HorseB', 'HorseA'],
         '距離': [1600, 2000, 1600, 1800, 2400, 2000],
         '着順': [1, 5, 2, 1, 3, 4],
         'レース名': ['G1レース', 'OPレース', 'G3レース', '特別レース', 'G2レース', 'Lレース'],
@@ -323,13 +322,41 @@ def test_plot_confounding_factors(analyzer, dummy_df, mock_config):
             assert mock_close.call_count == 3
 
 def test_calculate_grade_level(analyzer, dummy_df, mocker):
-    """Test _calculate_grade_level method."""
+    """Test _calculate_grade_level method with updated logic."""
     analyzer.df = dummy_df.copy()
     analyzer.df["is_win"] = analyzer.df["着順"] == 1
     analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
     
+    # Test with existing grade column
+    analyzer.df['グレード'] = [1, 2, 3, 1, 2, 3]  # Add grade column (6 items to match DataFrame length)
     grade_level = analyzer._calculate_grade_level(analyzer.df)
     assert "race_level" not in grade_level.name # Should return a Series, not a DataFrame
+    assert grade_level.between(0, 10).all()
+    
+    # Test fallback to prize-based calculation
+    analyzer.df = dummy_df.copy()  # Reset without grade column
+    analyzer.df["is_win"] = analyzer.df["着順"] == 1
+    analyzer.df["is_placed"] = analyzer.df["着順"] <= 3
+    grade_level_fallback = analyzer._calculate_grade_level(analyzer.df)
+    assert grade_level_fallback.between(0, 10).all()
+
+def test_convert_grade_to_level(analyzer, dummy_df, mocker):
+    """Test _convert_grade_to_level method."""
+    analyzer.df = dummy_df.copy()
+    analyzer.df['グレード'] = [1, 2, 3, 4, 5, 6]  # Add various grade values
+    
+    grade_level = analyzer._convert_grade_to_level(analyzer.df, 'グレード')
+    
+    # Check expected mappings
+    expected_mappings = {1: 9.0, 2: 7.5, 3: 6.0, 4: 4.5, 5: 2.0, 6: 3.0}
+    for i, (grade, expected_level) in enumerate(expected_mappings.items()):
+        if i < len(grade_level):
+            assert grade_level.iloc[i] == expected_level
+
+def test_calculate_grade_level_from_prize(analyzer, dummy_df, mocker):
+    """Test _calculate_grade_level_from_prize method."""
+    analyzer.df = dummy_df.copy()
+    grade_level = analyzer._calculate_grade_level_from_prize(analyzer.df)
     assert grade_level.between(0, 10).all()
 
 def test_calculate_prize_level(analyzer, dummy_df, mocker):
