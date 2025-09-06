@@ -492,19 +492,77 @@ def main():
 
     except FileNotFoundError as e:
         logger.error(f"❌ ファイルエラー: {str(e)}")
+        logger.error("💡 解決方法:")
+        logger.error("   • 入力パスが正しいか確認してください")
+        logger.error("   • ファイル名に日本語が含まれている場合は英数字に変更してください")
+        logger.error("   • 'export/with_bias' ディレクトリが存在するか確認してください")
         if log_file:
             logger.error(f"📝 ログファイル: {log_file}")
         return 1
     except ValueError as e:
-        logger.error(f"❌ 入力値エラー: {str(e)}")
+        error_msg = str(e)
+        logger.error(f"❌ 入力値エラー: {error_msg}")
+        logger.error("💡 解決方法:")
+        
+        if "条件を満たすデータが見つかりません" in error_msg:
+            logger.error("   • --min-races の値を小さくしてみてください（例: --min-races 3）")
+            logger.error("   • 期間指定が狭すぎる場合は範囲を広げてください")
+            logger.error("   • データが存在する期間かどうか確認してください")
+        elif "日付形式" in error_msg:
+            logger.error("   • 日付はYYYYMMDD形式で指定してください（例: 20220101）")
+            logger.error("   • --start-date と --end-date の両方を指定してください")
+        else:
+            logger.error("   • パラメータの値が正しいか確認してください")
+            logger.error("   • --help でオプションの詳細を確認できます")
+        
         if log_file:
             logger.error(f"📝 ログファイル: {log_file}")
         return 1
-    except Exception as e:
-        logger.error(f"❌ 予期せぬエラーが発生しました: {str(e)}")
+    except IndexError as e:
+        logger.error(f"❌ データ処理エラー: {str(e)}")
+        logger.error("💡 解決方法:")
+        logger.error("   • データ期間が短すぎる可能性があります")
+        logger.error("   • 時系列分割に必要な最低3年分のデータがあるか確認してください")
+        logger.error("   • 期間指定を広げて再実行してみてください")
         if log_file:
             logger.error(f"📝 ログファイル: {log_file}")
-        logger.error("詳細なエラー情報:", exc_info=True)
+        return 1
+    except KeyboardInterrupt:
+        logger.warning("⏹️ ユーザーによって処理が中断されました")
+        logger.info("💡 処理時間を短縮するには:")
+        logger.info("   • --min-races を大きくしてサンプル数を減らす")
+        logger.info("   • 期間を短くして処理範囲を絞る")
+        logger.info("   • --disable-stratified-analysis で層別分析を無効化")
+        if log_file:
+            logger.info(f"📝 ログファイル: {log_file}")
+        return 1
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"❌ 予期せぬエラーが発生しました: {error_msg}")
+        logger.error("💡 解決方法:")
+        
+        if "encoding" in error_msg.lower() or "unicode" in error_msg.lower():
+            logger.error("   • ファイルのエンコーディングに問題があります")
+            logger.error("   • CSVファイルがUTF-8またはShift-JISで保存されているか確認してください")
+        elif "memory" in error_msg.lower():
+            logger.error("   • メモリ不足の可能性があります")
+            logger.error("   • --min-races を大きくしてデータ量を減らしてください")
+            logger.error("   • 不要なアプリケーションを終了してください")
+        elif "permission" in error_msg.lower():
+            logger.error("   • ファイルアクセス権限の問題があります")
+            logger.error("   • 出力ディレクトリの書き込み権限を確認してください")
+            logger.error("   • 管理者権限で実行してみてください")
+        else:
+            logger.error("   • --log-level DEBUG で詳細ログを確認してください")
+            logger.error("   • データファイルが破損していないか確認してください")
+            logger.error("   • Pythonとライブラリのバージョンを確認してください")
+        
+        logger.error("🔍 詳細なエラー情報:")
+        logger.error(f"   エラー種別: {type(e).__name__}")
+        logger.error(f"   エラー内容: {error_msg}")
+        if log_file:
+            logger.error(f"📝 ログファイル: {log_file}")
+        logger.error("詳細なスタックトレース:", exc_info=True)
         return 1
 
 if __name__ == '__main__':

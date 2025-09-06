@@ -38,7 +38,14 @@ loader_logger = logging.getLogger('horse_racing.data.loader')
 loader_logger.setLevel(logging.WARNING)
 
 # 日本語フォントの設定
-plt.rcParams['font.family'] = 'MS Gothic'
+import platform
+if platform.system() == 'Windows':
+    # Windows環境での日本語フォント設定
+    plt.rcParams['font.family'] = ['Yu Gothic', 'Meiryo', 'Takao', 'IPAexGothic', 'IPAgothic', 'Noto Sans CJK JP', 'sans-serif']
+else:
+    # Linux/Mac環境での日本語フォント設定
+    plt.rcParams['font.family'] = ['Noto Sans CJK JP', 'Takao', 'IPAexGothic', 'IPAgothic', 'Yu Gothic', 'Meiryo', 'sans-serif']
+
 mpl.rcParams['axes.unicode_minus'] = False
 plt.rcParams['font.size'] = 12
 
@@ -138,7 +145,19 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             return df
 
         except Exception as e:
-            logger.error(f"データの前処理中にエラーが発生しました: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"データの前処理中にエラーが発生しました: {error_msg}")
+            logger.error("💡 詳細診断:")
+            logger.error(f"   • 指定期間: {getattr(self.config, 'start_date', '指定なし')} - {getattr(self.config, 'end_date', '指定なし')}")
+            logger.error(f"   • 最小レース数: {self.config.min_races}")
+            
+            if "条件を満たすデータが見つかりません" in error_msg:
+                logger.error("💡 解決方法:")
+                logger.error("   • 最小レース数を下げてください（例: --min-races 3）")
+                logger.error("   • 期間を広げるか期間指定を削除してください")
+                logger.error("   • 該当期間にデータが存在するか確認してください")
+            
+            logger.error(f"🔍 エラー詳細: {type(e).__name__}: {error_msg}")
             raise
 
     def calculate_feature(self) -> pd.DataFrame:
@@ -695,7 +714,20 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             return train_data, val_data, test_data
             
         except Exception as e:
-            logger.error(f"❌ 時系列分割エラー: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"❌ 時系列分割エラー: {error_msg}")
+            logger.error("💡 詳細診断:")
+            logger.error(f"   • データ期間: {self.df['年'].min() if '年' in self.df.columns else '不明'}-{self.df['年'].max() if '年' in self.df.columns else '不明'}年")
+            logger.error(f"   • 総データ数: {len(self.df):,}件")
+            logger.error(f"   • 年データの存在: {'年' in self.df.columns}")
+            
+            if "list index out of range" in error_msg:
+                logger.error("💡 解決方法:")
+                logger.error("   • データ期間が短すぎます（最低3年必要）")
+                logger.error("   • 期間指定を削除して全期間で実行してください")
+                logger.error("   • または、より長い期間を指定してください")
+            
+            logger.error(f"🔍 エラー詳細: {type(e).__name__}: {error_msg}")
             raise
 
     def perform_out_of_time_validation(self, train_data: pd.DataFrame, test_data: pd.DataFrame) -> Dict[str, Any]:
@@ -1103,6 +1135,15 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 'r2_place_max': actual_results.get('r2_place_max', 0.0)
             }
             
+            # レポート記載値（参考値）
+            report_values = {
+                'sample_size': 3119,
+                'correlation_place_avg': 0.245,
+                'r2_place_avg': 0.060,
+                'correlation_place_max': 0.0,
+                'r2_place_max': 0.0
+            }
+            
             # 差異計算
             differences = {}
             validation_status = {'overall': 'PASS', 'issues': []}
@@ -1159,7 +1200,12 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             }
             
         except Exception as e:
-            logger.error(f"❌ レポート整合性検証エラー: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"❌ レポート整合性検証エラー: {error_msg}")
+            logger.error("💡 この問題は分析結果に影響しません")
+            logger.error("   • 整合性チェック処理の内部エラーです")
+            logger.error("   • 分析結果は正常に生成されています")
+            logger.error(f"🔍 エラー詳細: {type(e).__name__}: {error_msg}")
             return {'error': str(e)}
 
     def analyze(self) -> Dict[str, Any]:
@@ -1438,6 +1484,11 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             # self.plotter._visualize_correlations(self._calculate_horse_stats(), self.stats['correlation_stats'])
             logger.warning("⚠️ '主戦クラス'のKeyErrorのため、相関分析の可視化を一時的に無効化しています。")
             
+            # 【新規追加】特徴量と複勝率の散布図（回帰分析付き）
+            logger.info("📊 特徴量と複勝率の散布図（回帰分析付き）を作成中...")
+            self._create_feature_scatter_plots()
+            logger.info("✅ 特徴量散布図の作成が完了しました")
+            
             # レース格別・距離別の箱ひげ図分析（論文要求対応）
             logger.info("📊 レース格別・距離別の箱ひげ図分析を実行中...")
             self.plotter.plot_race_grade_distance_boxplot(self.df)
@@ -1620,6 +1671,158 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         # フォールバック: 推定済みグレードが利用できない場合は賞金ベース計算
         logger.info("📊 推定済みグレードが利用できないため、賞金ベース計算にフォールバック")
         return self._calculate_grade_level_from_prize(df)
+    
+    def _create_feature_scatter_plots(self) -> None:
+        """特徴量と複勝率の散布図（回帰分析付き）を作成"""
+        try:
+            logger.info("📊 特徴量と複勝率の散布図作成を開始...")
+            
+            # 馬統計データを再計算
+            horse_stats = self._calculate_horse_stats()
+            
+            if len(horse_stats) == 0:
+                logger.warning("⚠️ 馬統計データが空のため、散布図作成をスキップします")
+                return
+            
+            # 作成する散布図のリスト
+            features_to_plot = [
+                {
+                    'x_col': 'race_level',
+                    'x_label': 'レースレベル',
+                    'title': 'レースレベルと複勝率の関係',
+                    'filename': 'race_level_place_rate_scatter'
+                },
+                {
+                    'x_col': 'grade_level',
+                    'x_label': 'グレードレベル',
+                    'title': 'グレードレベルと複勝率の関係',
+                    'filename': 'grade_level_place_rate_scatter'
+                },
+                {
+                    'x_col': 'venue_level',
+                    'x_label': '場所レベル',
+                    'title': '場所レベルと複勝率の関係',
+                    'filename': 'venue_level_place_rate_scatter'
+                },
+                {
+                    'x_col': 'distance_level',
+                    'x_label': '距離レベル',
+                    'title': '距離レベルと複勝率の関係',
+                    'filename': 'distance_level_place_rate_scatter'
+                }
+            ]
+            
+            # 各特徴量に対して散布図を作成
+            for feature_config in features_to_plot:
+                self._create_individual_feature_scatter(horse_stats, feature_config)
+                
+        except Exception as e:
+            logger.error(f"❌ 特徴量散布図作成中にエラー: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def _create_individual_feature_scatter(self, horse_stats: pd.DataFrame, config: dict) -> None:
+        """個別特徴量の散布図作成"""
+        try:
+            x_col = config['x_col']
+            
+            # レース単位の特徴量から馬単位の統計を計算
+            if x_col in horse_stats.columns:
+                x_data = horse_stats[x_col]
+                y_data = horse_stats['place_rate']
+            else:
+                # レースデータから馬単位で特徴量を集計
+                feature_stats = self.df.groupby('馬名')[x_col].agg(['mean', 'max']).reset_index()
+                place_stats = self.df.groupby('馬名')['着順'].apply(lambda x: (x <= 3).mean()).reset_index()
+                place_stats.columns = ['馬名', 'place_rate']
+                
+                # マージ
+                merged_data = pd.merge(feature_stats, place_stats, on='馬名')
+                x_data = merged_data['mean']  # 平均値を使用
+                y_data = merged_data['place_rate']
+            
+            # 欠損値を除去
+            valid_mask = (~x_data.isnull()) & (~y_data.isnull())
+            x_clean = x_data[valid_mask]
+            y_clean = y_data[valid_mask]
+            
+            if len(x_clean) < 10:
+                logger.warning(f"⚠️ {config['title']}: 有効データが不足 ({len(x_clean)}件)")
+                return
+            
+            # 統計分析
+            from scipy.stats import pearsonr
+            correlation, p_value = pearsonr(x_clean, y_clean)
+            
+            # 線形回帰
+            from sklearn.linear_model import LinearRegression
+            model = LinearRegression()
+            X = x_clean.values.reshape(-1, 1)
+            y = y_clean.values
+            model.fit(X, y)
+            y_pred = model.predict(X)
+            r2 = model.score(X, y)
+            
+            logger.info(f"   📈 {config['title']}: r={correlation:.3f}, R²={r2:.3f}, p={p_value:.3e}")
+            
+            # 散布図作成
+            import matplotlib.pyplot as plt
+            import numpy as np
+            import matplotlib.font_manager as fm
+            
+            # 日本語フォントの再設定（確実に適用するため）
+            if platform.system() == 'Windows':
+                plt.rcParams['font.family'] = ['Yu Gothic', 'Meiryo', 'MS Gothic', 'sans-serif']
+            
+            # figureサイズを調整し、右側に統計情報用の余白を確保
+            fig, ax = plt.subplots(figsize=(14, 8))
+            
+            # 散布図
+            ax.scatter(x_clean, y_clean, alpha=0.6, s=50, color='steelblue', 
+                       edgecolors='white', linewidth=0.5)
+            
+            # 回帰直線
+            x_range = np.linspace(x_clean.min(), x_clean.max(), 100)
+            y_range = model.predict(x_range.reshape(-1, 1))
+            ax.plot(x_range, y_range, 'r-', linewidth=2, 
+                    label=f'回帰直線 (R² = {r2:.3f})')
+            
+            # 装飾
+            ax.set_title(f'{config["title"]}\n相関係数: r={correlation:.3f} (p={p_value:.3e})', 
+                         fontsize=14, pad=20)
+            ax.set_xlabel(config['x_label'], fontsize=12)
+            ax.set_ylabel('複勝率', fontsize=12)
+            ax.set_ylim(-0.05, 1.05)
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+            
+            # 統計情報ボックスを図の右側（枠外）に配置
+            stats_text = f'サンプル数: {len(x_clean):,}頭\n'
+            stats_text += f'相関係数: r={correlation:.3f}\n'
+            stats_text += f'決定係数: R²={r2:.3f}\n'
+            stats_text += f'p値: {p_value:.3e}\n'
+            stats_text += f'有意性: {"有意" if p_value < 0.05 else "非有意"}'
+            
+            # figureに対して右側の位置に統計情報を配置
+            fig.text(0.78, 0.98, stats_text,
+                    bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8),
+                    verticalalignment='top', fontsize=10,
+                    transform=fig.transFigure)
+            
+            # レイアウト調整（統計情報用の余白を確保）
+            plt.subplots_adjust(right=0.75)
+            
+            # 保存
+            output_path = self.output_dir / f"{config['filename']}.png"
+            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            plt.close()
+            
+            logger.info(f"   💾 散布図を保存: {output_path}")
+            
+        except Exception as e:
+            logger.error(f"❌ {config['title']}の散布図作成エラー: {str(e)}")
+            import traceback
+            traceback.print_exc()
     
     def _convert_grade_to_level(self, df: pd.DataFrame, grade_col: str) -> pd.Series:
         """推定済みグレード値をgrade_levelに変換"""

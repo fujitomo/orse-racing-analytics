@@ -523,17 +523,12 @@ class MissingValueHandler:
     
     def _estimate_grade_from_prize(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
         """賞金からグレード推定（実務レポートに基づく基準）
-        優先列: 1着賞金(1着算入賞金込み) → 1着賞金 → 平均賞金
+        1着賞金(1着算入賞金込み)のみを使用
         しきい値は万円スケールを想定（データのスケール差異はそのまま比較）
         """
-        # 利用可能な賞金列の決定（優先順）
-        candidate_prize_cols = [
-            '1着賞金(1着算入賞金込み)',
-            '1着賞金',
-            '平均賞金'
-        ]
-        prize_col = next((c for c in candidate_prize_cols if c in df.columns), None)
-        if prize_col is None:
+        # 1着賞金(1着算入賞金込み)のみを使用
+        prize_col = '1着賞金(1着算入賞金込み)'
+        if prize_col not in df.columns:
             return df
 
         # 数値化

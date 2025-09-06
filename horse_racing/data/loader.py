@@ -85,7 +85,14 @@ class RaceDataLoader:
                                low_memory=False)  # メモリ使用量の警告を抑制
                 return df
             except Exception as e:
-                raise ValueError(f"ファイルの読み込みに失敗しました: {file_path}, {str(e)}")
+                error_msg = str(e)
+                logger.error(f"❌ ファイル読み込みエラー: {file_path}")
+                logger.error(f"   エラー内容: {error_msg}")
+                logger.error("💡 解決方法:")
+                logger.error("   • ファイルが破損していないか確認してください")
+                logger.error("   • ファイルが他のアプリケーションで開かれていないか確認してください")
+                logger.error("   • ディスク容量が不足していないか確認してください")
+                raise ValueError(f"ファイルの読み込みに失敗しました: {file_path}, エラー: {error_msg}")
 
     def _load_zip_file(self, zip_path: Path) -> pd.DataFrame:
         """
