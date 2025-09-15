@@ -330,6 +330,331 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.error(f"❌ タイム因果分析中にエラー: {str(e)}")
             return {}
 
+    def verify_hypothesis_h2_baseline_comparison(self, horse_stats: pd.DataFrame) -> Dict[str, Any]:
+        """
+        仮説H2の検証: HorseRaceLevelを説明変数に加えた回帰モデルは、
+        ベースライン（単勝オッズモデル等）より高い説明力を持つ
+        """
+        try:
+            logger.info("🧪 仮説H2検証: ベースライン比較分析")
+            
+            # データの準備
+            valid_data = horse_stats.dropna(subset=['avg_race_level', 'place_rate'])
+            if len(valid_data) < 10:
+                logger.warning("⚠️ H2検証: 有効データ不足")
+                return {}
+            
+            results = {}
+            
+            # 1. 提案手法（HorseRaceLevel）
+            from sklearn.linear_model import LinearRegression
+            from sklearn.metrics import r2_score, mean_squared_error
+            from scipy.stats import pearsonr
+            
+            X_proposed = valid_data[['avg_race_level']].values
+            y = valid_data['place_rate'].values
+            
+            model_proposed = LinearRegression()
+            model_proposed.fit(X_proposed, y)
+            y_pred_proposed = model_proposed.predict(X_proposed)
+            
+            r2_proposed = r2_score(y, y_pred_proposed)
+            corr_proposed, p_proposed = pearsonr(valid_data['avg_race_level'], valid_data['place_rate'])
+            
+            results['proposed_model'] = {
+                'r2': r2_proposed,
+                'correlation': corr_proposed,
+                'p_value': p_proposed,
+                'model': model_proposed,
+                'predictions': y_pred_proposed
+            }
+            
+            # 2. ベースライン1: 単純平均モデル（定数モデル）
+            y_pred_baseline1 = np.full_like(y, np.mean(y))
+            r2_baseline1 = r2_score(y, y_pred_baseline1)
+            
+            results['baseline_constant'] = {
+                'r2': r2_baseline1,
+                'description': '定数モデル（全馬の平均複勝率）'
+            }
+            
+            # 3. ベースライン2: 単勝オッズベースモデル（利用可能な場合）
+            if '単勝オッズ' in valid_data.columns:
+                # オッズを確率に変換（1/オッズ）
+                odds_prob = 1.0 / valid_data['単勝オッズ'].values
+                odds_prob = np.clip(odds_prob, 0.01, 0.99)  # 確率の範囲に制限
+                
+                model_odds = LinearRegression()
+                X_odds = odds_prob.reshape(-1, 1)
+                model_odds.fit(X_odds, y)
+                y_pred_odds = model_odds.predict(X_odds)
+                
+                r2_odds = r2_score(y, y_pred_odds)
+                corr_odds, p_odds = pearsonr(odds_prob, y)
+                
+                results['baseline_odds'] = {
+                    'r2': r2_odds,
+                    'correlation': corr_odds,
+                    'p_value': p_odds,
+                    'model': model_odds,
+                    'description': '単勝オッズベースモデル'
+                }
+            
+            # 4. ベースライン3: 勝利数ベースモデル
+            if '勝利数' in valid_data.columns:
+                model_wins = LinearRegression()
+                X_wins = valid_data[['勝利数']].values
+                model_wins.fit(X_wins, y)
+                y_pred_wins = model_wins.predict(X_wins)
+                
+                r2_wins = r2_score(y, y_pred_wins)
+                corr_wins, p_wins = pearsonr(valid_data['勝利数'], valid_data['place_rate'])
+                
+                results['baseline_wins'] = {
+                    'r2': r2_wins,
+                    'correlation': corr_wins,
+                    'p_value': p_wins,
+                    'model': model_wins,
+                    'description': '勝利数ベースモデル'
+                }
+            
+            # 5. ベースライン4: 出走回数ベースモデル
+            if '出走回数' in valid_data.columns:
+                model_races = LinearRegression()
+                X_races = valid_data[['出走回数']].values
+                model_races.fit(X_races, y)
+                y_pred_races = model_races.predict(X_races)
+                
+                r2_races = r2_score(y, y_pred_races)
+                corr_races, p_races = pearsonr(valid_data['出走回数'], valid_data['place_rate'])
+                
+                results['baseline_races'] = {
+                    'r2': r2_races,
+                    'correlation': corr_races,
+                    'p_value': p_races,
+                    'model': model_races,
+                    'description': '出走回数ベースモデル'
+                }
+            
+            # 6. 統計的有意性の比較
+            logger.info(f"📊 H2検証結果:")
+            logger.info(f"   提案手法 (HorseRaceLevel): R²={r2_proposed:.4f}, r={corr_proposed:.3f}")
+            
+            for baseline_name, baseline_data in results.items():
+                if baseline_name != 'proposed_model':
+                    logger.info(f"   {baseline_data.get('description', baseline_name)}: R²={baseline_data['r2']:.4f}")
+            
+            # 7. 改善度の計算
+            improvement_metrics = {}
+            for baseline_name, baseline_data in results.items():
+                if baseline_name != 'proposed_model' and 'r2' in baseline_data:
+                    improvement = r2_proposed - baseline_data['r2']
+                    improvement_metrics[baseline_name] = improvement
+                    logger.info(f"   {baseline_data.get('description', baseline_name)} vs 提案手法: {improvement:+.4f}")
+            
+            results['improvement_metrics'] = improvement_metrics
+            results['sample_size'] = len(valid_data)
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ H2検証中にエラー: {str(e)}")
+            return {}
+
+    def verify_hypothesis_h3_interaction_effects(self, horse_stats: pd.DataFrame) -> Dict[str, Any]:
+        """
+        仮説H3の検証: この関係は距離・競馬場ごとに異なる傾向を示す（交互作用の存在）
+        """
+        try:
+            logger.info("🧪 仮説H3検証: 交互作用分析")
+            
+            # データの準備
+            valid_data = horse_stats.dropna(subset=['avg_race_level', 'place_rate'])
+            if len(valid_data) < 20:
+                logger.warning("⚠️ H3検証: 有効データ不足")
+                return {}
+            
+            results = {}
+            
+            # 1. 距離カテゴリ別の交互作用分析
+            if '主戦距離' in valid_data.columns:
+                # 距離カテゴリの作成
+                valid_data = valid_data.copy()
+                valid_data['distance_category'] = pd.cut(
+                    valid_data['主戦距離'], 
+                    bins=[0, 1400, 1800, 2000, 9999],
+                    labels=['短距離', 'マイル', '中距離', '長距離']
+                )
+                
+                distance_results = {}
+                for category in valid_data['distance_category'].cat.categories:
+                    category_data = valid_data[valid_data['distance_category'] == category]
+                    if len(category_data) >= 5:
+                        corr, p_value = pearsonr(category_data['avg_race_level'], category_data['place_rate'])
+                        distance_results[category] = {
+                            'correlation': corr,
+                            'p_value': p_value,
+                            'sample_size': len(category_data),
+                            'mean_race_level': category_data['avg_race_level'].mean(),
+                            'mean_place_rate': category_data['place_rate'].mean()
+                        }
+                
+                results['distance_interaction'] = distance_results
+                
+                # 距離カテゴリ間の相関係数の差の検定
+                if len(distance_results) >= 2:
+                    correlations = [data['correlation'] for data in distance_results.values()]
+                    sample_sizes = [data['sample_size'] for data in distance_results.values()]
+                    
+                    # Fisher's Z変換による相関係数の比較
+                    from scipy.stats import norm
+                    
+                    z_scores = []
+                    for i, (corr, n) in enumerate(zip(correlations, sample_sizes)):
+                        if abs(corr) < 0.999:  # 完全相関を避ける
+                            z = 0.5 * np.log((1 + corr) / (1 - corr))
+                            se = 1 / np.sqrt(n - 3)
+                            z_scores.append((z, se))
+                    
+                    if len(z_scores) >= 2:
+                        # 最大と最小の相関係数の差を検定
+                        z_max, se_max = max(z_scores, key=lambda x: x[0])
+                        z_min, se_min = min(z_scores, key=lambda x: x[0])
+                        
+                        z_diff = (z_max - z_min) / np.sqrt(se_max**2 + se_min**2)
+                        p_diff = 2 * (1 - norm.cdf(abs(z_diff)))
+                        
+                        results['distance_interaction_test'] = {
+                            'z_statistic': z_diff,
+                            'p_value': p_diff,
+                            'significant': p_diff < 0.05
+                        }
+            
+            # 2. 競馬場別の交互作用分析
+            if '主戦場' in valid_data.columns:
+                venue_results = {}
+                venue_counts = valid_data['主戦場'].value_counts()
+                
+                # サンプル数が十分な競馬場のみ分析
+                major_venues = venue_counts[venue_counts >= 10].index
+                
+                for venue in major_venues:
+                    venue_data = valid_data[valid_data['主戦場'] == venue]
+                    if len(venue_data) >= 5:
+                        corr, p_value = pearsonr(venue_data['avg_race_level'], venue_data['place_rate'])
+                        venue_results[venue] = {
+                            'correlation': corr,
+                            'p_value': p_value,
+                            'sample_size': len(venue_data),
+                            'mean_race_level': venue_data['avg_race_level'].mean(),
+                            'mean_place_rate': venue_data['place_rate'].mean()
+                        }
+                
+                results['venue_interaction'] = venue_results
+                
+                # 競馬場間の相関係数の差の検定
+                if len(venue_results) >= 2:
+                    correlations = [data['correlation'] for data in venue_results.values()]
+                    sample_sizes = [data['sample_size'] for data in venue_results.values()]
+                    
+                    z_scores = []
+                    for corr, n in zip(correlations, sample_sizes):
+                        if abs(corr) < 0.999:
+                            z = 0.5 * np.log((1 + corr) / (1 - corr))
+                            se = 1 / np.sqrt(n - 3)
+                            z_scores.append((z, se))
+                    
+                    if len(z_scores) >= 2:
+                        z_max, se_max = max(z_scores, key=lambda x: x[0])
+                        z_min, se_min = min(z_scores, key=lambda x: x[0])
+                        
+                        z_diff = (z_max - z_min) / np.sqrt(se_max**2 + se_min**2)
+                        p_diff = 2 * (1 - norm.cdf(abs(z_diff)))
+                        
+                        results['venue_interaction_test'] = {
+                            'z_statistic': z_diff,
+                            'p_value': p_diff,
+                            'significant': p_diff < 0.05
+                        }
+            
+            # 3. 多変量回帰による交互作用項の検定
+            try:
+                from sklearn.linear_model import LinearRegression
+                from sklearn.preprocessing import StandardScaler
+                
+                # 交互作用項を含む特徴量の準備
+                X_interaction = valid_data[['avg_race_level']].copy()
+                
+                # 距離カテゴリのダミー変数
+                if 'distance_category' in valid_data.columns:
+                    distance_dummies = pd.get_dummies(valid_data['distance_category'], prefix='dist')
+                    X_interaction = pd.concat([X_interaction, distance_dummies], axis=1)
+                    
+                    # 交互作用項の作成
+                    for col in distance_dummies.columns:
+                        interaction_col = f'race_level_x_{col}'
+                        X_interaction[interaction_col] = valid_data['avg_race_level'] * distance_dummies[col]
+                
+                # 競馬場のダミー変数（主要な競馬場のみ）
+                if '主戦場' in valid_data.columns and len(major_venues) > 0:
+                    venue_dummies = pd.get_dummies(valid_data['主戦場'], prefix='venue')
+                    # サンプル数が少ない競馬場は除外
+                    venue_dummies = venue_dummies.loc[:, venue_dummies.sum() >= 5]
+                    X_interaction = pd.concat([X_interaction, venue_dummies], axis=1)
+                    
+                    # 交互作用項の作成
+                    for col in venue_dummies.columns:
+                        interaction_col = f'race_level_x_{col}'
+                        X_interaction[interaction_col] = valid_data['avg_race_level'] * venue_dummies[col]
+                
+                # 回帰分析の実行
+                y = valid_data['place_rate'].values
+                model_interaction = LinearRegression()
+                model_interaction.fit(X_interaction, y)
+                
+                # 交互作用項の係数の有意性を評価
+                interaction_coefs = {}
+                feature_names = X_interaction.columns
+                coefficients = model_interaction.coef_
+                
+                for i, (feature, coef) in enumerate(zip(feature_names, coefficients)):
+                    if 'race_level_x_' in feature:
+                        interaction_coefs[feature] = {
+                            'coefficient': coef,
+                            'feature_name': feature
+                        }
+                
+                results['multivariate_interaction'] = {
+                    'model': model_interaction,
+                    'interaction_coefficients': interaction_coefs,
+                    'r2_score': model_interaction.score(X_interaction, y),
+                    'feature_names': feature_names.tolist(),
+                    'coefficients': coefficients.tolist()
+                }
+                
+            except Exception as e:
+                logger.warning(f"⚠️ 多変量交互作用分析でエラー: {str(e)}")
+                results['multivariate_interaction'] = {'error': str(e)}
+            
+            # 4. 結果の要約
+            logger.info(f"📊 H3検証結果:")
+            if 'distance_interaction' in results:
+                logger.info(f"   距離カテゴリ別相関:")
+                for category, data in results['distance_interaction'].items():
+                    logger.info(f"     {category}: r={data['correlation']:.3f} (n={data['sample_size']})")
+            
+            if 'venue_interaction' in results:
+                logger.info(f"   競馬場別相関:")
+                for venue, data in results['venue_interaction'].items():
+                    logger.info(f"     {venue}: r={data['correlation']:.3f} (n={data['sample_size']})")
+            
+            results['sample_size'] = len(valid_data)
+            return results
+            
+        except Exception as e:
+            logger.error(f"❌ H3検証中にエラー: {str(e)}")
+            return {}
+
     def verify_hypothesis_h1(self, data: pd.DataFrame) -> Dict[str, Any]:
         """
         仮説H1の検証: RaceLevel（レース格）が高いほど、走破タイムが速くなる（距離補正済み）
@@ -1267,6 +1592,30 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                     results['stratified_analysis'] = stratified_results
                     logger.info("✅ 層別分析が完了しました")
             
+            # 【新規追加】仮説検証の実行（H2, H3）
+            logger.info("🧪 仮説検証（H2, H3）を実行中...")
+            
+            # H2: ベースライン比較分析
+            try:
+                train_horse_stats = self._calculate_horse_stats_for_data(train_data)
+                if len(train_horse_stats) > 0:
+                    h2_results = self.verify_hypothesis_h2_baseline_comparison(train_horse_stats)
+                    if h2_results:
+                        results['hypothesis_h2_baseline_comparison'] = h2_results
+                        logger.info("✅ H2検証（ベースライン比較）が完了しました")
+            except Exception as e:
+                logger.warning(f"⚠️ H2検証でエラー: {str(e)}")
+            
+            # H3: 交互作用分析
+            try:
+                if len(train_horse_stats) > 0:
+                    h3_results = self.verify_hypothesis_h3_interaction_effects(train_horse_stats)
+                    if h3_results:
+                        results['hypothesis_h3_interaction_effects'] = h3_results
+                        logger.info("✅ H3検証（交互作用分析）が完了しました")
+            except Exception as e:
+                logger.warning(f"⚠️ H3検証でエラー: {str(e)}")
+            
             # マルチコリニアリティ検証（訓練データで実行）
             logger.info("🔍 マルチコリニアリティ検証を実行中...")
             multicollinearity_results = self.validate_multicollinearity_on_train_data(train_data)
@@ -1502,6 +1851,15 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             # 因果関係分析の可視化
             # if 'causal_analysis' in self.stats:
             #     self._visualize_causal_analysis()
+            
+            # 【新規追加】仮説検証の可視化
+            if 'hypothesis_h2_baseline_comparison' in self.stats:
+                logger.info("🧪 H2検証（ベースライン比較）の可視化中...")
+                self._visualize_h2_baseline_comparison(self.stats['hypothesis_h2_baseline_comparison'], output_dir)
+            
+            if 'hypothesis_h3_interaction_effects' in self.stats:
+                logger.info("🧪 H3検証（交互作用分析）の可視化中...")
+                self._visualize_h3_interaction_effects(self.stats['hypothesis_h3_interaction_effects'], output_dir)
 
         except Exception as e:
             logger.error(f"可視化中にエラーが発生しました: {str(e)}")
@@ -1893,7 +2251,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         return grade_level
     
     def _calculate_grade_level_from_prize(self, df: pd.DataFrame) -> pd.Series:
-        """賞金ベースのグレードレベル計算（フォールバック用）"""
+        """賞金ベースのグレードレベル計算（中央値ベース）"""
         
         # 賞金カラムの特定
         prize_col = next((c for c in ['1着賞金(1着算入賞金込み)', '1着賞金', '本賞金'] if c in df.columns), None)
@@ -1901,33 +2259,37 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.warning("⚠️ 賞金カラムが見つかりません。grade_levelをデフォルト値で設定")
             return pd.Series([5.0] * len(df), index=df.index)
 
+        # グレードカラムの特定
+        grade_col = next((c for c in ['グレード', 'grade', 'レースグレード'] if c in df.columns), None)
+        if grade_col is None:
+            logger.warning("⚠️ グレードカラムが見つかりません。grade_levelをデフォルト値で設定")
+            return pd.Series([5.0] * len(df), index=df.index)
+
         # 賞金データの数値変換
         df_copy = df.copy()
-        df_copy[prize_col] = pd.to_numeric(df_copy[prize_col], errors='coerce').fillna(0)
+        df_copy[prize_col] = pd.to_numeric(df_copy[prize_col], errors='coerce')
+        df_copy[grade_col] = pd.to_numeric(df_copy[grade_col], errors='coerce')
         
-        # process_race_data.pyのMissingValueHandlerと整合性のある賞金基準を使用
-        def grade_from_prize(prize):
-            # MissingValueHandlerの基準に合わせた階層分類
-            if prize >= 16500:  # G1レベル（MissingValueHandler基準）
-                return 9.0
-            elif prize >= 8550:   # G2レベル（MissingValueHandler基準）  
-                return 7.5
-            elif prize >= 5700:   # G3レベル（MissingValueHandler基準）
-                return 6.0
-            elif prize >= 3000:   # L（リステッド）レベル（MissingValueHandler基準）
-                return 3.0
-            elif prize >= 1200:   # 特別レベル（MissingValueHandler基準）
-                return 2.0
-            elif prize >= 400:    # オープン特別
-                return 1.5
-            elif prize >= 200:    # 条件戦
-                return 1.0
-            else:                 # 未勝利・新馬
-                return 0.0
+        # グレード別の賞金中央値
+        grade_prize_median = df_copy.groupby(grade_col)[prize_col].median().dropna()
         
-        grade_level = df_copy[prize_col].apply(grade_from_prize)
+        if len(grade_prize_median) == 0:
+            logger.warning("⚠️ グレード別賞金データが計算できません。grade_levelをデフォルト値で設定")
+            return pd.Series([5.0] * len(df), index=df.index)
         
-        logger.info(f"✅ 賞金ベース（フォールバック）のgrade_level計算完了: 範囲 {grade_level.min():.2f} - {grade_level.max():.2f}")
+        # MinMaxScalerによる正規化（0-9ポイント）
+        from sklearn.preprocessing import MinMaxScaler
+        scaler = MinMaxScaler(feature_range=(0, 9))
+        normalized_values = scaler.fit_transform(grade_prize_median.values.reshape(-1, 1)).flatten()
+        
+        # グレード→ポイントのマッピング作成
+        grade_points_map = dict(zip(grade_prize_median.index, normalized_values))
+        
+        # データフレームに適用
+        grade_level = df_copy[grade_col].map(grade_points_map).fillna(0)
+        
+        logger.info(f"✅ 中央値ベースのgrade_level計算完了: 範囲 {grade_level.min():.2f} - {grade_level.max():.2f}")
+        logger.info(f"📊 グレード別賞金中央値: {grade_prize_median.to_dict()}")
         
         return grade_level
 
