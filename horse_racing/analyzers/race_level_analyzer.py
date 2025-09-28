@@ -209,15 +209,19 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         # 【重要】レポート記載の3要素統合race_level計算
         df["distance_level"] = self._calculate_distance_level(df)
         
-        # レポート記載の重み（5.0.3節参照）
-        w_grade = 0.497
-        w_venue = 0.316
-        w_distance = 0.186
+        # 複勝結果統合後の重み（5.0.2節参照）
+        w_grade = 0.636
+        w_venue = 0.323
+        w_distance = 0.041
         
-        # 3要素統合race_level計算
-        df["race_level"] = (df["grade_level"] * w_grade + 
-                           df["venue_level"] * w_venue + 
-                           df["distance_level"] * w_distance)
+        # 【改良】時間的分離による複勝結果統合（循環論理を回避）
+        # 基本レースレベルを計算
+        base_race_level = (df["grade_level"] * w_grade + 
+                          df["venue_level"] * w_venue + 
+                          df["distance_level"] * w_distance)
+        
+        # 複勝結果による重み付けを適用（馬の過去実績ベース）
+        df["race_level"] = self._apply_historical_result_weights(df, base_race_level)
         
         # RunningTime分析機能を追加（有効な場合のみ）
         if self.enable_time_analysis:
@@ -2323,6 +2327,121 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         logger.info(f"✅ 距離レベル計算完了: 範囲 {distance_level.min():.2f} - {distance_level.max():.2f}")
         
         return distance_level
+
+    def _calculate_result_weight(self, df: pd.DataFrame) -> pd.Series:
+        """
+        着順に基づく結果重み付けを計算
+        
+        レポート614行目の将来改善案を実装:
+        「RacePointを着順に応じて重み付け（例: 1着は1.0倍、2着は0.8倍、着外は0.1倍など）」
+        
+        Args:
+            df: レースデータフレーム（着順カラム必須）
+        
+        Returns:
+            pd.Series: 着順に基づく重み係数（1着=1.0, 2着=0.8, 3着=0.6, 着外=0.1）
+        """
+        finish_col = '着順'
+        if finish_col not in df.columns:
+            logger.warning("⚠️ 着順カラムが見つかりません。結果重みを1.0で設定")
+            return pd.Series([1.0] * len(df), index=df.index)
+        
+        # 着順による重み付けマップ（競馬のドメイン知識に基づく）
+        def get_result_weight(finish_position):
+            """着順から結果重みを計算"""
+            if pd.isna(finish_position):
+                return 0.1  # 着順不明の場合は最小重み
+            
+            try:
+                pos = int(finish_position)
+                if pos == 1:
+                    return 1.0  # 1着: 最大重み（完全な成功）
+                elif pos == 2:
+                    return 0.8  # 2着: 高重み（優秀な成績）
+                elif pos == 3:
+                    return 0.6  # 3着: 中重み（複勝圏内の価値）
+                else:
+                    return 0.1  # 着外: 最小重み（経験価値のみ）
+            except (ValueError, TypeError):
+                return 0.1  # 変換できない場合
+        
+        # 結果重みを適用
+        result_weight = df[finish_col].apply(get_result_weight)
+        
+        # 統計ログ出力
+        weight_distribution = result_weight.value_counts().sort_index()
+        logger.info(f"✅ 着順別結果重み計算完了:")
+        logger.info(f"  1着(1.0): {(result_weight == 1.0).sum():,}件")
+        logger.info(f"  2着(0.8): {(result_weight == 0.8).sum():,}件") 
+        logger.info(f"  3着(0.6): {(result_weight == 0.6).sum():,}件")
+        logger.info(f"  着外(0.1): {(result_weight == 0.1).sum():,}件")
+        logger.info(f"  平均重み: {result_weight.mean():.3f}")
+        
+        return result_weight
+    
+    def _apply_historical_result_weights(self, df: pd.DataFrame, base_race_level: pd.Series) -> pd.Series:
+        """
+        時間的分離による複勝結果重み付けを適用
+        
+        各馬の過去の複勝実績に基づいて、現在のレースレベルを調整する。
+        これにより循環論理を回避しつつ、複勝結果の価値を統合する。
+        
+        Args:
+            df: レースデータフレーム
+            base_race_level: 基本レースレベル
+            
+        Returns:
+            pd.Series: 複勝実績調整済みレースレベル
+        """
+        # データをコピーして作業
+        df_work = df.copy()
+        df_work['base_race_level'] = base_race_level
+        df_work['年月日'] = pd.to_datetime(df_work['年月日'], format='%Y%m%d')
+        
+        # 結果格納用
+        adjusted_race_level = base_race_level.copy()
+        
+        # 馬ごとに過去実績ベースの調整を実施
+        for horse_name in df_work['馬名'].unique():
+            horse_data = df_work[df_work['馬名'] == horse_name].sort_values('年月日')
+            
+            for idx, row in horse_data.iterrows():
+                current_date = row['年月日']
+                
+                # 現在のレースより前の実績を取得
+                past_data = horse_data[horse_data['年月日'] < current_date]
+                
+                if len(past_data) == 0:
+                    # 過去実績がない場合は基本値を使用
+                    continue
+                
+                # 過去の複勝率を計算
+                past_place_rate = (past_data['着順'] <= 3).mean()
+                
+                # 複勝率に基づく調整係数を算出
+                # 複勝率が高い馬ほど実績を重視（最大1.2倍、最小0.8倍）
+                if past_place_rate >= 0.5:
+                    adjustment_factor = 1.0 + (past_place_rate - 0.5) * 0.4  # 0.5以上で1.0-1.2
+                elif past_place_rate >= 0.3:
+                    adjustment_factor = 1.0  # 0.3-0.5で1.0（標準）
+                else:
+                    adjustment_factor = 1.0 - (0.3 - past_place_rate) * 0.67  # 0.3未満で0.8-1.0
+                
+                # 調整係数を適用（上限・下限設定）
+                adjustment_factor = max(0.8, min(1.2, adjustment_factor))
+                
+                # 調整済みrace_levelを設定
+                adjusted_race_level.loc[idx] = base_race_level.loc[idx] * adjustment_factor
+        
+        # 統計情報をログ出力
+        adjustment_stats = adjusted_race_level / base_race_level
+        logger.info(f"✅ 過去実績ベース複勝結果統合完了:")
+        logger.info(f"  平均調整係数: {adjustment_stats.mean():.3f}")
+        logger.info(f"  調整係数範囲: {adjustment_stats.min():.3f} - {adjustment_stats.max():.3f}")
+        logger.info(f"  調整前平均: {base_race_level.mean():.3f}")
+        logger.info(f"  調整後平均: {adjusted_race_level.mean():.3f}")
+        
+        return adjusted_race_level
     
     def _compare_all_weighting_methods(self, horse_stats_data: pd.DataFrame) -> Dict[str, Dict]:
         """複数の重み付け手法を詳細比較"""
@@ -2543,7 +2662,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         try:
             logger.info("=== マルチコリニアリティ検証開始 ===")
             
-            # 特徴量の定義
+            # 特徴量の定義（race_levelには複勝結果が統合済み）
             features = ['grade_level', 'venue_level', 'prize_level']
             
             # データの準備（欠損値除去）
@@ -2864,7 +2983,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         if "is_placed" not in self.df.columns:
             self.df["is_placed"] = self.df["着順"] <= 3
 
-        # 馬ごとの基本統計（🔥修正: distance_levelを追加）
+        # 馬ごとの基本統計（🔥修正: distance_levelと複勝結果加重レベルを追加）
         agg_dict = {
             "race_level": ["max", "mean"],
             "venue_level": ["max", "mean"],
@@ -2874,13 +2993,15 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             "着順": "count"
         }
         
+        # race_levelには既に複勝結果が組み込まれているため、追加の特徴量は不要
+        
         # クラスカラムが存在する場合のみ追加
         if self.class_column and self.class_column in self.df.columns:
             agg_dict[self.class_column] = lambda x: x.value_counts().idxmax() if not x.empty else 0
         
         horse_stats = self.df.groupby("馬名").agg(agg_dict).reset_index()
 
-        # カラム名の整理（🔥修正: distance_level関連を追加）
+        # カラム名の整理（🔥修正: distance_level関連を追加、race_levelには複勝結果が統合済み）
         if self.class_column and self.class_column in self.df.columns:
             horse_stats.columns = ["馬名", "最高レベル", "平均レベル", "最高場所レベル", "平均場所レベル", "最高距離レベル", "平均距離レベル", "勝利数", "複勝数", "出走回数", "主戦クラス"]
         else:
@@ -2916,9 +3037,11 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         return grade_stats
 
     def _perform_correlation_analysis(self, horse_stats: pd.DataFrame) -> Dict[str, Any]:
-        """相関分析を実行"""
-        # TODO:欠損値のついて調査予定
-        analysis_data = horse_stats.dropna(subset=['最高レベル', '平均レベル', '最高場所レベル', '平均場所レベル', 'win_rate', 'place_rate'])
+        """相関分析を実行（race_levelには複勝結果が統合済み）"""
+        # 必須カラム（race_levelには既に複勝結果が組み込まれている）
+        required_cols = ['最高レベル', '平均レベル', '最高場所レベル', '平均場所レベル', 'win_rate', 'place_rate']
+        
+        analysis_data = horse_stats.dropna(subset=required_cols)
         
         default_results = {
             "correlation_win_max": 0.0,
@@ -3012,6 +3135,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         X_place_venue_avg = analysis_data['平均場所レベル'].values.reshape(-1, 1)
         model_place_venue_avg = LinearRegression().fit(X_place_venue_avg, y_place)
         r2_place_venue_avg = model_place_venue_avg.score(X_place_venue_avg, y_place)
+
+        # race_levelには既に複勝結果が統合されているため、個別の分析は不要
 
         return {
             # 最高レベル系
