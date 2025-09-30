@@ -103,6 +103,11 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.info("\nデータフレームの先頭5行:")
             logger.info(df.head())
 
+            # 【修正】空のデータフレームをチェック
+            if len(df.columns) == 0:
+                logger.warning("⚠️ データフレームが空です。前処理をスキップします。")
+                return df
+            
             # カラム名の前後の空白を除去
             df.columns = df.columns.str.strip()
 
@@ -976,16 +981,36 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             all_years = sorted(self.df['年'].unique())
             logger.info(f"📊 利用可能データ期間: {all_years[0]}年-{all_years[-1]}年（{len(all_years)}年間）")
             
-            # 70-15-15分割の計算
+            # 【修正】期間が短い場合の特別処理
             total_years = len(all_years)
-            train_years_count = int(total_years * 0.7)  # 70%
-            val_years_count = int(total_years * 0.15)   # 15%
-            test_years_count = total_years - train_years_count - val_years_count  # 残り（約15%）
-            
-            # 時系列順での分割
-            train_years = all_years[:train_years_count]
-            val_years = all_years[train_years_count:train_years_count + val_years_count]
-            test_years = all_years[train_years_count + val_years_count:]
+            if total_years <= 3:
+                logger.warning(f"⚠️ データ期間が短いです（{total_years}年）。期間別分析用の簡易分割を使用します。")
+                # 短期間の場合は2:1:1の比率で分割（最低1年ずつ）
+                if total_years == 1:
+                    # 1年の場合は全データをテストデータとして使用
+                    train_years = []
+                    val_years = []
+                    test_years = all_years
+                elif total_years == 2:
+                    # 2年の場合は1:0:1で分割
+                    train_years = all_years[:1]
+                    val_years = []
+                    test_years = all_years[1:]
+                else:  # total_years == 3
+                    # 3年の場合は1:1:1で分割
+                    train_years = all_years[:1]
+                    val_years = all_years[1:2]
+                    test_years = all_years[2:]
+            else:
+                # 70-15-15分割の計算
+                train_years_count = max(1, int(total_years * 0.7))  # 最低1年
+                val_years_count = max(1, int(total_years * 0.15))   # 最低1年
+                test_years_count = total_years - train_years_count - val_years_count  # 残り
+                
+                # 時系列順での分割
+                train_years = all_years[:train_years_count]
+                val_years = all_years[train_years_count:train_years_count + val_years_count]
+                test_years = all_years[train_years_count + val_years_count:]
             
             logger.info(f"📅 標準的分割比率による期間設定:")
             logger.info(f"   訓練期間: {train_years} ({len(train_years)}年, 約70%)")
@@ -1019,9 +1044,20 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 logger.warning(f"⚠️ 分割比率が標準から逸脱: 訓練{train_pct:.1f}% 検証{val_pct:.1f}% テスト{test_pct:.1f}%")
             
             logger.info(f"📊 最終データセット:")
-            logger.info(f"   訓練期間データ: {len(train_data):,}行 ({train_years[0]}-{train_years[-1]}年)")
-            logger.info(f"   検証期間データ: {len(val_data):,}行 ({val_years[0]}-{val_years[-1]}年)")
-            logger.info(f"   テスト期間データ: {len(test_data):,}行 ({test_years[0]}-{test_years[-1]}年)")
+            if train_years:
+                logger.info(f"   訓練期間データ: {len(train_data):,}行 ({train_years[0]}-{train_years[-1]}年)")
+            else:
+                logger.info(f"   訓練期間データ: {len(train_data):,}行 (期間なし)")
+            
+            if val_years:
+                logger.info(f"   検証期間データ: {len(val_data):,}行 ({val_years[0]}-{val_years[-1]}年)")
+            else:
+                logger.info(f"   検証期間データ: {len(val_data):,}行 (期間なし)")
+            
+            if test_years:
+                logger.info(f"   テスト期間データ: {len(test_data):,}行 ({test_years[0]}-{test_years[-1]}年)")
+            else:
+                logger.info(f"   テスト期間データ: {len(test_data):,}行 (期間なし)")
             
             # データ充足性の確認
             if len(train_data) < 1000:
@@ -1066,6 +1102,26 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         """
         try:
             logger.info("🔬 Out-of-Time検証を実行中...")
+            
+            # 【修正】訓練データが空の場合の処理
+            if len(train_data) == 0:
+                logger.warning("⚠️ 訓練データが空です。簡易分析モードで実行します。")
+                # テストデータのみで分析
+                test_horse_stats = self._calculate_horse_stats_for_data(test_data)
+                
+                # 簡易重みを使用
+                simple_weights = {'grade_weight': 0.618, 'venue_weight': 0.337, 'distance_weight': 0.045}
+                test_performance = self._evaluate_weights_on_test_data(simple_weights, test_horse_stats)
+                
+                return {
+                    'train_period': 'N/A (簡易モード)',
+                    'test_period': f"{test_data['年'].min()}-{test_data['年'].max()}",
+                    'train_sample_size': 0,
+                    'test_sample_size': len(test_horse_stats),
+                    'optimal_weights': simple_weights,
+                    'test_performance': test_performance,
+                    'mode': 'simple_analysis'
+                }
             
             # 1. 訓練データで馬ごと統計を計算
             logger.info("📊 訓練データで馬ごと統計を計算中...")
@@ -1934,7 +1990,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         
         # 🔥 修正: 推定済みグレード値を優先的に使用
         # process_race_data.pyで生成されるグレード列を優先（数値）、文字列グレードも対応
-        grade_candidates = ['グレード', 'グレード_x', 'グレード_y', 'grade', 'レースグレード']
+        grade_candidates = ['グレード_x', 'グレード_y', 'グレード', 'grade', 'レースグレード']
         grade_col = next((col for col in grade_candidates if col in df.columns), None)
         
         if grade_col is not None:
@@ -2012,9 +2068,13 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 }
             ]
             
-            # 各特徴量に対して散布図を作成
+            # 各特徴量に対して散布図を作成（存在する特徴量のみ）
             for feature_config in features_to_plot:
-                self._create_individual_feature_scatter(horse_stats, feature_config)
+                x_col = feature_config['x_col']
+                if x_col in horse_stats.columns or x_col in self.df.columns:
+                    self._create_individual_feature_scatter(horse_stats, feature_config)
+                else:
+                    logger.warning(f"⚠️ 特徴量 '{x_col}' が見つからないため、{feature_config['title']}をスキップします")
                 
         except Exception as e:
             logger.error(f"❌ 特徴量散布図作成中にエラー: {str(e)}")
@@ -2030,7 +2090,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             if x_col in horse_stats.columns:
                 x_data = horse_stats[x_col]
                 y_data = horse_stats['place_rate']
-            else:
+            elif x_col in self.df.columns:
                 # レースデータから馬単位で特徴量を集計
                 feature_stats = self.df.groupby('馬名')[x_col].agg(['mean', 'max']).reset_index()
                 place_stats = self.df.groupby('馬名')['着順'].apply(lambda x: (x <= 3).mean()).reset_index()
@@ -2040,6 +2100,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 merged_data = pd.merge(feature_stats, place_stats, on='馬名')
                 x_data = merged_data['mean']  # 平均値を使用
                 y_data = merged_data['place_rate']
+            else:
+                logger.warning(f"⚠️ {config['title']}: 特徴量 '{x_col}' が見つかりません。スキップします。")
+                return
             
             # 欠損値を除去
             valid_mask = (~x_data.isnull()) & (~y_data.isnull())
@@ -2662,8 +2725,15 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         try:
             logger.info("=== マルチコリニアリティ検証開始 ===")
             
-            # 特徴量の定義（race_levelには複勝結果が統合済み）
-            features = ['grade_level', 'venue_level', 'prize_level']
+            # 特徴量の定義（存在するカラムのみ）
+            all_features = ['grade_level', 'venue_level', 'prize_level', 'distance_level']
+            features = [col for col in all_features if col in self.df.columns]
+            
+            if len(features) < 2:
+                logger.warning("⚠️ マルチコリニアリティ検証に必要な特徴量が不足しています")
+                return {'status': 'skipped', 'reason': 'insufficient_features'}
+            
+            logger.info(f"📊 検証対象特徴量: {features}")
             
             # データの準備（欠損値除去）
             feature_data = self.df[features].dropna()
@@ -2983,15 +3053,19 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         if "is_placed" not in self.df.columns:
             self.df["is_placed"] = self.df["着順"] <= 3
 
-        # 馬ごとの基本統計（🔥修正: distance_levelと複勝結果加重レベルを追加）
+        # 馬ごとの基本統計（存在するカラムのみ）
         agg_dict = {
             "race_level": ["max", "mean"],
-            "venue_level": ["max", "mean"],
-            "distance_level": ["max", "mean"],  # 🔥 修正: 距離レベルを追加
             "is_win": "sum",
             "is_placed": "sum",
             "着順": "count"
         }
+        
+        # 存在する特徴量カラムのみ追加
+        optional_features = ["venue_level", "distance_level", "prize_level", "grade_level"]
+        for feature in optional_features:
+            if feature in self.df.columns:
+                agg_dict[feature] = ["max", "mean"]
         
         # race_levelには既に複勝結果が組み込まれているため、追加の特徴量は不要
         
@@ -3001,11 +3075,27 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         
         horse_stats = self.df.groupby("馬名").agg(agg_dict).reset_index()
 
-        # カラム名の整理（🔥修正: distance_level関連を追加、race_levelには複勝結果が統合済み）
+        # カラム名の動的整理
+        new_columns = ["馬名", "最高レベル", "平均レベル"]
+        
+        # 存在する特徴量に応じてカラム名を追加
+        for feature in optional_features:
+            if feature in self.df.columns:
+                if feature == "venue_level":
+                    new_columns.extend(["最高場所レベル", "平均場所レベル"])
+                elif feature == "distance_level":
+                    new_columns.extend(["最高距離レベル", "平均距離レベル"])
+                elif feature == "prize_level":
+                    new_columns.extend(["最高賞金レベル", "平均賞金レベル"])
+                elif feature == "grade_level":
+                    new_columns.extend(["最高グレードレベル", "平均グレードレベル"])
+        
+        new_columns.extend(["勝利数", "複勝数", "出走回数"])
+        
         if self.class_column and self.class_column in self.df.columns:
-            horse_stats.columns = ["馬名", "最高レベル", "平均レベル", "最高場所レベル", "平均場所レベル", "最高距離レベル", "平均距離レベル", "勝利数", "複勝数", "出走回数", "主戦クラス"]
-        else:
-            horse_stats.columns = ["馬名", "最高レベル", "平均レベル", "最高場所レベル", "平均場所レベル", "最高距離レベル", "平均距離レベル", "勝利数", "複勝数", "出走回数"]
+            new_columns.append("主戦クラス")
+        
+        horse_stats.columns = new_columns
         
         # レース回数がmin_races回以上の馬のみをフィルタリング
         min_races = self.config.min_races if hasattr(self.config, 'min_races') else 3

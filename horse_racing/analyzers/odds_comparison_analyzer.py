@@ -18,6 +18,10 @@ import warnings
 from pathlib import Path
 import matplotlib.pyplot as plt
 import seaborn as sns
+import time
+import psutil
+import os
+from functools import wraps
 
 # 統計的妥当性検証フレームワークのインポート
 try:
@@ -26,6 +30,67 @@ except ImportError:
     logger.warning("統計的妥当性検証フレームワークが利用できません")
 
 logger = logging.getLogger(__name__)
+
+# パフォーマンス監視用のユーティリティ関数
+def log_performance_odds(func_name=None):
+    """オッズ分析専用のパフォーマンス監視デコレータ"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # 関数名を自動取得または指定された名前を使用
+            name = func_name or func.__name__
+            
+            # 開始時のリソース情報取得
+            process = psutil.Process(os.getpid())
+            start_time = time.time()
+            start_memory = process.memory_info().rss / 1024 / 1024  # MB
+            
+            logger.info(f"🎯 [オッズ分析:{name}] 開始 - 開始時メモリ: {start_memory:.1f}MB")
+            
+            try:
+                # 関数実行
+                result = func(*args, **kwargs)
+                
+                # 終了時のリソース情報取得
+                end_time = time.time()
+                end_memory = process.memory_info().rss / 1024 / 1024  # MB
+                
+                # 実行時間とリソース使用量を計算
+                execution_time = end_time - start_time
+                memory_diff = end_memory - start_memory
+                
+                # ログ出力
+                logger.info(f"✅ [オッズ分析:{name}] 完了 - 実行時間: {execution_time:.2f}秒")
+                logger.info(f"   💾 メモリ差分: {memory_diff:+.1f}MB")
+                
+                # パフォーマンス警告
+                if execution_time > 30:
+                    logger.warning(f"⚠️ [オッズ分析:{name}] 実行時間が30秒を超えました: {execution_time:.2f}秒")
+                if memory_diff > 200:
+                    logger.warning(f"⚠️ [オッズ分析:{name}] メモリ使用量が200MB増加しました: {memory_diff:.1f}MB")
+                
+                return result
+                
+            except Exception:
+                end_time = time.time()
+                execution_time = end_time - start_time
+                logger.error(f"❌ [オッズ分析:{name}] エラー発生 - 実行時間: {execution_time:.2f}秒")
+                raise
+                
+        return wrapper
+    return decorator
+
+def log_odds_processing_step(step_name: str, start_time: float, current_idx: int, total_count: int):
+    """オッズ分析の処理ステップ進捗をログ出力"""
+    elapsed = time.time() - start_time
+    if current_idx > 0:
+        avg_time_per_item = elapsed / current_idx
+        remaining_items = total_count - current_idx
+        eta = remaining_items * avg_time_per_item
+        
+        logger.info(f"⏳ [オッズ分析:{step_name}] 進捗: {current_idx:,}/{total_count:,} "
+                   f"({current_idx/total_count*100:.1f}%) - "
+                   f"経過時間: {elapsed:.1f}秒, 残り予想: {eta:.1f}秒")
 
 class OddsComparisonAnalyzer:
     """オッズとHorseRaceLevelの比較分析クラス"""
@@ -41,6 +106,7 @@ class OddsComparisonAnalyzer:
         self.analysis_results = {}
         self.models = {}
         
+    @log_performance_odds("オッズデータ前処理")
     def prepare_odds_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         オッズデータの前処理
@@ -91,6 +157,7 @@ class OddsComparisonAnalyzer:
         
         return processed_df
     
+    @log_performance_odds("HorseRaceLevel計算")
     def calculate_horse_race_level(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         馬ごとのHorseRaceLevelを計算（レポートの実装に基づく）
@@ -130,51 +197,73 @@ class OddsComparisonAnalyzer:
         df = self._apply_historical_result_weights(df)
         
         # 馬ごとの集約
-        horse_stats = []
+        logger.info("🐎 馬ごとのHorseRaceLevel集約開始...")
         
-        for horse_name in df['馬名'].unique():
-            horse_data = df[df['馬名'] == horse_name].copy()
-            horse_data = horse_data.sort_values('年月日')
+        # 【最適化】大量データの場合はgroupbyで一括計算
+        if len(df) > 50000:  # 5万レース以上の場合
+            logger.info("📊 大量データ検出 - 高速集約処理を使用")
+            result_df = self._calculate_horse_stats_vectorized(df)
+        else:
+            # 従来のループ処理（少量データ向け）
+            horse_stats = []
+            unique_horses = df['馬名'].unique()
+            horse_calc_start = time.time()
             
-            if len(horse_data) < self.min_races:
-                continue
+            for i, horse_name in enumerate(unique_horses):
+                horse_data = df[df['馬名'] == horse_name].copy()
+                horse_data = horse_data.sort_values('年月日')
+                
+                # デバッグ情報
+                if i < 5:  # 最初の5頭のみログ出力
+                    logger.debug(f"馬名: {horse_name}, レース数: {len(horse_data)}, min_races: {self.min_races}")
+                    logger.debug(f"race_levelカラム存在: {'race_level' in horse_data.columns}")
+                    if 'race_level' in horse_data.columns:
+                        logger.debug(f"race_level値: {horse_data['race_level'].head().tolist()}")
+                
+                if len(horse_data) < self.min_races:
+                    continue
+                
+                # 平均レースレベル（AvgRaceLevel）
+                avg_race_level = horse_data['race_level'].mean()
+                
+                # 最高レースレベル（MaxRaceLevel）
+                max_race_level = horse_data['race_level'].max()
+                
+                # 複勝率
+                place_rate = (horse_data['着順'] <= 3).mean()
+                
+                # オッズベースの平均予測確率（実際のカラム名に合わせる）
+                if '確定単勝オッズ' in horse_data.columns:
+                    win_odds = pd.to_numeric(horse_data['確定単勝オッズ'], errors='coerce')
+                    avg_win_prob = (1 / win_odds).mean() if not win_odds.isna().all() else 0
+                else:
+                    avg_win_prob = 0
+                
+                if '確定複勝オッズ下' in horse_data.columns:
+                    place_odds = pd.to_numeric(horse_data['確定複勝オッズ下'], errors='coerce')
+                    avg_place_prob = (1 / place_odds).mean() if not place_odds.isna().all() else 0
+                else:
+                    avg_place_prob = 0
+                
+                # 出走回数
+                total_races = len(horse_data)
+                
+                horse_stats.append({
+                    'horse_name': horse_name,
+                    'avg_race_level': avg_race_level,
+                    'max_race_level': max_race_level,
+                    'place_rate': place_rate,
+                    'avg_win_prob_from_odds': avg_win_prob,
+                    'avg_place_prob_from_odds': avg_place_prob,
+                    'total_races': total_races
+                })
+                
+                # 進捗ログ（1000頭ごと）
+                if (i + 1) % 1000 == 0:
+                    log_odds_processing_step("馬統計集約", horse_calc_start, i + 1, len(unique_horses))
             
-            # 平均レースレベル（AvgRaceLevel）
-            avg_race_level = horse_data['race_level'].mean()
-            
-            # 最高レースレベル（MaxRaceLevel）
-            max_race_level = horse_data['race_level'].max()
-            
-            # 複勝率
-            place_rate = (horse_data['着順'] <= 3).mean()
-            
-            # オッズベースの平均予測確率（実際のカラム名に合わせる）
-            if '確定単勝オッズ' in horse_data.columns:
-                win_odds = pd.to_numeric(horse_data['確定単勝オッズ'], errors='coerce')
-                avg_win_prob = (1 / win_odds).mean() if not win_odds.isna().all() else 0
-            else:
-                avg_win_prob = 0
-            
-            if '確定複勝オッズ下' in horse_data.columns:
-                place_odds = pd.to_numeric(horse_data['確定複勝オッズ下'], errors='coerce')
-                avg_place_prob = (1 / place_odds).mean() if not place_odds.isna().all() else 0
-            else:
-                avg_place_prob = 0
-            
-            # 出走回数
-            total_races = len(horse_data)
-            
-            horse_stats.append({
-                'horse_name': horse_name,
-                'avg_race_level': avg_race_level,
-                'max_race_level': max_race_level,
-                'place_rate': place_rate,
-                'avg_win_prob_from_odds': avg_win_prob,
-                'avg_place_prob_from_odds': avg_place_prob,
-                'total_races': total_races
-            })
+            result_df = pd.DataFrame(horse_stats)
         
-        result_df = pd.DataFrame(horse_stats)
         logger.info(f"HorseRaceLevel計算完了: {len(result_df):,}頭")
         
         # 【修正】循環論理を完全に排除したHorseRaceLevel
@@ -254,6 +343,7 @@ class OddsComparisonAnalyzer:
             
         return df
     
+    @log_performance_odds("過去実績重み付け")
     def _apply_historical_result_weights(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         過去の複勝実績に基づく重み付け（時間的分離版・循環論理修正済み）
@@ -271,38 +361,159 @@ class OddsComparisonAnalyzer:
         df = df.sort_values(['馬名', '年月日']).copy()
         df['race_level'] = df['base_race_level'].copy()
         
-        for horse_name in df['馬名'].unique():
-            horse_mask = df['馬名'] == horse_name
-            horse_data = df[horse_mask].copy()
-            
-            for idx in range(len(horse_data)):
-                if idx == 0:
-                    # 初回出走は調整なし（過去データが存在しない）
-                    continue
-                
-                # 【修正】現在のレースより前の実績のみ使用（厳密な時間的分離）
-                current_date = horse_data.iloc[idx]['年月日']
-                past_data = horse_data[horse_data['年月日'] < current_date]
-                
-                if len(past_data) == 0:
-                    # 過去データがない場合は調整なし
-                    continue
-                
-                # 過去の複勝率を計算（現在のレース結果は含まない）
-                past_place_rate = (past_data['着順'] <= 3).mean()
-                
-                # 過去実績に基づく調整係数（統計的に妥当な範囲）
-                if past_place_rate >= 0.5:
-                    adjustment_factor = 1.0 + (past_place_rate - 0.5) * 0.4  # 1.0-1.2倍
-                elif past_place_rate >= 0.3:
-                    adjustment_factor = 1.0  # 標準
-                else:
-                    adjustment_factor = 1.0 - (0.3 - past_place_rate) * 0.67  # 0.8-1.0倍
-                
-                # レースレベルに調整係数を適用
-                current_idx = horse_data.index[idx]
-                df.loc[current_idx, 'race_level'] = df.loc[current_idx, 'base_race_level'] * adjustment_factor
+        logger.info("🔄 過去実績による重み付け開始...")
+        unique_horses = df['馬名'].unique()
+        weight_start = time.time()
+        processed_horses = 0
         
+        # 【最適化】大量データ対応: データサイズに応じて処理方法を切り替え
+        total_races = len(df)
+        if total_races > 100000:  # 10万レース以上の場合は簡易版を使用
+            logger.warning(f"⚠️ 大量データ検出 ({total_races:,}レース) - 簡易版重み付けを適用")
+            df = self._apply_simplified_historical_weights(df)
+        else:
+            # 通常版（精密だが時間がかかる）
+            for horse_name in unique_horses:
+                horse_mask = df['馬名'] == horse_name
+                horse_data = df[horse_mask].copy()
+                
+                for idx in range(len(horse_data)):
+                    if idx == 0:
+                        # 初回出走は調整なし（過去データが存在しない）
+                        continue
+                    
+                    # 【修正】現在のレースより前の実績のみ使用（厳密な時間的分離）
+                    current_date = horse_data.iloc[idx]['年月日']
+                    past_data = horse_data[horse_data['年月日'] < current_date]
+                    
+                    if len(past_data) == 0:
+                        # 過去データがない場合は調整なし
+                        continue
+                    
+                    # 過去の複勝率を計算（現在のレース結果は含まない）
+                    past_place_rate = (past_data['着順'] <= 3).mean()
+                    
+                    # 過去実績に基づく調整係数（統計的に妥当な範囲）
+                    if past_place_rate >= 0.5:
+                        adjustment_factor = 1.0 + (past_place_rate - 0.5) * 0.4  # 1.0-1.2倍
+                    elif past_place_rate >= 0.3:
+                        adjustment_factor = 1.0  # 標準
+                    else:
+                        adjustment_factor = 1.0 - (0.3 - past_place_rate) * 0.67  # 0.8-1.0倍
+                    
+                    # レースレベルに調整係数を適用
+                    current_idx = horse_data.index[idx]
+                    df.loc[current_idx, 'race_level'] = df.loc[current_idx, 'base_race_level'] * adjustment_factor
+                
+                processed_horses += 1
+                # 進捗ログ（500頭ごと）
+                if processed_horses % 500 == 0:
+                    log_odds_processing_step("過去実績重み付け", weight_start, processed_horses, len(unique_horses))
+        
+        return df
+    
+    def _calculate_horse_stats_vectorized(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        【高速版】馬ごとの統計計算 - ベクトル化処理
+        """
+        logger.info("🚀 高速馬統計計算を実行中...")
+        
+        # オッズカラムの数値変換
+        if '確定単勝オッズ' in df.columns:
+            df['確定単勝オッズ'] = pd.to_numeric(df['確定単勝オッズ'], errors='coerce')
+            df['win_prob'] = 1.0 / df['確定単勝オッズ'].where(df['確定単勝オッズ'] > 0, np.nan)
+        else:
+            df['win_prob'] = 0
+            
+        if '確定複勝オッズ下' in df.columns:
+            df['確定複勝オッズ下'] = pd.to_numeric(df['確定複勝オッズ下'], errors='coerce')
+            df['place_prob'] = 1.0 / df['確定複勝オッズ下'].where(df['確定複勝オッズ下'] > 0, np.nan)
+        else:
+            df['place_prob'] = 0
+        
+        # 複勝フラグ作成
+        df['place_flag'] = (df['着順'] <= 3).astype(int)
+        
+        # 馬ごとの統計をgroupbyで一括計算
+        horse_stats = df.groupby('馬名').agg({
+            'race_level': ['mean', 'max'],
+            'place_flag': 'mean',
+            'win_prob': 'mean',
+            'place_prob': 'mean',
+            '馬名': 'count'  # total_races
+        }).round(6)
+        
+        # カラム名を平坦化
+        horse_stats.columns = ['avg_race_level', 'max_race_level', 'place_rate', 
+                              'avg_win_prob_from_odds', 'avg_place_prob_from_odds', 'total_races']
+        
+        # 最小レース数でフィルタ
+        horse_stats = horse_stats[horse_stats['total_races'] >= self.min_races]
+        
+        # インデックスをカラムに変換
+        horse_stats = horse_stats.reset_index()
+        horse_stats = horse_stats.rename(columns={'馬名': 'horse_name'})
+        
+        # 欠損値を0で埋める
+        horse_stats = horse_stats.fillna(0)
+        
+        logger.info(f"✅ 高速馬統計計算完了: {len(horse_stats):,}頭")
+        return horse_stats
+    
+    def _apply_simplified_historical_weights(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        【高速版】過去実績重み付け - 大量データ対応
+        
+        通常版のO(N×M)からO(N)に最適化した版本
+        """
+        logger.info("🚀 高速版過去実績重み付けを実行中...")
+        
+        # 馬ごとの累積複勝率を効率的に計算
+        df = df.sort_values(['馬名', '年月日']).copy()
+        df['race_level'] = df['base_race_level'].copy()
+        
+        # 各馬の累積統計をベクトル化計算
+        df['place_result'] = (df['着順'] <= 3).astype(int)
+        df['cumulative_races'] = df.groupby('馬名').cumcount()
+        df['cumulative_places'] = df.groupby('馬名')['place_result'].cumsum()
+        
+        # 過去の複勝率を計算（現在のレースを除外）
+        df['past_races'] = df['cumulative_races']
+        df['past_places'] = df['cumulative_places'] - df['place_result']  # 現在のレースを除外
+        
+        # 調整係数を一括計算
+        mask_sufficient_data = df['past_races'] > 0
+        df.loc[mask_sufficient_data, 'past_place_rate'] = (
+            df.loc[mask_sufficient_data, 'past_places'] / df.loc[mask_sufficient_data, 'past_races']
+        )
+        df['past_place_rate'] = df['past_place_rate'].fillna(0)
+        
+        # 調整係数の計算（ベクトル化）
+        conditions = [
+            df['past_place_rate'] >= 0.5,
+            (df['past_place_rate'] >= 0.3) & (df['past_place_rate'] < 0.5),
+            df['past_place_rate'] < 0.3
+        ]
+        
+        choices = [
+            1.0 + (df['past_place_rate'] - 0.5) * 0.4,  # 1.0-1.2倍
+            1.0,  # 標準
+            1.0 - (0.3 - df['past_place_rate']) * 0.67  # 0.8-1.0倍
+        ]
+        
+        df['adjustment_factor'] = np.select(conditions, choices, default=1.0)
+        
+        # 調整係数を適用
+        df.loc[mask_sufficient_data, 'race_level'] = (
+            df.loc[mask_sufficient_data, 'base_race_level'] * 
+            df.loc[mask_sufficient_data, 'adjustment_factor']
+        )
+        
+        # 不要なカラムをクリーンアップ
+        df = df.drop(columns=['place_result', 'cumulative_races', 'cumulative_places', 
+                             'past_races', 'past_places', 'past_place_rate', 'adjustment_factor'])
+        
+        logger.info("✅ 高速版過去実績重み付け完了")
         return df
     
     def _perform_statistical_h2_test(self, results: Dict[str, Any], y_true: np.ndarray, 
@@ -365,6 +576,7 @@ class OddsComparisonAnalyzer:
             'h2_hypothesis_supported': p_value < 0.05 and r2_combined > r2_baseline
         }
     
+    @log_performance_odds("Bootstrap信頼区間計算")
     def _calculate_r2_confidence_interval(self, y_true: np.ndarray, y_pred: np.ndarray, 
                                         confidence_level: float = 0.95, n_bootstrap: int = 1000) -> Tuple[float, float]:
         """Bootstrap法によるR²の信頼区間計算"""
@@ -373,7 +585,10 @@ class OddsComparisonAnalyzer:
         r2_scores = []
         n_samples = len(y_true)
         
-        for _ in range(n_bootstrap):
+        logger.info(f"🔄 Bootstrap法実行中 (n_bootstrap={n_bootstrap})...")
+        bootstrap_start = time.time()
+        
+        for i in range(n_bootstrap):
             # Bootstrap サンプリング
             indices = resample(range(n_samples), n_samples=n_samples)
             y_true_boot = y_true[indices]
@@ -382,6 +597,10 @@ class OddsComparisonAnalyzer:
             # R²の計算
             r2_boot = r2_score(y_true_boot, y_pred_boot)
             r2_scores.append(r2_boot)
+            
+            # 進捗ログ（100回ごと）
+            if (i + 1) % 100 == 0:
+                log_odds_processing_step("Bootstrap", bootstrap_start, i + 1, n_bootstrap)
         
         # 信頼区間の計算
         alpha = 1 - confidence_level
@@ -404,6 +623,7 @@ class OddsComparisonAnalyzer:
         else:
             return "大効果"
     
+    @log_performance_odds("相関分析")
     def perform_correlation_analysis(self, horse_df: pd.DataFrame) -> Dict[str, Any]:
         """
         相関分析の実行
@@ -464,6 +684,7 @@ class OddsComparisonAnalyzer:
         
         return results
     
+    @log_performance_odds("回帰分析")
     def perform_regression_analysis(self, horse_df: pd.DataFrame, use_temporal_split: bool = True) -> Dict[str, Any]:
         """
         回帰分析による予測性能比較（H2仮説検証・データリーケージ修正版）
@@ -628,6 +849,7 @@ class OddsComparisonAnalyzer:
         
         return results
     
+    @log_performance_odds("可視化作成")
     def create_visualizations(self, horse_df: pd.DataFrame, results: Dict[str, Any], output_dir: Path):
         """
         可視化の作成
@@ -637,73 +859,122 @@ class OddsComparisonAnalyzer:
             results: 分析結果
             output_dir: 出力ディレクトリ
         """
-        logger.info("可視化を作成します")
+        logger.info("🎨 可視化を作成します")
+        
+        # matplotlibバックエンドの設定
+        try:
+            import matplotlib
+            matplotlib.use('Agg')  # GUIバックエンドを避ける
+            import matplotlib.pyplot as plt
+        except ImportError as e:
+            logger.error(f"❌ matplotlibのインポートエラー: {e}")
+            return
         
         # 出力ディレクトリの作成
         viz_dir = output_dir / "odds_comparison"
         viz_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"📁 可視化出力ディレクトリ: {viz_dir}")
+        
+        # データサイズ確認
+        logger.info(f"📊 可視化対象データ: {len(horse_df):,}頭")
+        logger.info(f"📈 必要カラム確認: avg_race_level={horse_df.get('avg_race_level') is not None}, place_rate={horse_df.get('place_rate') is not None}")
+        
+        # 必要なカラムの存在確認
+        required_cols = ['avg_race_level', 'max_race_level', 'place_rate', 'avg_place_prob_from_odds', 'avg_win_prob_from_odds']
+        missing_cols = [col for col in required_cols if col not in horse_df.columns]
+        if missing_cols:
+            logger.error(f"❌ 可視化に必要なカラムが不足: {missing_cols}")
+            logger.info(f"   利用可能なカラム: {list(horse_df.columns)}")
+            return
         
         # 1. 相関散布図
-        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
-        fig.suptitle('HorseRaceLevel vs オッズベース予測の複勝率相関分析', fontsize=16, fontweight='bold')
-        
-        # 平均レースレベル vs 複勝率
-        axes[0, 0].scatter(horse_df['avg_race_level'], horse_df['place_rate'], alpha=0.6, s=20)
-        axes[0, 0].set_xlabel('平均レースレベル')
-        axes[0, 0].set_ylabel('複勝率')
-        r_val = results['correlations']['avg_race_level']['correlation']
-        axes[0, 0].set_title(f'平均レースレベル vs 複勝率 (r={r_val:.3f})')
-        
-        # 最高レースレベル vs 複勝率
-        axes[0, 1].scatter(horse_df['max_race_level'], horse_df['place_rate'], alpha=0.6, s=20)
-        axes[0, 1].set_xlabel('最高レースレベル')
-        axes[0, 1].set_ylabel('複勝率')
-        r_val = results['correlations']['max_race_level']['correlation']
-        axes[0, 1].set_title(f'最高レースレベル vs 複勝率 (r={r_val:.3f})')
-        
-        # オッズベース複勝予測 vs 複勝率
-        axes[1, 0].scatter(horse_df['avg_place_prob_from_odds'], horse_df['place_rate'], alpha=0.6, s=20)
-        axes[1, 0].set_xlabel('オッズベース複勝予測確率')
-        axes[1, 0].set_ylabel('複勝率')
-        r_val = results['correlations']['odds_based_place_prediction']['correlation']
-        axes[1, 0].set_title(f'オッズベース複勝予測 vs 複勝率 (r={r_val:.3f})')
-        
-        # オッズベース勝率予測 vs 複勝率
-        axes[1, 1].scatter(horse_df['avg_win_prob_from_odds'], horse_df['place_rate'], alpha=0.6, s=20)
-        axes[1, 1].set_xlabel('オッズベース勝率予測確率')
-        axes[1, 1].set_ylabel('複勝率')
-        r_val = results['correlations']['odds_based_win_prediction']['correlation']
-        axes[1, 1].set_title(f'オッズベース勝率予測 vs 複勝率 (r={r_val:.3f})')
-        
-        plt.tight_layout()
-        plt.savefig(viz_dir / 'correlation_scatter_plots.png', dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        # 2. モデル性能比較
-        if 'h2_verification' in results:
-            model_names = ['オッズベースライン', 'HorseRaceLevel', '統合モデル']
-            r2_scores = [
-                results['h2_verification']['odds_r2'],
-                results['h2_verification']['horse_race_level_r2'],
-                results['h2_verification']['combined_r2']
-            ]
+        logger.info("📊 相関散布図を作成中...")
+        try:
+            fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+            fig.suptitle('HorseRaceLevel vs オッズベース予測の複勝率相関分析', fontsize=16, fontweight='bold')
             
-            plt.figure(figsize=(10, 6))
-            bars = plt.bar(model_names, r2_scores, color=['#ff7f0e', '#2ca02c', '#1f77b4'])
-            plt.ylabel('R² (決定係数)')
-            plt.title('複勝率予測性能比較（H2仮説検証）')
-            plt.ylim(0, max(r2_scores) * 1.2)
+            # 平均レースレベル vs 複勝率
+            axes[0, 0].scatter(horse_df['avg_race_level'], horse_df['place_rate'], alpha=0.6, s=20)
+            axes[0, 0].set_xlabel('平均レースレベル')
+            axes[0, 0].set_ylabel('複勝率')
+            r_val = results['correlations']['avg_race_level']['correlation']
+            axes[0, 0].set_title(f'平均レースレベル vs 複勝率 (r={r_val:.3f})')
             
-            # 数値ラベルを追加
-            for bar, score in zip(bars, r2_scores):
-                plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(r2_scores)*0.01,
-                        f'{score:.4f}', ha='center', va='bottom', fontweight='bold')
+            # 最高レースレベル vs 複勝率
+            axes[0, 1].scatter(horse_df['max_race_level'], horse_df['place_rate'], alpha=0.6, s=20)
+            axes[0, 1].set_xlabel('最高レースレベル')
+            axes[0, 1].set_ylabel('複勝率')
+            r_val = results['correlations']['max_race_level']['correlation']
+            axes[0, 1].set_title(f'最高レースレベル vs 複勝率 (r={r_val:.3f})')
+            
+            # オッズベース複勝予測 vs 複勝率
+            axes[1, 0].scatter(horse_df['avg_place_prob_from_odds'], horse_df['place_rate'], alpha=0.6, s=20)
+            axes[1, 0].set_xlabel('オッズベース複勝予測確率')
+            axes[1, 0].set_ylabel('複勝率')
+            r_val = results['correlations']['odds_based_place_prediction']['correlation']
+            axes[1, 0].set_title(f'オッズベース複勝予測 vs 複勝率 (r={r_val:.3f})')
+            
+            # オッズベース勝率予測 vs 複勝率
+            axes[1, 1].scatter(horse_df['avg_win_prob_from_odds'], horse_df['place_rate'], alpha=0.6, s=20)
+            axes[1, 1].set_xlabel('オッズベース勝率予測確率')
+            axes[1, 1].set_ylabel('複勝率')
+            r_val = results['correlations']['odds_based_win_prediction']['correlation']
+            axes[1, 1].set_title(f'オッズベース勝率予測 vs 複勝率 (r={r_val:.3f})')
             
             plt.tight_layout()
-            plt.savefig(viz_dir / 'model_performance_comparison.png', dpi=300, bbox_inches='tight')
+            scatter_plot_path = viz_dir / 'correlation_scatter_plots.png'
+            plt.savefig(scatter_plot_path, dpi=300, bbox_inches='tight')
             plt.close()
+            logger.info(f"✅ 相関散布図を保存: {scatter_plot_path}")
+            
+        except Exception as e:
+            logger.error(f"❌ 相関散布図作成でエラー: {str(e)}")
+            plt.close('all')  # エラー時にも確実にfigureを閉じる
         
-        logger.info(f"可視化保存完了: {viz_dir}")
+        # 2. モデル性能比較
+        logger.info("📊 モデル性能比較チャートを作成中...")
+        try:
+            if 'h2_verification' in results:
+                model_names = ['オッズベースライン', 'HorseRaceLevel', '統合モデル']
+                r2_scores = [
+                    results['h2_verification']['odds_r2'],
+                    results['h2_verification']['horse_race_level_r2'],
+                    results['h2_verification']['combined_r2']
+                ]
+                
+                plt.figure(figsize=(10, 6))
+                bars = plt.bar(model_names, r2_scores, color=['#ff7f0e', '#2ca02c', '#1f77b4'])
+                plt.ylabel('R² (決定係数)')
+                plt.title('複勝率予測性能比較（H2仮説検証）')
+                plt.ylim(0, max(r2_scores) * 1.2)
+                
+                # 数値ラベルを追加
+                for bar, score in zip(bars, r2_scores):
+                    plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + max(r2_scores)*0.01,
+                            f'{score:.4f}', ha='center', va='bottom', fontweight='bold')
+                
+                plt.tight_layout()
+                performance_plot_path = viz_dir / 'model_performance_comparison.png'
+                plt.savefig(performance_plot_path, dpi=300, bbox_inches='tight')
+                plt.close()
+                logger.info(f"✅ モデル性能比較チャートを保存: {performance_plot_path}")
+            else:
+                logger.warning("⚠️ H2仮説検証結果がないため、モデル性能比較チャートをスキップ")
+                
+        except Exception as e:
+            logger.error(f"❌ モデル性能比較チャート作成でエラー: {str(e)}")
+            plt.close('all')  # エラー時にも確実にfigureを閉じる
+        
+        logger.info(f"🎨 可視化保存完了: {viz_dir}")
+        
+        # 作成されたファイルのリスト
+        created_files = list(viz_dir.glob("*.png"))
+        if created_files:
+            logger.info("📁 作成された可視化ファイル:")
+            for file_path in created_files:
+                logger.info(f"   - {file_path.name}")
+        else:
+            logger.warning("⚠️ 可視化ファイルが作成されませんでした")
     
     def generate_comprehensive_report(self, horse_df: pd.DataFrame, 
                                     correlation_results: Dict[str, Any],
