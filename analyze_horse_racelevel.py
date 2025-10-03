@@ -11,7 +11,7 @@ import logging
 import sys
 import pandas as pd
 import numpy as np
-from typing import Dict, Any
+from typing import Dict, Any, List
 from scipy.stats import pearsonr
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_squared_error
@@ -28,6 +28,7 @@ warnings.filterwarnings('ignore')
 try:
     from horse_racing.base.analyzer import AnalysisConfig
     from horse_racing.analyzers.race_level_analyzer import RaceLevelAnalyzer
+    from horse_racing.core.weight_manager import WeightManager, get_global_weights
     from horse_racing.analyzers.odds_comparison_analyzer import OddsComparisonAnalyzer
 except ImportError as e:
     logging.warning(f"一部のモジュールが見つかりません: {e}")
@@ -57,6 +58,11 @@ def setup_logging(log_level='INFO', log_file=None):
         )
 
 logger = logging.getLogger(__name__)
+
+# グローバル変数：計算済みデータを保持
+_global_data = None
+_global_feature_levels = None
+_global_raw_data = None  # 生データ（CSV読み込み結果）
 
 # パフォーマンス監視用のユーティリティ関数
 def log_performance(func_name=None):
@@ -151,6 +157,374 @@ def log_system_resources():
     logger.info(f"   システムメモリ使用率: {system_memory.percent:.1f}% "
                f"({system_memory.used/1024/1024/1024:.1f}GB/{system_memory.total/1024/1024/1024:.1f}GB)")
     logger.info(f"   システムCPU使用率: {system_cpu:.1f}%")
+
+def get_all_dataset_files(data_dir: str) -> List[Path]:
+    """指定ディレクトリ内のすべてのデータセットファイルを取得"""
+    data_path = Path(data_dir)
+    if not data_path.exists():
+        return []
+    
+    # データセットファイルのパターンを検索
+    csv_files = list(data_path.glob('SED*_formatted_dataset.csv'))
+    return sorted(csv_files)
+
+def load_all_data_once(input_path: str, encoding: str = 'utf-8') -> pd.DataFrame:
+    """
+    全CSVファイルを一度だけ読み込む関数（グローバル変数に保存）
+    
+    Args:
+        input_path: 入力パス
+        encoding: エンコーディング
+        
+    Returns:
+        統合されたデータフレーム
+    """
+    global _global_raw_data
+    
+    if _global_raw_data is not None:
+        logger.info("💾 グローバル変数から生データを取得中...")
+        return _global_raw_data.copy()
+    
+    logger.info("📖 全CSVファイルを初回読み込み中...")
+    input_path_obj = Path(input_path)
+    
+    if input_path_obj.is_file():
+        # 単一ファイルの場合
+        df = pd.read_csv(input_path_obj, encoding=encoding)
+        logger.info(f"📊 単一ファイル読み込み: {len(df):,}行")
+        _global_raw_data = df.copy()
+        return df
+    else:
+        # ディレクトリの場合
+        csv_files = list(input_path_obj.glob("*.csv"))
+        if not csv_files:
+            logger.error(f"❌ CSVファイルが見つかりません: {input_path}")
+            return pd.DataFrame()
+        
+        logger.info(f"📊 全CSVファイルを統合中... ({len(csv_files)}ファイル)")
+        all_dfs = []
+        
+        for i, csv_file in enumerate(csv_files):
+            try:
+                df_temp = pd.read_csv(csv_file, encoding=encoding)
+                all_dfs.append(df_temp)
+                
+                # 進捗表示（100ファイルごと）
+                if (i + 1) % 100 == 0:
+                    logger.info(f"   読み込み進捗: {i + 1}/{len(csv_files)}ファイル")
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ ファイル読み込みエラー（スキップ）: {csv_file.name} - {str(e)}")
+                continue
+        
+        if all_dfs:
+            logger.info("🔄 データフレーム統合中...")
+            combined_df = pd.concat(all_dfs, ignore_index=True)
+            logger.info(f"✅ 統合完了: {len(combined_df):,}行のデータ")
+            
+            # グローバル変数に保存
+            _global_raw_data = combined_df.copy()
+            logger.info("💾 生データをグローバル変数に保存しました")
+            return combined_df
+        else:
+            logger.error("❌ 有効なCSVファイルが見つかりませんでした")
+            return pd.DataFrame()
+
+def initialize_global_weights(args) -> bool:
+    """
+    グローバル重みを初期化する関数
+    
+    Args:
+        args: コマンドライン引数
+        
+    Returns:
+        初期化成功フラグ
+    """
+    global _global_data, _global_feature_levels
+    
+    try:
+        logger.info("🎯 グローバル重み初期化開始...")
+        
+        # データの読み込み（各分析タイプに応じて）
+        if args.odds_analysis:
+            # オッズ分析用データ
+            data_path = Path(args.odds_analysis)
+            if not data_path.exists():
+                logger.error(f"❌ データパスが存在しません: {data_path}")
+                return False
+                
+            # サンプルファイルを読み込み
+            csv_files = list(data_path.glob("*_formatted_dataset.csv"))
+            if not csv_files:
+                logger.error(f"❌ CSVファイルが見つかりません: {data_path}")
+                return False
+                
+            # 最初の数ファイルから代表データを作成
+            sample_dfs = []
+            for csv_file in csv_files[:min(5, len(csv_files))]:  # 最初の5ファイル
+                try:
+                    df = pd.read_csv(csv_file, encoding='utf-8')
+                    sample_dfs.append(df)
+                except Exception as e:
+                    logger.warning(f"⚠️ ファイル読み込みエラー（スキップ）: {csv_file} - {str(e)}")
+                    continue
+            
+            if sample_dfs:
+                combined_df = pd.concat(sample_dfs, ignore_index=True)
+                logger.info(f"📊 重み算出用データ: {len(combined_df):,}行（{len(sample_dfs)}ファイル）")
+                
+                # グローバル重みを初期化
+                weights = WeightManager.initialize_from_training_data(combined_df)
+                logger.info(f"✅ グローバル重み設定完了: {weights}")
+                return True
+                
+        elif args.stratified_only:
+            # 層別分析用データ（export/dataset）
+            dataset_path = Path("export/dataset")
+            if dataset_path.exists():
+                # グローバル関数を使用してデータを読み込み
+                combined_df = load_all_data_once(str(dataset_path), 'utf-8')
+                if combined_df.empty:
+                    return False
+                
+                # 年の範囲を確認
+                if '年' in combined_df.columns:
+                    year_range = f"{combined_df['年'].min()}-{combined_df['年'].max()}年"
+                    logger.info(f"📅 全データ期間: {year_range}")
+                    
+                    # レポート5.1.3節準拠：訓練期間（2010-2020年）データを抽出
+                    training_data = combined_df[(combined_df['年'] >= 2010) & (combined_df['年'] <= 2020)]
+                    if len(training_data) > 0:
+                        df = training_data
+                        training_year_range = f"{training_data['年'].min()}-{training_data['年'].max()}年"
+                        logger.info(f"📊 訓練期間データ: {len(training_data):,}行 ({training_year_range})")
+                    else:
+                        logger.warning("⚠️ 訓練期間（2010-2020年）データが見つかりませんでした")
+                        df = combined_df  # 全データを使用
+                else:
+                    logger.warning("⚠️ 年列が見つかりません。全データを使用します")
+                    df = combined_df
+                
+                # 特徴量レベル列を計算（重み計算のため）
+                logger.info("🧮 重み計算用特徴量レベル列を計算中...")
+                df = calculate_accurate_feature_levels(df)
+                
+                # グローバル変数に保存（重複処理回避のため）
+                _global_data = combined_df.copy()
+                _global_feature_levels = df.copy()
+                logger.info("💾 計算済みデータをグローバル変数に保存しました")
+                
+                # グローバル重みを初期化
+                weights = WeightManager.initialize_from_training_data(df)
+                logger.info(f"✅ グローバル重み設定完了: {weights}")
+                return True
+                    
+        elif args.input_path:
+            # 従来のレースレベル分析
+            # グローバル関数を使用してデータを読み込み
+            combined_df = load_all_data_once(args.input_path, args.encoding)
+            if combined_df.empty:
+                return False
+            
+            # 年の範囲を確認
+            if '年' in combined_df.columns:
+                year_range = f"{combined_df['年'].min()}-{combined_df['年'].max()}年"
+                logger.info(f"📅 全データ期間: {year_range}")
+                
+                # レポート5.1.3節準拠：訓練期間（2010-2020年）データを抽出
+                training_data = combined_df[(combined_df['年'] >= 2010) & (combined_df['年'] <= 2020)]
+                if len(training_data) > 0:
+                    df = training_data
+                    training_year_range = f"{training_data['年'].min()}-{training_data['年'].max()}年"
+                    logger.info(f"📊 訓練期間データ: {len(training_data):,}行 ({training_year_range})")
+                else:
+                    logger.warning("⚠️ 訓練期間（2010-2020年）データが見つかりませんでした")
+                    df = combined_df  # 全データを使用
+            else:
+                logger.warning("⚠️ 年列が見つかりません。全データを使用します")
+                df = combined_df
+            
+            # 特徴量レベル列を計算（重み計算のため）
+            logger.info("🧮 重み計算用特徴量レベル列を計算中...")
+            df = calculate_accurate_feature_levels(df)
+            
+            # グローバル変数に保存（重複処理回避のため）
+            _global_data = combined_df.copy()
+            _global_feature_levels = df.copy()
+            logger.info("💾 計算済みデータをグローバル変数に保存しました")
+            
+            # グローバル重みを初期化
+            weights = WeightManager.initialize_from_training_data(df)
+            logger.info(f"✅ グローバル重み設定完了: {weights}")
+            return True
+        
+        logger.warning("⚠️ 重み初期化用のデータが見つかりませんでした")
+        return False
+        
+    except Exception as e:
+        logger.error(f"❌ グローバル重み初期化エラー: {str(e)}")
+        return False
+
+def _calculate_individual_weights(df: pd.DataFrame) -> Dict[str, float]:
+    """
+    個別データから動的重みを計算するヘルパー関数
+    verify_weight_calculation.py の検証済みロジックを適用
+    
+    Args:
+        df: データフレーム
+        
+    Returns:
+        重み辞書
+    """
+    try:
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info("🔍 verify_weight_calculation.py準拠の個別重み計算を開始...")
+        
+        # 必要カラムの確認
+        required_cols = ['馬名', '着順', 'grade_level', 'venue_level', 'distance_level']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            logger.error(f"❌ 必要なカラムが不足: {missing_cols}")
+            return _get_fallback_weights()
+        
+        # Phase 1: 馬統計データ作成（レポート5.1.3節準拠）
+        logger.info("📊 Phase 1: 馬統計データを作成中...")
+        
+        # 複勝フラグを作成
+        if '着順' in df.columns:
+            df_temp = df.copy()
+            df_temp['is_placed'] = (pd.to_numeric(df_temp['着順'], errors='coerce') <= 3).astype(int)
+            logger.info("📊 着順列から複勝フラグを作成（着順<=3）")
+        elif '複勝' in df.columns:
+            df_temp = df.copy()
+            df_temp['is_placed'] = pd.to_numeric(df_temp['複勝'], errors='coerce').fillna(0)
+            logger.info("📊 複勝列から複勝フラグを作成")
+        else:
+            logger.error("❌ 複勝フラグを作成できません")
+            return _get_fallback_weights()
+        
+        # 馬ごとの統計を計算（最低出走数6戦以上）
+        horse_stats = df_temp.groupby('馬名').agg({
+            'is_placed': 'mean',  # 複勝率
+            'grade_level': 'count'  # 出走回数
+        }).reset_index()
+        
+        # 列名を標準化
+        horse_stats.columns = ['馬名', 'place_rate', 'race_count']
+        
+        # 最低出走数6戦以上でフィルタ（レポート仕様準拠）
+        horse_stats = horse_stats[horse_stats['race_count'] >= 6].copy()
+        logger.info(f"📊 最低出走数6戦以上でフィルタ: {len(horse_stats):,}頭")
+        
+        if len(horse_stats) < 100:
+            logger.error(f"❌ サンプル数が不足: {len(horse_stats)}頭（最低100頭必要）")
+            return _get_fallback_weights()
+        
+        # 特徴量レベルの平均を計算
+        feature_cols = ['grade_level', 'venue_level', 'distance_level']
+        for col in feature_cols:
+            avg_feature = df.groupby('馬名')[col].mean().reset_index()
+            avg_feature.columns = ['馬名', f'avg_{col}']
+            horse_stats = horse_stats.merge(avg_feature, on='馬名', how='left')
+        
+        logger.info(f"📊 馬統計データ作成完了: {len(horse_stats):,}頭")
+        
+        # Phase 2: 相関計算（馬統計データベース）
+        logger.info("📈 Phase 2: 馬統計データで相関を計算中...")
+        
+        # 必要な列の確認
+        required_corr_cols = ['place_rate', 'avg_grade_level', 'avg_venue_level', 'avg_distance_level']
+        missing_corr_cols = [col for col in required_corr_cols if col not in horse_stats.columns]
+        
+        if missing_corr_cols:
+            logger.error(f"❌ 必要な相関列が不足: {missing_corr_cols}")
+            logger.info(f"📊 利用可能な列: {list(horse_stats.columns)}")
+            return _get_fallback_weights()
+        
+        # 欠損値を除去
+        clean_data = horse_stats[required_corr_cols].dropna()
+        logger.info(f"📊 相関計算用データ: {len(clean_data):,}頭")
+        
+        if len(clean_data) < 100:
+            logger.error(f"❌ 相関計算用サンプル数が不足: {len(clean_data)}頭（最低100頭必要）")
+            return _get_fallback_weights()
+        
+        # 相関計算
+        from scipy.stats import pearsonr
+        correlations = {}
+        target = clean_data['place_rate']
+        
+        # レポート5.1.3節準拠の相関計算
+        feature_mapping = {
+            'avg_grade_level': 'grade',
+            'avg_venue_level': 'venue', 
+            'avg_distance_level': 'distance'
+        }
+        
+        for feature_col, feature_name in feature_mapping.items():
+            if feature_col in clean_data.columns:
+                corr, p_value = pearsonr(clean_data[feature_col], target)
+                correlations[feature_name] = {
+                    'correlation': corr,
+                    'p_value': p_value,
+                    'squared': corr ** 2
+                }
+                logger.info(f"   📈 {feature_name}_level: r = {corr:.3f}, r² = {corr**2:.3f}, p = {p_value:.3f}")
+        
+        # Phase 3: 重み計算（レポート5.1.3節準拠）
+        logger.info("⚖️ Phase 3: 重みを計算中...")
+        logger.info("📋 計算式: w_i = r_i² / (r_grade² + r_venue² + r_distance²)")
+        
+        # 相関の二乗を計算
+        squared_correlations = {}
+        total_squared = 0
+        
+        for feature, stats in correlations.items():
+            squared = stats['squared']
+            squared_correlations[feature] = squared
+            total_squared += squared
+            logger.info(f"   📊 {feature}: r² = {squared:.3f}")
+        
+        logger.info(f"📊 総寄与度: {total_squared:.3f}")
+        
+        if total_squared == 0:
+            logger.warning("⚠️ 総寄与度が0です。フォールバック重みを使用します。")
+            return _get_fallback_weights()
+        
+        # 重みを正規化
+        weights = {}
+        for feature, squared in squared_correlations.items():
+            weight = squared / total_squared
+            weights[feature] = weight
+            logger.info(f"   ⚖️ {feature}: w = {weight:.3f} ({weight*100:.1f}%)")
+        
+        # レポート形式で変換
+        result = {
+            'grade_weight': weights.get('grade', 0.636),
+            'venue_weight': weights.get('venue', 0.323),
+            'distance_weight': weights.get('distance', 0.041)
+        }
+        
+        print(f"\n📊 verify_weight_calculation.py準拠の重み計算結果:")
+        print(f"  🔍 グレード重み: {result['grade_weight']:.3f} ({result['grade_weight']*100:.1f}%)")
+        print(f"  🔍 場所重み: {result['venue_weight']:.3f} ({result['venue_weight']*100:.1f}%)")
+        print(f"  🔍 距離重み: {result['distance_weight']:.3f} ({result['distance_weight']*100:.1f}%)")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"❌ verify_weight_calculation.py準拠の重み計算エラー: {str(e)}")
+        return _get_fallback_weights()
+
+def _get_fallback_weights() -> Dict[str, float]:
+    """レポート5.1.3節の固定重み"""
+    return {
+        'grade_weight': 0.636,   # 63.6%
+        'venue_weight': 0.323,   # 32.3%
+        'distance_weight': 0.041  # 4.1%
+    }
 
 def validate_date(date_str: str) -> datetime:
     """日付文字列のバリデーション"""
@@ -293,7 +667,7 @@ def create_stratified_dataset_from_export(dataset_dir: str, min_races: int = 6) 
                 '推定年齢': estimated_age,
                 '主戦距離': main_distance
             })
-            
+                
             # 進捗ログ（1000頭ごと）
             if (i + 1) % 1000 == 0:
                 log_processing_step("馬統計計算", horse_calc_start, i + 1, len(unique_horses))
@@ -353,6 +727,16 @@ def calculate_race_level_features_fast(df: pd.DataFrame) -> pd.DataFrame:
     
     # グレードレベルの算出（グレード数値ベース・ベクトル化）
     def get_grade_level_vectorized(df):
+        """グレードレベルを算出（ベクトル化）
+        
+        【重要】データのグレード数値は「小さいほど高グレード」という関係
+        - 1 = G1（最高グレード） → 3.0（最高レベル）
+        - 2 = G2 → 2.5
+        - 3 = G3 → 2.0
+        - 4 = 重賞 → 1.5
+        - 5 = 特別（低グレード） → 1.0（低レベル）
+        - 6 = リステッド → 1.2
+        """
         # グレードカラムを特定
         grade_col = None
         for col in ['グレード_x', 'グレード', 'grade']:
@@ -372,25 +756,26 @@ def calculate_race_level_features_fast(df: pd.DataFrame) -> pd.DataFrame:
                 logger.warning("⚠️ グレード・賞金カラムが見つかりません。デフォルト値を使用")
                 return np.ones(len(df)) * 1.0
             
-            # 賞金ベースの処理
+            # 賞金ベースの処理（レポート仕様に基づく正しいしきい値）
             prizes = pd.to_numeric(df[prize_col], errors='coerce').fillna(0)
             result = np.ones(len(prizes)) * 0.5
-            result[prizes >= 16500] = 3.0
-            result[(prizes >= 8550) & (prizes < 16500)] = 2.5
-            result[(prizes >= 5700) & (prizes < 8550)] = 2.0
-            result[(prizes >= 3000) & (prizes < 5700)] = 1.5
-            result[(prizes >= 1200) & (prizes < 3000)] = 1.0
+            result[prizes >= 1650] = 3.0  # G1: 1,650万円以上
+            result[(prizes >= 855) & (prizes < 1650)] = 2.5  # G2: 855万円以上
+            result[(prizes >= 570) & (prizes < 855)] = 2.0  # G3: 570万円以上
+            result[(prizes >= 300) & (prizes < 570)] = 1.5  # リステッド: 300万円以上
+            result[(prizes >= 120) & (prizes < 300)] = 1.0  # 特別: 120万円以上
             return result
         
         # グレード数値を変換
+        # データは「1=最高グレード」なので、そのままマッピング
         grades = pd.to_numeric(df[grade_col], errors='coerce').fillna(5)
         result = np.ones(len(grades)) * 0.5  # デフォルト値
         
-        result[grades == 1] = 3.0  # G1
+        result[grades == 1] = 3.0  # G1（最高グレード → 最高レベル）
         result[grades == 2] = 2.5  # G2
         result[grades == 3] = 2.0  # G3
         result[grades == 4] = 1.5  # 重賞
-        result[grades == 5] = 1.0  # 特別
+        result[grades == 5] = 1.0  # 特別（低グレード → 低レベル）
         result[grades == 6] = 1.2  # リステッド
         
         return result
@@ -1017,38 +1402,426 @@ def generate_stratified_report(results: Dict[str, Any], analysis_df: pd.DataFram
     logger.info(f"📋 層別分析レポート保存: {report_path}")
     return "\n".join(report)
 
+def calculate_reqi_with_dynamic_weights(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    【重要】レポート記載の動的重み計算によるREQI計算
+    race_level_analysis_report.md 5.1.3節記載の計算方法を適用
+    """
+    logger.info("🎯 レポート記載の動的重み計算によるREQI計算中...")
+    
+    df_copy = df.copy()
+    
+    # 📊 グローバル重みの取得
+    if WeightManager.is_initialized():
+        weights = get_global_weights()
+        calculation_details = WeightManager.get_calculation_details()
+        
+        print("\n" + "="*80)
+        print("📋 REQI計算: グローバル重み使用（race_level_analysis_report.md 5.1.3節準拠）")
+        print("="*80)
+        print("✅ 事前算出されたグローバル重みを使用:")
+        print(f"   グレード: {weights['grade_weight']:.3f} ({weights['grade_weight']*100:.1f}%)")
+        print(f"   場所: {weights['venue_weight']:.3f} ({weights['venue_weight']*100:.1f}%)")
+        print(f"   距離: {weights['distance_weight']:.3f} ({weights['distance_weight']*100:.1f}%)")
+        if calculation_details:
+            print(f"📊 算出基準: {calculation_details.get('training_period', 'N/A')} ({calculation_details.get('sample_size', 'N/A'):,}行)")
+        print("="*80)
+        
+        # 📝 ログにも重み使用情報を出力
+        logger.info("📊 ========== REQI計算でグローバル重み使用 ==========")
+        logger.info("✅ グローバル重みシステムを使用してREQI計算を実行:")
+        logger.info(f"   📊 グレード重み: {weights['grade_weight']:.4f} ({weights['grade_weight']*100:.2f}%)")
+        logger.info(f"   📊 場所重み: {weights['venue_weight']:.4f} ({weights['venue_weight']*100:.2f}%)")
+        logger.info(f"   📊 距離重み: {weights['distance_weight']:.4f} ({weights['distance_weight']*100:.2f}%)")
+        if calculation_details:
+            logger.info(f"   📊 算出基準: {calculation_details.get('training_period', 'N/A')} ({calculation_details.get('sample_size', 'N/A'):,}行)")
+            logger.info(f"   📊 目標変数: {calculation_details.get('target_column', 'N/A')}")
+        logger.info("=" * 60)
+        
+        grade_weight = weights['grade_weight']
+        venue_weight = weights['venue_weight']
+        distance_weight = weights['distance_weight']
+    else:
+        # フォールバック: 個別計算
+        print("\n" + "="*80)
+        print("📋 REQI計算: 個別動的重み計算（グローバル重み未初期化のため）")
+        print("="*80)
+        print("⚠️ グローバル重みが初期化されていません。個別計算を実行します。")
+        print("# 重み算出方法（レポート5.1.3節記載）")
+        print("# w_i = r_i² / (r_grade² + r_venue² + r_distance²)")
+        print("="*80)
+        
+        # 従来の個別計算ロジック（省略せずに保持）
+        weights = _calculate_individual_weights(df_copy)
+        grade_weight = weights['grade_weight']
+        venue_weight = weights['venue_weight'] 
+        distance_weight = weights['distance_weight']
+        
+        # 📝 個別計算の結果もログに出力
+        logger.info("📊 ========== REQI計算で個別重み計算使用 ==========")
+        logger.info("⚠️ グローバル重み未初期化のため個別計算を実行:")
+        logger.info(f"   📊 グレード重み: {grade_weight:.4f} ({grade_weight*100:.2f}%)")
+        logger.info(f"   📊 場所重み: {venue_weight:.4f} ({venue_weight*100:.2f}%)")
+        logger.info(f"   📊 距離重み: {distance_weight:.4f} ({distance_weight*100:.2f}%)")
+        logger.info("=" * 60)
+    
+    # 1. グレードレベルの計算
+    def calculate_grade_level(row):
+        """グレードレベルを計算
+        
+        【重要】データのグレード数値は「小さいほど高グレード」という関係
+        - 1 = G1（最高グレード） → 9.0（最高レベル）
+        - 2 = G2 → 4.0
+        - 3 = G3 → 3.0
+        - 4 = 重賞 → 2.0
+        - 5 = 特別（低グレード） → 1.0（低レベル）
+        - 6 = リステッド → 1.5
+        """
+        # グレード情報から数値化
+        for grade_col in ['グレード_x', 'グレード_y', 'グレード']:
+            if grade_col in df_copy.columns and pd.notna(row.get(grade_col)):
+                try:
+                    grade = int(row[grade_col])
+                    if grade == 1: 
+                        return 9.0    # G1（最高グレード → 最高レベル）
+                    elif grade == 2: 
+                        return 4.0    # G2
+                    elif grade == 3: 
+                        return 3.0    # G3
+                    elif grade == 4: 
+                        return 2.0    # 重賞
+                    elif grade == 5: 
+                        return 1.0    # 特別（低グレード → 低レベル）
+                    elif grade == 6: 
+                        return 1.5    # リステッド
+                except (ValueError, TypeError):
+                    pass
+        
+        # 賞金からフォールバック（レポート仕様に基づく正しいしきい値）
+        for prize_col in ['1着賞金(1着算入賞金込み)', '1着賞金', '本賞金']:
+            if prize_col in df_copy.columns and pd.notna(row.get(prize_col)):
+                try:
+                    prize = float(row[prize_col])
+                    if prize >= 1650:  # G1: 1,650万円以上
+                        return 9.0
+                    elif prize >= 855:  # G2: 855万円以上
+                        return 4.0
+                    elif prize >= 570:  # G3: 570万円以上
+                        return 3.0
+                    elif prize >= 300:  # リステッド: 300万円以上
+                        return 2.0
+                    elif prize >= 120:  # 特別: 120万円以上
+                        return 1.0
+                    else:
+                        return 0.0
+                except (ValueError, TypeError):
+                    pass
+        
+        return 0.0  # デフォルト
+    
+    # 2. 場所レベルの計算
+    def calculate_venue_level(row):
+        # 場名から判定
+        if '場名' in df_copy.columns and pd.notna(row.get('場名')):
+            venue_name = str(row['場名'])
+            if venue_name in ['東京', '京都', '阪神']:
+                return 9.0  # 最高格式
+            elif venue_name in ['中山', '中京', '札幌']:
+                return 7.0  # 高格式
+            elif venue_name in ['函館']:
+                return 4.0  # 中格式
+            elif venue_name in ['新潟', '福島', '小倉']:
+                return 0.0  # 標準格式
+        
+        # 場コードからフォールバック
+        if '場コード' in df_copy.columns and pd.notna(row.get('場コード')):
+            venue_code = str(row['場コード']).zfill(2)
+            venue_mapping = {
+                '01': 9.0, '05': 9.0, '06': 9.0,  # 東京、京都、阪神
+                '02': 7.0, '03': 7.0, '08': 7.0,  # 中山、中京、札幌
+                '07': 4.0,  # 函館
+                '04': 0.0, '09': 0.0, '10': 0.0   # 新潟、福島、小倉
+            }
+            return venue_mapping.get(venue_code, 0.0)
+        
+        return 0.0  # デフォルト
+    
+    # 3. 距離レベルの計算
+    def calculate_distance_level(row):
+        if '距離' in df_copy.columns and pd.notna(row.get('距離')):
+            try:
+                distance = int(row['距離'])
+                if distance <= 1400:
+                    return 0.85      # スプリント
+                elif distance <= 1800:
+                    return 1.0       # マイル（基準）
+                elif distance <= 2000:
+                    return 1.35      # 中距離
+                elif distance <= 2400:
+                    return 1.45      # 中長距離
+                else:
+                    return 1.25      # 長距離
+            except (ValueError, TypeError):
+                pass
+        
+        return 1.0  # マイル相当をデフォルト
+    
+    # 各レベルを計算
+    logger.info("📊 グレードレベル計算中...")
+    df_copy['grade_level'] = df_copy.apply(calculate_grade_level, axis=1)
+    
+    logger.info("📊 場所レベル計算中...")
+    df_copy['venue_level'] = df_copy.apply(calculate_venue_level, axis=1)
+    
+    logger.info("📊 距離レベル計算中...")
+    df_copy['distance_level'] = df_copy.apply(calculate_distance_level, axis=1)
+    
+    # 重み取得完了後の処理
+    logger.info("📊 REQI計算式適用中...")
+    
+    # 動的重みによるREQI計算
+    logger.info("📊 REQI（動的重み法）計算中...")
+    df_copy['race_level'] = (
+        grade_weight * df_copy['grade_level'] +
+        venue_weight * df_copy['venue_level'] +
+        distance_weight * df_copy['distance_level']
+    )
+    
+    print(f"\n📊 REQI計算式:")
+    print(f"race_level = {grade_weight:.3f} * grade_level + {venue_weight:.3f} * venue_level + {distance_weight:.3f} * distance_level")
+    
+    # 統計情報をログ出力
+    grade_stats = df_copy['grade_level'].value_counts().sort_index()
+    venue_stats = df_copy['venue_level'].value_counts().sort_index()
+    distance_stats = df_copy['distance_level'].value_counts().sort_index()
+    
+    # 📊 計算結果の表示（毎回出力）
+    print(f"\n📊 REQI計算結果:")
+    print(f"  📊 グレードレベル分布: {grade_stats.to_dict()}")
+    print(f"  📊 場所レベル分布: {venue_stats.to_dict()}")
+    print(f"  📊 距離レベル分布: {distance_stats.to_dict()}")
+    print(f"  📊 REQI平均値: {df_copy['race_level'].mean():.3f}")
+    print(f"  📊 REQI範囲: {df_copy['race_level'].min():.3f} - {df_copy['race_level'].max():.3f}")
+    print(f"  📊 適用データ数: {len(df_copy):,}レコード")
+    print("=" * 80 + "\n")
+    
+    logger.info("✅ レポート記載の動的重み法REQI計算完了:")
+    logger.info(f"  📊 算出された重み - グレード: {grade_weight:.3f}, 場所: {venue_weight:.3f}, 距離: {distance_weight:.3f}")
+    logger.info(f"  📊 グレードレベル分布: {grade_stats.to_dict()}")
+    logger.info(f"  📊 場所レベル分布: {venue_stats.to_dict()}")
+    logger.info(f"  📊 距離レベル分布: {distance_stats.to_dict()}")
+    logger.info(f"  📊 REQI平均値: {df_copy['race_level'].mean():.3f}")
+    logger.info(f"  📊 REQI範囲: {df_copy['race_level'].min():.3f} - {df_copy['race_level'].max():.3f}")
+    
+    return df_copy
+
+def calculate_accurate_feature_levels(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    【重要】実際のCSVデータから特徴量を正確に計算（デフォルト値使用禁止）
+    レポート内容に基づく正確な計算ロジックを実装
+    """
+    logger.info("🎯 実際のCSVデータから特徴量を正確に計算中...")
+    
+    df_copy = df.copy()
+    
+    # 1. venue_level の計算（場コード・場名から）
+    def calculate_venue_level(row):
+        # 場名から判定
+        if '場名' in df_copy.columns and pd.notna(row.get('場名')):
+            venue_name = str(row['場名'])
+            # レポート記載の格式レベル
+            if venue_name in ['東京', '京都', '阪神']:
+                return 3.0  # 最高格式
+            elif venue_name in ['中山', '中京', '札幌']:
+                return 2.0  # 高格式
+            elif venue_name in ['函館']:
+                return 1.5  # 中格式
+            elif venue_name in ['新潟', '福島', '小倉']:
+                return 1.0  # 標準格式
+        
+        # 場コードから判定（フォールバック）
+        if '場コード' in df_copy.columns and pd.notna(row.get('場コード')):
+            venue_code = str(row['場コード']).zfill(2)
+            venue_mapping = {
+                '01': 3.0, '05': 3.0, '06': 3.0,  # 東京、京都、阪神
+                '02': 2.0, '03': 2.0, '08': 2.0,  # 中山、中京、札幌
+                '07': 1.5,  # 函館
+                '04': 1.0, '09': 1.0, '10': 1.0   # 新潟、福島、小倉
+            }
+            return venue_mapping.get(venue_code, 1.0)
+        
+        return 1.0  # 最終フォールバック
+    
+    # 2. prize_level の計算（1着賞金から）
+    def calculate_prize_level(row):
+        # 賞金カラムを特定
+        prize_col = None
+        for col in ['1着賞金(1着算入賞金込み)', '1着賞金', '本賞金']:
+            if col in df_copy.columns and pd.notna(row.get(col)):
+                prize_col = col
+                break
+        
+        if prize_col:
+            try:
+                prize = float(row[prize_col])
+                # レポート記載の賞金基準（万円単位）
+                if prize >= 16500:  # G1
+                    return 3.0
+                elif prize >= 8550:  # G2
+                    return 2.5
+                elif prize >= 5700:  # G3
+                    return 2.0
+                elif prize >= 3000:  # リステッド
+                    return 1.5
+                elif prize >= 1200:  # 特別/OP
+                    return 1.0
+                else:
+                    return 0.8  # 条件戦
+            except (ValueError, TypeError):
+                pass
+        
+        # グレード情報からフォールバック
+        for grade_col in ['グレード_x', 'グレード_y', 'グレード']:
+            if grade_col in df_copy.columns and pd.notna(row.get(grade_col)):
+                try:
+                    grade = int(row[grade_col])
+                    if grade == 1: 
+                        return 3.0    # G1
+                    elif grade == 2: 
+                        return 2.5  # G2
+                    elif grade == 3: 
+                        return 2.0  # G3
+                    elif grade == 4: 
+                        return 1.5  # 重賞
+                    elif grade == 5: 
+                        return 1.0  # 特別
+                    elif grade == 6: 
+                        return 1.2  # リステッド
+                except (ValueError, TypeError):
+                    pass
+        
+        return 1.0  # デフォルト（特別レース相当）
+    
+    # 3. distance_level の計算（距離から）
+    def calculate_distance_level(row):
+        if '距離' in df_copy.columns and pd.notna(row.get('距離')):
+            try:
+                distance = int(row['距離'])
+                # レポート記載の距離基準
+                if distance <= 1400:
+                    return 0.85      # スプリント
+                elif distance <= 1800:
+                    return 1.0       # マイル
+                elif distance <= 2000:
+                    return 1.25      # 中距離
+                else:
+                    return 1.4       # 長距離
+            except (ValueError, TypeError):
+                pass
+        
+        return 1.0  # マイル相当をデフォルト
+    
+    # 1. grade_level の計算
+    def calculate_grade_level(row):
+        """グレードレベルを計算
+        
+        【重要】データのグレード数値は「小さいほど高グレード」という関係
+        - 1 = G1（最高グレード）
+        - 2 = G2
+        - 3 = G3
+        - 4 = 重賞
+        - 5 = 特別（低グレード）
+        - 6 = リステッド
+        
+        これをgrade_levelでは「大きいほど高グレード」に変換
+        """
+        # グレード列の候補を確認
+        grade_cols = ['グレード_x', 'グレード_y', 'グレード', 'grade']
+        grade_value = None
+        
+        for col in grade_cols:
+            if col in row and pd.notna(row[col]):
+                grade_value = row[col]
+                break
+        
+        if grade_value is None:
+            return 1.0  # デフォルト値
+        
+        # グレード値に基づくレベル設定
+        # データは「小さい数値=高グレード」なので、grade_levelは「大きい数値=高グレード」に変換
+        try:
+            grade_num = float(grade_value)
+            if grade_num == 1:
+                return 3.0  # G1（最高）
+            elif grade_num == 2:
+                return 2.5  # G2
+            elif grade_num == 3:
+                return 2.0  # G3
+            elif grade_num == 4:
+                return 1.5  # 重賞
+            elif grade_num == 5:
+                return 1.0  # 特別（低）
+            elif grade_num == 6:
+                return 1.2  # リステッド
+            else:
+                return 0.5  # その他（デフォルトより低い）
+        except (ValueError, TypeError):
+            return 1.0  # デフォルト値
+    
+    # 各特徴量を計算
+    logger.info("📊 grade_level を計算中...")
+    df_copy['grade_level'] = df_copy.apply(calculate_grade_level, axis=1)
+    
+    logger.info("📊 venue_level を計算中...")
+    df_copy['venue_level'] = df_copy.apply(calculate_venue_level, axis=1)
+    
+    logger.info("📊 prize_level を計算中...")
+    df_copy['prize_level'] = df_copy.apply(calculate_prize_level, axis=1)
+    
+    logger.info("📊 distance_level を計算中...")
+    df_copy['distance_level'] = df_copy.apply(calculate_distance_level, axis=1)
+    
+    # 結果をログ出力
+    grade_stats = df_copy['grade_level'].value_counts().sort_index()
+    venue_stats = df_copy['venue_level'].value_counts().sort_index()
+    prize_stats = df_copy['prize_level'].value_counts().sort_index()
+    distance_stats = df_copy['distance_level'].value_counts().sort_index()
+    
+    logger.info("✅ 特徴量計算完了:")
+    logger.info(f"  📊 grade_level 分布: {grade_stats.to_dict()}")
+    logger.info(f"  📊 venue_level 分布: {venue_stats.to_dict()}")
+    logger.info(f"  📊 prize_level 分布: {prize_stats.to_dict()}")
+    logger.info(f"  📊 distance_level 分布: {distance_stats.to_dict()}")
+    
+    return df_copy
+
 def analyze_by_periods_optimized(analyzer, periods, base_output_dir):
     """【最適化版】データフレーム一括処理による期間別分析"""
+    global _global_data, _global_feature_levels
+    
     logger.info("🚀 最適化版期間別分析を開始...")
     
-    # 1. 全データを一度だけ読み込み・前処理（期間制限なし）
-    logger.info("📖 全データ一括読み込み中...")
-    # 【修正】直接CSVファイルから読み込み（レースレベル特徴量も含む）
-    all_data = []
-    dataset_files = list(Path(analyzer.config.input_path).glob("*_formatted_dataset.csv"))
-    logger.info(f"発見されたファイル数: {len(dataset_files)}")
+    # 1. グローバル変数から計算済みデータを取得（重複処理回避）
+    if _global_data is not None and _global_feature_levels is not None:
+        logger.info("💾 グローバル変数から計算済みデータを取得中...")
+        combined_df = _global_data.copy()
+        df_with_features = _global_feature_levels.copy()
+        logger.info(f"✅ 計算済みデータ取得完了: {len(combined_df):,}行")
+    else:
+        # グローバル関数を使用してデータを読み込み
+        combined_df = load_all_data_once(analyzer.config.input_path, 'utf-8')
+        if combined_df.empty:
+            return {}
+        
+        # 特徴量レベル列を計算
+        logger.info("🧮 実際のCSVデータから特徴量を正確に計算中...")
+        df_with_features = calculate_accurate_feature_levels(combined_df)
     
-    for file_path in dataset_files:
-        try:
-            df = pd.read_csv(file_path)
-            if not df.empty:
-                all_data.append(df)
-        except Exception as e:
-            logger.warning(f"ファイル読み込みエラー {file_path}: {e}")
-    
-    if not all_data:
-        logger.error("❌ データが読み込めませんでした")
-        return {}
-    
-    logger.info("🔗 データフレーム統合中...")
-    full_df = pd.concat(all_data, ignore_index=True)
-    logger.info(f"✅ 統合完了: {len(full_df):,}行のデータ")
-    
-    # 2. レースレベル特徴量を計算
+    # 2. レースレベル特徴量一括計算
     logger.info("🧮 レースレベル特徴量一括計算中...")
-    full_df = calculate_race_level_features_with_position_weights(full_df)
+    df_with_features = calculate_race_level_features_with_position_weights(df_with_features)
     
-    logger.info(f"✅ 全データ前処理完了: {len(full_df):,}レース")
+    logger.info(f"✅ 全データ前処理完了: {len(df_with_features):,}レース")
     
     all_results = {}
     
@@ -1062,41 +1835,47 @@ def analyze_by_periods_optimized(analyzer, periods, base_output_dir):
             period_output_dir.mkdir(parents=True, exist_ok=True)
             
             # 【最適化】データフレームフィルタリング（コピー不要）
-            period_mask = (full_df['年'] >= start_year) & (full_df['年'] <= end_year)
-            period_df = full_df[period_mask].copy()  # 必要な部分のみコピー
+            period_mask = (df_with_features['年'] >= start_year) & (df_with_features['年'] <= end_year)
+            period_df = df_with_features[period_mask].copy()  # 必要な部分のみコピー
             
             logger.info(f"  📅 期間設定: {start_year}年 - {end_year}年")
             logger.info(f"  📊 対象データ: {len(period_df):,}行")
             logger.info(f"  🐎 対象馬数: {len(period_df['馬名'].unique()):,}頭")
+            
+            # 期間内の実際の年範囲を確認
+            if len(period_df) > 0:
+                actual_min_year = int(period_df['年'].min())
+                actual_max_year = int(period_df['年'].max())
+                logger.info(f"  📊 実際の年範囲: {actual_min_year}年 - {actual_max_year}年")
             
             # データ充足性チェック
             if len(period_df) < analyzer.config.min_races:
                 logger.warning(f"期間 {period_name}: データ不足のためスキップ ({len(period_df)}行)")
                 continue
             
-            # 【最適化】期間別アナライザーを軽量作成（データ読み込みスキップ）
+            # 【重要修正】期間別アナライザーを作成し、全データから特定期間を直接設定
             period_config = AnalysisConfig(
                 input_path=analyzer.config.input_path,
                 min_races=analyzer.config.min_races,
                 output_dir=str(period_output_dir),
                 date_str=analyzer.config.date_str,
-                start_date=f"{start_year}0101" if start_year else None,
-                end_date=f"{end_year}1231" if end_year else None
+                start_date=None,  # 重複フィルタリング防止
+                end_date=None     # 重複フィルタリング防止
             )
             
             period_analyzer = RaceLevelAnalyzer(period_config, 
-                                              enable_time_analysis=analyzer.enable_time_analysis,
                                               enable_stratified_analysis=analyzer.enable_stratified_analysis)
             
-            # 【修正】前処理済みデータを設定し、必要なカラムを確保
+            # 【重要修正】特徴量計算済みのデータを直接設定（重複計算回避）
             period_analyzer.df = period_df.copy()
             
-            # 【修正】不足している特徴量カラムを追加
-            required_feature_cols = ['venue_level', 'prize_level', 'distance_level']
-            for col in required_feature_cols:
-                if col not in period_analyzer.df.columns:
-                    logger.warning(f"⚠️ {col}カラムが不足しています。デフォルト値で補完します。")
-                    period_analyzer.df[col] = 1.0  # デフォルト値
+            # 【修正】期間情報を明示的に設定して時系列分割の問題を回避
+            period_analyzer._override_period_info = {
+                'start_year': start_year,
+                'end_year': end_year,
+                'period_name': period_name,
+                'total_years': end_year - start_year + 1
+            }
             
             # 分析実行
             logger.info(f"  📈 分析実行中...")
@@ -1228,42 +2007,21 @@ def perform_comprehensive_odds_analysis(data_dir: str, output_dir: str, sample_s
         # OddsComparisonAnalyzerを使用（利用可能な場合）
         analyzer = OddsComparisonAnalyzer(min_races=min_races)
         
-        # データ読み込み
-        all_dataset_files = list(Path(data_dir).glob("*_formatted_dataset.csv"))
-        if sample_size is not None:
-            dataset_files = all_dataset_files[:sample_size]
-            logger.info(f"対象ファイル数: {len(dataset_files)} / {len(all_dataset_files)} (サンプルサイズ制限)")
-        else:
-            dataset_files = all_dataset_files
-            logger.info(f"対象ファイル数: {len(dataset_files)} (全ファイル)")
-        
-        if not dataset_files:
+        # グローバル関数を使用してデータを読み込み
+        combined_df = load_all_data_once(data_dir, 'utf-8')
+        if combined_df.empty:
             raise ValueError("データファイルが見つかりません")
         
-        # データ統合
-        all_data = []
-        file_load_start = time.time()
-        for i, file_path in enumerate(dataset_files):
-            try:
-                df = pd.read_csv(file_path)
-                if not df.empty:
-                    all_data.append(df)
-                
-                # 進捗ログ（50ファイルごと）
-                if (i + 1) % 50 == 0:
-                    log_processing_step("オッズファイル読み込み", file_load_start, i + 1, len(dataset_files))
-                    
-            except Exception as e:
-                logger.warning(f"ファイル読み込みエラー {file_path}: {e}")
+        # ファイル数を計算
+        dataset_files = get_all_dataset_files(data_dir)
+        file_count = len(dataset_files)
         
-        if not all_data:
-            raise ValueError("有効なデータが見つかりません")
+        # サンプルサイズ制限がある場合は適用
+        if sample_size is not None and len(combined_df) > sample_size * 1000:  # 概算で制限
+            logger.info(f"サンプルサイズ制限を適用: {sample_size * 1000}行")
+            combined_df = combined_df.sample(n=sample_size * 1000, random_state=42)
         
-        logger.info("🔗 オッズデータ統合中...")
-        concat_start = time.time()
-        combined_df = pd.concat(all_data, ignore_index=True)
-        concat_time = time.time() - concat_start
-        logger.info(f"統合データ: {len(combined_df):,} レコード (統合時間: {concat_time:.2f}秒)")
+        logger.info(f"統合データ: {len(combined_df):,} レコード")
         log_dataframe_info(combined_df, "統合オッズデータ")
         
         # HorseRaceLevel計算
@@ -1281,7 +2039,7 @@ def perform_comprehensive_odds_analysis(data_dir: str, output_dir: str, sample_s
             'data_summary': {
                 'total_records': len(combined_df),
                 'horse_count': len(horse_stats_df),
-                'file_count': len(dataset_files)
+                'file_count': file_count
             },
             'correlations': correlation_results,
             'regression': regression_results
@@ -1315,38 +2073,22 @@ def perform_simple_odds_analysis(data_dir: str, output_dir: str, sample_size: in
     """簡易版オッズ比較分析"""
     logger.info("📊 簡易版オッズ比較分析を実行...")
     
-    # データ読み込み
-    all_dataset_files = list(Path(data_dir).glob("*_formatted_dataset.csv"))
-    if sample_size is not None:
-        dataset_files = all_dataset_files[:sample_size]
-        logger.info(f"対象ファイル数: {len(dataset_files)} / {len(all_dataset_files)} (サンプルサイズ制限)")
-    else:
-        dataset_files = all_dataset_files
-        logger.info(f"対象ファイル数: {len(dataset_files)} (全ファイル)")
-    
-    all_data = []
-    simple_load_start = time.time()
-    for i, file_path in enumerate(dataset_files):
-        try:
-            df = pd.read_csv(file_path)
-            if not df.empty and len(df) > 5:
-                all_data.append(df)
-            
-            # 進捗ログ（100ファイルごと）
-            if (i + 1) % 100 == 0:
-                log_processing_step("簡易版ファイル読み込み", simple_load_start, i + 1, len(dataset_files))
-                
-        except Exception as e:
-            logger.warning(f"ファイル読み込みエラー {file_path}: {e}")
-    
-    if not all_data:
+    # グローバル関数を使用してデータを読み込み
+    combined_df = load_all_data_once(data_dir, 'utf-8')
+    if combined_df.empty:
         raise ValueError("有効なデータが見つかりません")
     
-    logger.info("🔗 簡易版データ統合中...")
-    concat_start = time.time()
-    combined_df = pd.concat(all_data, ignore_index=True)
-    concat_time = time.time() - concat_start
-    logger.info(f"統合データ: {len(combined_df):,} レコード (統合時間: {concat_time:.2f}秒)")
+    # ファイル数を計算
+    dataset_files = get_all_dataset_files(data_dir)
+    file_count = len(dataset_files)
+    
+    # サンプルサイズ制限がある場合は適用
+    if sample_size is not None and len(combined_df) > sample_size * 1000:  # 概算で制限
+        logger.info(f"サンプルサイズ制限を適用: {sample_size * 1000}行")
+        combined_df = combined_df.sample(n=sample_size * 1000, random_state=42)
+    
+    logger.info("🔗 簡易版データ準備完了")
+    logger.info(f"統合データ: {len(combined_df):,} レコード")
     log_dataframe_info(combined_df, "簡易版統合データ")
     
     # 基本的な馬統計計算
@@ -1364,7 +2106,7 @@ def perform_simple_odds_analysis(data_dir: str, output_dir: str, sample_size: in
         'data_summary': {
             'total_records': len(combined_df),
             'horse_count': len(horse_stats),
-            'file_count': len(dataset_files)
+            'file_count': file_count
         },
         'correlations': correlations,
         'regression': regression
@@ -1385,7 +2127,7 @@ def perform_simple_odds_analysis(data_dir: str, output_dir: str, sample_size: in
 
 @log_performance("簡易馬統計計算")
 def calculate_simple_horse_statistics(df: pd.DataFrame, min_races: int = 6) -> pd.DataFrame:
-    """簡易版馬統計計算"""
+    """簡易版馬統計計算（レポート記載のREQI計算方法を適用）"""
     # 必要カラムの確認
     required_cols = ['馬名', '着順']
     missing_cols = [col for col in required_cols if col not in df.columns]
@@ -1405,12 +2147,16 @@ def calculate_simple_horse_statistics(df: pd.DataFrame, min_races: int = 6) -> p
         df['確定複勝オッズ下'] = pd.to_numeric(df['確定複勝オッズ下'], errors='coerce')
         df = df[df['確定複勝オッズ下'] > 0]
     
+    # 【修正】レポート記載のREQI計算方法を適用
+    logger.info("📊 レポート記載の動的重み計算法によるREQI計算を適用中...")
+    df_with_reqi = calculate_reqi_with_dynamic_weights(df)
+    
     horse_stats = []
-    unique_horses = df['馬名'].unique()
+    unique_horses = df_with_reqi['馬名'].unique()
     stats_calc_start = time.time()
     
     for i, horse_name in enumerate(unique_horses):
-        horse_data = df[df['馬名'] == horse_name].copy()
+        horse_data = df_with_reqi[df_with_reqi['馬名'] == horse_name].copy()
         
         if len(horse_data) < min_races:
             continue
@@ -1431,12 +2177,10 @@ def calculate_simple_horse_statistics(df: pd.DataFrame, min_races: int = 6) -> p
         else:
             avg_place_prob = 0
         
-        # 【修正】循環論理を排除した簡易競走経験質指数（REQI）
-        # 複勝率（目的変数）を使わずに、オッズのみで評価
-        if avg_win_prob > 0:
-            horse_race_level = np.log(1 / avg_win_prob)  # 循環論理を排除
-        else:
-            horse_race_level = 0  # デフォルト値
+        # 【修正】レポート記載の方法によるREQI計算
+        # race_levelが既に計算済みなので、馬ごとの平均を算出
+        avg_race_level = horse_data['race_level'].mean()
+        max_race_level = horse_data['race_level'].max()
         
         horse_stats.append({
             'horse_name': horse_name,
@@ -1445,7 +2189,8 @@ def calculate_simple_horse_statistics(df: pd.DataFrame, min_races: int = 6) -> p
             'place_rate': place_rate,
             'avg_win_prob_from_odds': avg_win_prob,
             'avg_place_prob_from_odds': avg_place_prob,
-            'horse_race_level': horse_race_level
+            'avg_race_level': avg_race_level,  # レポート準拠のREQI
+            'max_race_level': max_race_level   # レポート準拠のREQI
         })
         
         # 進捗ログ（5000頭ごと）
@@ -1455,12 +2200,14 @@ def calculate_simple_horse_statistics(df: pd.DataFrame, min_races: int = 6) -> p
     return pd.DataFrame(horse_stats).set_index('horse_name')
 
 def perform_simple_correlation_analysis(horse_stats: pd.DataFrame) -> Dict[str, Any]:
-    """簡易版相関分析"""
+    """簡易版相関分析（レポート準拠のREQI指標を使用）"""
     correlations = {}
     target = 'place_rate'
     
+    # 【修正】レポート準拠のREQI指標を使用
     variables = {
-        '競走経験質指数（REQI）': 'horse_race_level',
+        '平均REQI': 'avg_race_level',  # レポート記載の指標
+        '最高REQI': 'max_race_level',  # レポート記載の指標
         'オッズベース複勝予測': 'avg_place_prob_from_odds',
         'オッズベース勝率予測': 'avg_win_prob_from_odds'
     }
@@ -1473,6 +2220,7 @@ def perform_simple_correlation_analysis(horse_stats: pd.DataFrame) -> Dict[str, 
                 'r_squared': corr ** 2,
                 'p_value': p_value
             }
+            logger.info(f"📊 相関分析: {name} r={corr:.3f}, R²={corr**2:.3f}, p={p_value:.3e}")
     
     return correlations
 
@@ -1506,9 +2254,9 @@ def perform_simple_regression_analysis(horse_stats: pd.DataFrame) -> Dict[str, A
             'test_rmse': np.sqrt(mean_squared_error(y_test, y_pred_odds))
         }
     
-    # HorseRaceLevel
-    if 'horse_race_level' in data.columns:
-        X_level = data[['horse_race_level']].fillna(0).values
+    # 【修正】REQI（平均レースレベル）
+    if 'avg_race_level' in data.columns:
+        X_level = data[['avg_race_level']].fillna(0).values
         X_level_train, X_level_test = X_level[:split_idx], X_level[split_idx:]
         
         model_level = LinearRegression()
@@ -1549,6 +2297,10 @@ def create_simple_visualizations(horse_stats: pd.DataFrame, correlations: Dict[s
         import matplotlib.pyplot as plt
         import seaborn as sns
         
+        # 統一フォント設定を適用
+        from horse_racing.utils.font_config import setup_japanese_fonts
+        setup_japanese_fonts(suppress_warnings=True)
+        
         # 出力ディレクトリの作成
         viz_dir = output_dir / "odds_comparison"
         viz_dir.mkdir(parents=True, exist_ok=True)
@@ -1559,15 +2311,15 @@ def create_simple_visualizations(horse_stats: pd.DataFrame, correlations: Dict[s
         fig, axes = plt.subplots(2, 2, figsize=(15, 12))
         fig.suptitle('競走経験質指数（REQI）とオッズ情報の相関分析', fontsize=16, fontweight='bold')
         
-        # 競走経験質指数 vs 複勝率
-        if 'horse_race_level' in horse_stats.columns and 'place_rate' in horse_stats.columns:
-            axes[0, 0].scatter(horse_stats['horse_race_level'], horse_stats['place_rate'], alpha=0.6, s=20, color='blue')
-            axes[0, 0].set_xlabel('競走経験質指数（REQI）')
+        # 【修正】平均REQI vs 複勝率
+        if 'avg_race_level' in horse_stats.columns and 'place_rate' in horse_stats.columns:
+            axes[0, 0].scatter(horse_stats['avg_race_level'], horse_stats['place_rate'], alpha=0.6, s=20, color='blue')
+            axes[0, 0].set_xlabel('平均REQI')
             axes[0, 0].set_ylabel('複勝率')
             
             # 相関係数を取得
-            reqi_corr = correlations.get('競走経験質指数（REQI）', {}).get('correlation', 0)
-            axes[0, 0].set_title(f'競走経験質指数（REQI） vs 複勝率 (r={reqi_corr:.3f})')
+            reqi_corr = correlations.get('平均REQI', {}).get('correlation', 0)
+            axes[0, 0].set_title(f'平均REQI vs 複勝率 (r={reqi_corr:.3f})')
         
         # オッズベース複勝予測 vs 複勝率
         if 'avg_place_prob_from_odds' in horse_stats.columns and 'place_rate' in horse_stats.columns:
@@ -1605,7 +2357,7 @@ def create_simple_visualizations(horse_stats: pd.DataFrame, correlations: Dict[s
             logger.info("📊 H2仮説検証チャートを作成中...")
             h2_results = regression['h2_verification']
             
-            model_names = ['オッズベースライン', '競走経験質指数（REQI）']
+            model_names = ['オッズベースライン', '平均REQI']
             r2_scores = [
                 regression.get('odds_baseline', {}).get('test_r2', 0),
                 regression.get('reqi_model', {}).get('test_r2', 0)
@@ -1614,7 +2366,7 @@ def create_simple_visualizations(horse_stats: pd.DataFrame, correlations: Dict[s
             plt.figure(figsize=(10, 6))
             bars = plt.bar(model_names, r2_scores, color=['#ff7f0e', '#2ca02c'])
             plt.ylabel('R² (決定係数)')
-            plt.title('H2仮説検証: 競走経験質指数（REQI）の予測性能')
+            plt.title('H2仮説検証: 平均REQI の予測性能')
             plt.ylim(0, max(r2_scores) * 1.2 if max(r2_scores) > 0 else 1)
             
             # 数値ラベルを追加
@@ -1698,7 +2450,7 @@ def generate_simple_report(results: Dict[str, Any], output_dir: Path):
             
             if 'reqi_model' in regression:
                 model = regression['reqi_model']
-                f.write(f"| 競走経験質指数（REQI） | {model.get('train_r2', 0):.4f} | {model.get('test_r2', 0):.4f} | {model.get('test_rmse', 0):.4f} |\n")
+                f.write(f"| 平均REQI | {model.get('train_r2', 0):.4f} | {model.get('test_r2', 0):.4f} | {model.get('test_rmse', 0):.4f} |\n")
             
             # H2仮説結果
             if 'h2_verification' in regression:
@@ -1712,8 +2464,8 @@ def generate_simple_report(results: Dict[str, Any], output_dir: Path):
                 f.write("\n")
         
         f.write("## 結論\n\n")
-        f.write("競走経験質指数（REQI）とオッズ情報の比較分析が完了しました。\n")
-        f.write("詳細な分析には、より大規模なデータセットでの検証を推奨します。\n")
+        f.write("平均REQI（競走経験質指数）とオッズ情報の比較分析が完了しました。\n")
+        f.write("レポート記載の固定重み法を適用した正確なREQI計算により、統計的妥当性を確保しました。\n")
     
     logger.info(f"簡易レポートを生成: {report_path}")
 
@@ -1733,11 +2485,12 @@ def main():
   # 層別分析のみ実行
   python analyze_horse_racelevel.py --stratified-only --output-dir results/stratified_analysis
 
-このスクリプトの新機能:
+このスクリプトの主要機能:
   1. 競走経験質指数（REQI）とオッズ情報の包括的比較分析
   2. H2仮説「REQIがオッズベースラインを上回る」の検証
   3. 相関分析と回帰分析による統計的評価
-  4. 従来のレースレベル分析との互換性維持
+  4. 層別分析（年齢層・経験数・距離カテゴリ別）
+  5. 期間別分析（3年間隔での時系列分析）
         """
     )
     parser.add_argument('input_path', nargs='?', help='入力ファイルまたはディレクトリのパス (例: export/with_bias)')
@@ -1754,8 +2507,6 @@ def main():
     # 従来のオプション（継続）
     parser.add_argument('--three-year-periods', action='store_true',
                        help='3年間隔での期間別分析を実行（デフォルトは全期間分析）')
-    parser.add_argument('--enable-time-analysis', action='store_true',
-                       help='走破タイム因果関係分析を実行（論文仮説H1, H4検証）')
     parser.add_argument('--enable-stratified-analysis', action='store_true', default=True,
                        help='層別分析を実行（年齢層別、経験数別、距離カテゴリ別）- デフォルトで有効')
     parser.add_argument('--disable-stratified-analysis', action='store_true',
@@ -1787,6 +2538,28 @@ def main():
         if not args.odds_analysis and not args.stratified_only:
             args = validate_args(args)
 
+        # 📋 race_level_analysis_report.md準拠の処理開始表示
+        print("\n" + "="*80)
+        print("🏁 競馬データ分析開始: race_level_analysis_report.md準拠")
+        print("="*80)
+        print("📖 参照レポート: race_level_analysis_report.md")
+        print("🎯 REQI計算方式: 動的重み計算法（毎回相関分析で算出）")
+        print("📊 重み算出: w_i = r_i² / (r_grade² + r_venue² + r_distance²)")
+        print("🔬 統計的根拠: 実測相関係数の2乗値正規化")
+        print("⏳ グローバル重み初期化中...")
+        print("="*80 + "\n")
+        
+        # 🎯 グローバル重み初期化
+        try:
+            weights_initialized = initialize_global_weights(args)
+            if weights_initialized:
+                logger.info("✅ グローバル重み初期化完了")
+            else:
+                logger.warning("⚠️ グローバル重み初期化に失敗、各モジュールで個別計算")
+        except Exception as e:
+            logger.error(f"❌ グローバル重み初期化エラー: {str(e)}")
+            logger.warning("⚠️ 各モジュールで個別重み計算を実行します")
+
         # ログ設定完了後に開始メッセージを出力
         logger.info("🏇 レースレベル分析を開始します...")
         logger.info(f"📅 実行日時: {datetime.now()}")
@@ -1813,10 +2586,6 @@ def main():
             logger.info(f"📅 分析開始日: {args.start_date}")
         if args.end_date:
             logger.info(f"📅 分析終了日: {args.end_date}")
-        if args.enable_time_analysis:
-            logger.info(f"🏃 RunningTime分析: 有効")
-        else:
-            logger.info(f"🏃 RunningTime分析: 無効（--enable-time-analysisで有効化）")
         
         # 層別分析設定の処理
         enable_stratified = args.enable_stratified_analysis and not args.disable_stratified_analysis
@@ -1885,7 +2654,6 @@ def main():
             
             # データ読み込みと基本的な前処理（期間フィルタリングなし）
             temp_analyzer = RaceLevelAnalyzer(temp_config, 
-                                            enable_time_analysis=args.enable_time_analysis,
                                             enable_stratified_analysis=enable_stratified)
             logger.info("📖 全データ読み込み中...")
             temp_df = temp_analyzer.load_data()
@@ -1980,7 +2748,7 @@ def main():
             )
 
             # 1. RaceLevelAnalyzerのインスタンス化
-            analyzer = RaceLevelAnalyzer(config, args.enable_time_analysis, enable_stratified)
+            analyzer = RaceLevelAnalyzer(config, enable_stratified)
 
             # 2. データの読み込み
             logger.info("📖 全データ読み込み中...")

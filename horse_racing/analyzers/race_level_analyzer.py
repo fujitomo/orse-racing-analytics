@@ -10,19 +10,17 @@ from sklearn.linear_model import LinearRegression, LogisticRegression
 from horse_racing.base.analyzer import BaseAnalyzer, AnalysisConfig
 from horse_racing.data.loader import RaceDataLoader
 from horse_racing.visualization.plotter import RacePlotter
-from horse_racing.analyzers.causal_analyzer import analyze_causal_relationship, generate_causal_analysis_report
-from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, r2_score, mean_squared_error
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.preprocessing import StandardScaler
 from scipy import stats
+from scipy.stats import pearsonr
 from statsmodels.stats.outliers_influence import variance_inflation_factor
-from statsmodels.stats.multitest import multipletests
 import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import logging
 from pathlib import Path
-import warnings
 import random
 
 # 再現性の担保
@@ -37,49 +35,204 @@ logger = logging.getLogger(__name__)
 loader_logger = logging.getLogger('horse_racing.data.loader')
 loader_logger.setLevel(logging.WARNING)
 
-# 日本語フォントの設定
-import platform
-if platform.system() == 'Windows':
-    # Windows環境での日本語フォント設定
-    plt.rcParams['font.family'] = ['Yu Gothic', 'Meiryo', 'Takao', 'IPAexGothic', 'IPAgothic', 'Noto Sans CJK JP', 'sans-serif']
-else:
-    # Linux/Mac環境での日本語フォント設定
-    plt.rcParams['font.family'] = ['Noto Sans CJK JP', 'Takao', 'IPAexGothic', 'IPAgothic', 'Yu Gothic', 'Meiryo', 'sans-serif']
-
-mpl.rcParams['axes.unicode_minus'] = False
-plt.rcParams['font.size'] = 12
+# 日本語フォントの設定（統一設定を使用）
+from horse_racing.utils.font_config import setup_japanese_fonts
+setup_japanese_fonts(suppress_warnings=True)
 
 class RaceLevelAnalyzer(BaseAnalyzer):
     """レースレベル分析クラス"""
 
-    # グレード定義
+    # グレード定義（動的計算により更新される）
     GRADE_LEVELS = {
-        1: {"name": "G1", "weight": 10.0, "base_level": 9},
-        2: {"name": "G2", "weight": 8.0, "base_level": 8},
-        3: {"name": "G3", "weight": 7.0, "base_level": 7},
-        4: {"name": "重賞", "weight": 6.0, "base_level": 6},
-        5: {"name": "特別", "weight": 5.0, "base_level": 5},
-        6: {"name": "L", "weight": 5.5, "base_level": 5.5}
+        1: {"name": "G1", "weight": None, "base_level": None},
+        2: {"name": "G2", "weight": None, "base_level": None},
+        3: {"name": "G3", "weight": None, "base_level": None},
+        4: {"name": "重賞", "weight": None, "base_level": None},
+        5: {"name": "特別", "weight": None, "base_level": None},
+        6: {"name": "L", "weight": None, "base_level": None}
     }
 
-    # レースレベル計算の重み付け定義
+    # レースレベル計算の重み付け定義（動的計算により更新される）
     LEVEL_WEIGHTS = {
-        "grade_weight": 0.50,
-        "venue_weight": 0.20,
-        "prize_weight": 0.30,
-        "field_size_weight": 0.10,
-        "competition_weight": 0.20,
+        "grade_weight": None,
+        "venue_weight": None,
+        "prize_weight": None,
+        "field_size_weight": None,
+        "competition_weight": None,
     }
 
-    def __init__(self, config: AnalysisConfig, enable_time_analysis: bool = False, enable_stratified_analysis: bool = True):
+    def __init__(self, config: AnalysisConfig, enable_stratified_analysis: bool = True):
         """初期化"""
         super().__init__(config)
         self.plotter = RacePlotter(self.output_dir)
         self.loader = RaceDataLoader(config.input_path)
         self.class_column = None  # 実際のクラスカラム名を動的に設定
-        self.time_analysis_results = {}  # タイム分析結果を保存
-        self.enable_time_analysis = enable_time_analysis  # RunningTime分析の有効/無効
         self.enable_stratified_analysis = enable_stratified_analysis  # 層別分析の有効/無効
+        self._weights_calculated = False  # 重み計算済みフラグ
+
+    def get_level_weights(self) -> Dict[str, float]:
+        """重みを取得（未計算の場合は自動計算）"""
+        if not self._weights_calculated:
+            logger.warning("⚠️ 重みが未計算です。自動でcalculate_dynamic_weights()を実行します。")
+            if hasattr(self, 'df') and self.df is not None:
+                self.calculate_dynamic_weights(self.df)
+            else:
+                logger.error("❌ データが読み込まれていないため、重みを計算できません。")
+                # フォールバック（均等重み）
+                return {
+                    "grade_weight": 0.25,
+                    "venue_weight": 0.25,
+                    "prize_weight": 0.25,
+                    "distance_weight": 0.25,
+                    "field_size_weight": 0.1,
+                    "competition_weight": 0.1,
+                }
+        return self.LEVEL_WEIGHTS
+
+    def calculate_dynamic_weights(self, df: pd.DataFrame) -> Dict[str, float]:
+        """
+        レポート記載の動的重み計算
+        race_level_analysis_report.md 5.1.3節記載の方法を適用
+        """
+        if self._weights_calculated:
+            return self.LEVEL_WEIGHTS
+            
+        logger.info("🎯 race_level_analyzer.py: 動的重み計算中...")
+        
+        # 複勝率の計算（3着以内の割合）
+        df['place_flag'] = (df['着順'] <= 3).astype(int)
+        
+        # 馬ごとの複勝率を計算
+        horse_place_rates = df.groupby('馬名')['place_flag'].mean().to_dict()
+        df['horse_place_rate'] = df['馬名'].map(horse_place_rates)
+        
+        # 特徴量レベルを計算
+        grade_level = self._calculate_grade_level(df)
+        venue_level = self._calculate_venue_level(df)
+        distance_level = self._calculate_distance_level(df)
+        prize_level = self._calculate_prize_level(df)
+        
+        # 各要素と複勝率の相関係数を計算
+        grade_corr = grade_level.corr(df['horse_place_rate'])
+        venue_corr = venue_level.corr(df['horse_place_rate'])
+        distance_corr = distance_level.corr(df['horse_place_rate'])
+        prize_corr = prize_level.corr(df['horse_place_rate'])
+        
+        print(f"\n📊 race_level_analyzer.py 相関分析結果:")
+        print(f"  📊 グレードレベル相関: r = {grade_corr:.3f}")
+        print(f"  📊 場所レベル相関: r = {venue_corr:.3f}")
+        print(f"  📊 距離レベル相関: r = {distance_corr:.3f}")
+        print(f"  📊 賞金レベル相関: r = {prize_corr:.3f}")
+        
+        # レポート記載の重み算出方法: w_i = r_i² / (r_grade² + r_venue² + r_distance² + r_prize²)
+        grade_contribution = grade_corr ** 2
+        venue_contribution = venue_corr ** 2
+        distance_contribution = distance_corr ** 2
+        prize_contribution = prize_corr ** 2
+        total_contribution = grade_contribution + venue_contribution + distance_contribution + prize_contribution
+        
+        # 重みの算出
+        if total_contribution > 0:
+            grade_weight = grade_contribution / total_contribution
+            venue_weight = venue_contribution / total_contribution
+            distance_weight = distance_contribution / total_contribution
+            prize_weight = prize_contribution / total_contribution
+        else:
+            # フォールバック（分散ベース重み配分）
+            logger.warning("⚠️ すべての相関が0のため、分散ベース重み配分を使用")
+            grade_var = grade_level.var()
+            venue_var = venue_level.var()
+            distance_var = distance_level.var()
+            prize_var = prize_level.var()
+            total_var = grade_var + venue_var + distance_var + prize_var
+            
+            if total_var > 0:
+                grade_weight = grade_var / total_var
+                venue_weight = venue_var / total_var
+                distance_weight = distance_var / total_var
+                prize_weight = prize_var / total_var
+            else:
+                # 最終フォールバック（均等分散）
+                logger.warning("⚠️ すべての分散も0のため、均等重み配分を使用")
+                grade_weight = 0.25
+                venue_weight = 0.25
+                distance_weight = 0.25
+                prize_weight = 0.25
+        
+        # 動的重みをクラス変数に保存
+        self.LEVEL_WEIGHTS = {
+            "grade_weight": grade_weight,
+            "venue_weight": venue_weight,
+            "distance_weight": distance_weight,
+            "prize_weight": prize_weight,
+            "field_size_weight": 0.1,  # 固定（フィールドサイズは補助的）
+            "competition_weight": 0.1,  # 固定（競争度は補助的）
+        }
+        
+        # グレードレベルも動的計算
+        self._calculate_dynamic_grade_levels(df)
+        
+        print(f"\n📊 race_level_analyzer.py 算出された重み:")
+        print(f"  📊 グレード重み: {grade_weight:.3f} ({grade_weight*100:.1f}%)")
+        print(f"  📊 場所重み: {venue_weight:.3f} ({venue_weight*100:.1f}%)")
+        print(f"  📊 距離重み: {distance_weight:.3f} ({distance_weight*100:.1f}%)")
+        print(f"  📊 賞金重み: {prize_weight:.3f} ({prize_weight*100:.1f}%)")
+        print("="*80 + "\n")
+        
+        self._weights_calculated = True
+        return self.LEVEL_WEIGHTS
+        
+    def _calculate_dynamic_grade_levels(self, df: pd.DataFrame):
+        """グレードレベルの動的計算"""
+        # グレード別の平均複勝率を計算
+        grade_place_rates = {}
+        for grade in [1, 2, 3, 4, 5, 6]:
+            grade_mask = (df.get('グレード_x', df.get('グレード', pd.Series())) == grade)
+            if grade_mask.any():
+                grade_place_rate = df[grade_mask]['place_flag'].mean()
+                grade_place_rates[grade] = grade_place_rate
+        
+        # 複勝率に基づいてウェイトとベースレベルを動的計算
+        if grade_place_rates:
+            max_place_rate = max(grade_place_rates.values()) if grade_place_rates else 0.5
+            min_place_rate = min(grade_place_rates.values()) if grade_place_rates else 0.2
+            
+            for grade in [1, 2, 3, 4, 5, 6]:
+                if grade in grade_place_rates:
+                    place_rate = grade_place_rates[grade]
+                    # 複勝率に基づいて重みを計算（0.5〜10.0の範囲）
+                    if max_place_rate > min_place_rate:
+                        normalized_rate = (place_rate - min_place_rate) / (max_place_rate - min_place_rate)
+                        weight = 5.0 + normalized_rate * 5.0  # 5.0〜10.0
+                        base_level = 5 + normalized_rate * 4  # 5〜9
+                    else:
+                        weight = 7.5  # デフォルト値
+                        base_level = 7  # デフォルト値
+                else:
+                    # データがない場合のデフォルト値
+                    weight = 7.5 - grade  # グレードが高いほど重み大
+                    base_level = 10 - grade  # グレードが高いほどベースレベル大
+                
+                self.GRADE_LEVELS[grade]["weight"] = weight
+                self.GRADE_LEVELS[grade]["base_level"] = base_level
+            
+            print(f"📊 動的グレードレベル算出完了:")
+            for grade, data in self.GRADE_LEVELS.items():
+                print(f"  📊 {data['name']}: weight={data['weight']:.1f}, base_level={data['base_level']:.1f}")
+        else:
+            # フォールバック（固定値）
+            logger.warning("⚠️ グレードデータが不足のため、デフォルト値を使用")
+            default_grades = {
+                1: {"weight": 10.0, "base_level": 9},
+                2: {"weight": 8.0, "base_level": 8},
+                3: {"weight": 7.0, "base_level": 7},
+                4: {"weight": 6.0, "base_level": 6},
+                5: {"weight": 5.0, "base_level": 5},
+                6: {"weight": 5.5, "base_level": 5.5}
+            }
+            for grade, values in default_grades.items():
+                self.GRADE_LEVELS[grade]["weight"] = values["weight"]
+                self.GRADE_LEVELS[grade]["base_level"] = values["base_level"]
 
     def load_data(self) -> pd.DataFrame:
         """データの読み込み"""
@@ -172,6 +325,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         # カラム名の前後の空白を除去
         df.columns = df.columns.str.strip()
         
+        # 【追加】動的重み計算を実行
+        self.calculate_dynamic_weights(df)
+        
         # 必要なカラムを選択（実際に存在するカラム名に基づく）
         base_required_columns = [
             '場コード', '年', '回', '日', 'R', '馬名', '距離', '着順',
@@ -180,12 +336,6 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             '1着賞金(1着算入賞金込み)', '2着賞金(2着算入賞金込み)', '平均賞金'
         ]
         
-        # タイム関連カラムの追加
-        time_columns = []
-        for col in ['タイム', 'time', 'Time', '走破タイム']:
-            if col in df.columns:
-                time_columns.append(col)
-                break
         
         # クラス関連のカラムを動的に追加と判定
         class_columns = []
@@ -195,7 +345,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 if self.class_column is None:  # 最初に見つかったクラス関連カラムを使用
                     self.class_column = col
         
-        required_columns = base_required_columns + class_columns + time_columns
+        required_columns = base_required_columns + class_columns
         
         # 存在するカラムのみを選択
         available_columns = [col for col in required_columns if col in df.columns]
@@ -214,10 +364,19 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         # 【重要】レポート記載の3要素統合race_level計算
         df["distance_level"] = self._calculate_distance_level(df)
         
-        # 複勝結果統合後の重み（5.0.2節参照）
-        w_grade = 0.636
-        w_venue = 0.323
-        w_distance = 0.041
+        # 複勝結果統合後の重み（動的計算）
+        weights = self.get_level_weights()
+        w_grade = weights.get('grade_weight', 0.636)
+        w_venue = weights.get('venue_weight', 0.323)
+        w_distance = weights.get('distance_weight', 0.041)
+        
+        # 📝 重み使用情報をログに出力
+        logger.info("📊 ========== レースレベル分析で重み使用 ==========")
+        logger.info("⚖️ 特徴量計算で使用される重み:")
+        logger.info(f"   📊 グレード重み: {w_grade:.4f} ({w_grade*100:.2f}%)")
+        logger.info(f"   📊 場所重み: {w_venue:.4f} ({w_venue*100:.2f}%)")
+        logger.info(f"   📊 距離重み: {w_distance:.4f} ({w_distance*100:.2f}%)")
+        logger.info("=" * 60)
         
         # 【改良】時間的分離による複勝結果統合（循環論理を回避）
         # 基本レースレベルを計算
@@ -228,116 +387,10 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         # 複勝結果による重み付けを適用（馬の過去実績ベース）
         df["race_level"] = self._apply_historical_result_weights(df, base_race_level)
         
-        # RunningTime分析機能を追加（有効な場合のみ）
-        if self.enable_time_analysis:
-            df = self.calculate_running_time_features(df)
 
         return df
 
-    def calculate_running_time_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """走破タイム関連特徴量の計算"""
-        try:
-            logger.info("🏃 走破タイム特徴量の計算を開始...")
-            
-            # タイムカラムの特定
-            time_column = None
-            for col in ['タイム', 'time', 'Time', '走破タイム']:
-                if col in df.columns:
-                    time_column = col
-                    break
-            
-            if time_column is None:
-                logger.warning("⚠️ タイムカラムが見つかりません。RunningTime分析をスキップします。")
-                return df
-            
-            logger.info(f"📊 使用するタイムカラム: {time_column}")
-            
-            # タイムデータの前処理
-            df[time_column] = pd.to_numeric(df[time_column], errors='coerce')
-            
-            # 異常値の除去（0秒や極端に遅いタイム）
-            valid_time_mask = (df[time_column] > 60) & (df[time_column] < 600)  # 1分〜10分の範囲
-            df = df[valid_time_mask].copy()
-            
-            logger.info(f"📊 有効なタイムデータ: {len(df):,}件")
-            
-            # 1. 距離補正タイムの計算（2000m換算）
-            df['distance_adjusted_time'] = df[time_column] / df['距離'] * 2000
-            
-            # 2. 同条件内でのZ-score正規化
-            grouping_columns = ['場コード', '芝ダ障害コード']
-            available_grouping = [col for col in grouping_columns if col in df.columns]
-            
-            if available_grouping:
-                df['time_zscore'] = df.groupby(available_grouping)[time_column].transform(
-                    lambda x: (x - x.mean()) / x.std() if x.std() > 0 else 0
-                )
-                logger.info(f"📊 Z-score正規化完了（グループ化: {available_grouping}）")
-            else:
-                # グループ化できない場合は全体でZ-score
-                df['time_zscore'] = (df[time_column] - df[time_column].mean()) / df[time_column].std()
-                logger.info("📊 Z-score正規化完了（全体平均）")
-            
-            # 3. 速度指標の計算（m/分）
-            df['speed_index'] = df['距離'] / df[time_column] * 60
-            
-            # 4. 距離別基準タイムとの比較
-            df['time_ratio'] = df.groupby('距離')[time_column].transform(
-                lambda x: df.loc[x.index, time_column] / x.mean()
-            )
-            
-            # 5. タイムランキング（同レース内）
-            df['time_rank_in_race'] = df.groupby(['場コード', '年', '回', '日', 'R'])[time_column].rank(method='min')
-            
-            logger.info("✅ 走破タイム特徴量の計算が完了しました")
-            logger.info(f"   - distance_adjusted_time: 距離補正タイム（2000m換算）")
-            logger.info(f"   - time_zscore: Z-score正規化タイム")
-            logger.info(f"   - speed_index: 速度指標（m/分）")
-            logger.info(f"   - time_ratio: 距離別基準タイム比")
-            logger.info(f"   - time_rank_in_race: レース内タイムランキング")
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"❌ 走破タイム特徴量計算中にエラー: {str(e)}")
-            return df
 
-    def analyze_time_causality(self) -> Dict[str, Any]:
-        """タイム関連の因果分析"""
-        try:
-            logger.info("🔬 タイム因果分析を開始...")
-            
-            results = {}
-            
-            # データの準備
-            analysis_data = self.df.dropna(subset=['race_level', 'time_zscore', 'is_placed'])
-            
-            if len(analysis_data) == 0:
-                logger.warning("⚠️ 分析可能なデータがありません")
-                return {}
-            
-            logger.info(f"📊 分析対象データ: {len(analysis_data):,}件")
-            
-            # 1. 仮説H1の検証: RaceLevel → RunningTime
-            h1_results = self.verify_hypothesis_h1(analysis_data)
-            results['hypothesis_h1'] = h1_results
-            
-            # 2. 仮説H4の検証: RunningTime → PlaceRate
-            h4_results = self.verify_hypothesis_h4(analysis_data)
-            results['hypothesis_h4'] = h4_results
-            
-            # 3. 総合的な因果関係分析
-            comprehensive_results = self._analyze_comprehensive_causality(analysis_data)
-            results['comprehensive_analysis'] = comprehensive_results
-            
-            self.time_analysis_results = results
-            logger.info("✅ タイム因果分析が完了しました")
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"❌ タイム因果分析中にエラー: {str(e)}")
-            return {}
 
     def verify_hypothesis_h2_baseline_comparison(self, horse_stats: pd.DataFrame) -> Dict[str, Any]:
         """
@@ -664,218 +717,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.error(f"❌ H3検証中にエラー: {str(e)}")
             return {}
 
-    def verify_hypothesis_h1(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """
-        仮説H1の検証: RaceLevel（レース格）が高いほど、走破タイムが速くなる（距離補正済み）
-        距離・馬場状態を統制した多変量回帰分析
-        """
-        try:
-            logger.info("🧪 仮説H1検証: RaceLevel → RunningTime")
-            
-            # 説明変数の準備
-            X = data[['race_level']].copy()
-            
-            # 距離カテゴリの追加（統制変数）
-            data['distance_category'] = pd.cut(data['距離'], 
-                                             bins=[0, 1400, 1800, 2000, 2400, 9999],
-                                             labels=['sprint', 'mile', 'middle', 'long', 'extra_long'])
-            
-            # カテゴリ変数のダミー化
-            distance_dummies = pd.get_dummies(data['distance_category'], prefix='dist')
-            X = pd.concat([X, distance_dummies], axis=1)
-            
-            # 馬場状態の統制（存在する場合）
-            if '馬場状態' in data.columns:
-                track_dummies = pd.get_dummies(data['馬場状態'], prefix='track')
-                X = pd.concat([X, track_dummies], axis=1)
-            
-            # 目的変数（タイムが速い方が負の値になるため、符号を反転）
-            y = -data['time_zscore']  # 速いタイム = 高い値
-            
-            # 回帰分析の実行
-            model = LinearRegression()
-            model.fit(X, y)
-            
-            y_pred = model.predict(X)
-            r2 = r2_score(y, y_pred)
-            mse = mean_squared_error(y, y_pred)
-            
-            # 統計的有意性の検定
-            correlation = data['race_level'].corr(-data['time_zscore'])
-            n = len(data)
-            t_stat = correlation * np.sqrt((n - 2) / (1 - correlation**2))
-            p_value = 2 * (1 - stats.t.cdf(abs(t_stat), n - 2))
-            
-            results = {
-                'model': model,
-                'r2_score': r2,
-                'mse': mse,
-                'correlation': correlation,
-                'p_value': p_value,
-                'sample_size': n,
-                'is_significant': p_value < 0.05,
-                'effect_direction': 'positive' if correlation > 0 else 'negative',
-                'interpretation': self._interpret_h1_results(correlation, p_value, r2)
-            }
-            
-            logger.info(f"   📊 相関係数: {correlation:.3f}")
-            logger.info(f"   📊 決定係数: {r2:.3f}")
-            logger.info(f"   📊 p値: {p_value:.6f}")
-            logger.info(f"   📊 統計的有意性: {'有意' if p_value < 0.05 else '非有意'}")
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"❌ 仮説H1検証中にエラー: {str(e)}")
-            return {}
 
-    def verify_hypothesis_h4(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """
-        仮説H4の検証: RunningTime が速いほど複勝率が高い
-        ロジスティック回帰分析（距離・馬場バイアス調整）
-        """
-        try:
-            logger.info("🧪 仮説H4検証: RunningTime → PlaceRate")
-            
-            # 説明変数の準備
-            X = data[['time_zscore', 'race_level']].copy()
-            
-            # 距離の統制
-            X['distance'] = data['距離']
-            
-            # 目的変数
-            y = data['is_placed']
-            
-            # ロジスティック回帰の実行
-            model = LogisticRegression(random_state=42)
-            model.fit(X, y)
-            
-            y_pred = model.predict(X)
-            y_pred_proba = model.predict_proba(X)[:, 1]
-            
-            # 評価指標の計算
-            accuracy = accuracy_score(y, y_pred)
-            
-            # オッズ比の計算
-            odds_ratios = np.exp(model.coef_[0])
-            
-            # 相関係数の計算（time_zscoreが負の値なので符号を調整）
-            correlation = (-data['time_zscore']).corr(data['is_placed'])
-            
-            # 統計的有意性の検定
-            n = len(data)
-            t_stat = correlation * np.sqrt((n - 2) / (1 - correlation**2))
-            p_value = 2 * (1 - stats.t.cdf(abs(t_stat), n - 2))
-            
-            results = {
-                'model': model,
-                'accuracy': accuracy,
-                'odds_ratios': odds_ratios,
-                'correlation': correlation,
-                'p_value': p_value,
-                'sample_size': n,
-                'is_significant': p_value < 0.05,
-                'predictions': y_pred_proba,
-                'interpretation': self._interpret_h4_results(correlation, p_value, odds_ratios[0])
-            }
-            
-            logger.info(f"   📊 相関係数: {correlation:.3f}")
-            logger.info(f"   📊 精度: {accuracy:.3f}")
-            logger.info(f"   📊 タイムのオッズ比: {odds_ratios[0]:.3f}")
-            logger.info(f"   📊 p値: {p_value:.6f}")
-            logger.info(f"   📊 統計的有意性: {'有意' if p_value < 0.05 else '非有意'}\n")
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"❌ 仮説H4検証中にエラー: {str(e)}")
-            return {}
 
-    def _analyze_comprehensive_causality(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """包括的な因果関係分析"""
-        try:
-            logger.info("🔬 包括的因果関係分析を実行...")
-            
-            results = {}
-            
-            # 1. RaceLevel → Time → PlaceRate の媒介効果分析（簡易版）
-            # ステップ1: RaceLevel → PlaceRate の直接効果
-            direct_corr = data['race_level'].corr(data['is_placed'])
-            
-            # ステップ2: RaceLevel → Time の効果
-            race_time_corr = data['race_level'].corr(-data['time_zscore'])
-            
-            # ステップ3: Time → PlaceRate の効果（RaceLevelを統制）
-            partial_corr = self._calculate_partial_correlation(
-                data['time_zscore'], data['is_placed'], data['race_level']
-            )
-            
-            # 媒介効果の推定
-            indirect_effect = race_time_corr * partial_corr
-            direct_effect_controlled = direct_corr - indirect_effect
-            
-            mediation_results = {
-                'total_effect': direct_corr,
-                'direct_effect': direct_effect_controlled,
-                'indirect_effect': indirect_effect,
-                'mediation_ratio': indirect_effect / direct_corr if direct_corr != 0 else 0
-            }
-            
-            results['mediation_analysis'] = mediation_results
-            
-            # 2. 距離別の効果分析
-            distance_effects = {}
-            distance_categories = ['sprint', 'mile', 'middle', 'long']
-            
-            for category in distance_categories:
-                if category == 'sprint':
-                    mask = data['距離'] <= 1400
-                elif category == 'mile':
-                    mask = (data['距離'] > 1400) & (data['距離'] <= 1800)
-                elif category == 'middle':
-                    mask = (data['距離'] > 1800) & (data['距離'] <= 2400)
-                else:  # long
-                    mask = data['距離'] > 2400
-                
-                if mask.sum() > 10:  # 十分なデータがある場合のみ
-                    subset = data[mask]
-                    corr_level_time = subset['race_level'].corr(-subset['time_zscore'])
-                    corr_time_place = (-subset['time_zscore']).corr(subset['is_placed'])
-                    
-                    distance_effects[category] = {
-                        'sample_size': len(subset),
-                        'race_level_time_correlation': corr_level_time,
-                        'time_place_correlation': corr_time_place
-                    }
-            
-            results['distance_specific_effects'] = distance_effects
-            
-            logger.info("✅ 包括的因果関係分析が完了しました")
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"❌ 包括的因果関係分析中にエラー: {str(e)}")
-            return {}
-
-    def _calculate_partial_correlation(self, x, y, control_var):
-        """偏相関係数の計算"""
-        try:
-            # xとcontrol_varの回帰残差
-            model_x = LinearRegression()
-            model_x.fit(control_var.values.reshape(-1, 1), x)
-            residual_x = x - model_x.predict(control_var.values.reshape(-1, 1))
-            
-            # yとcontrol_varの回帰残差
-            model_y = LinearRegression()
-            model_y.fit(control_var.values.reshape(-1, 1), y)
-            residual_y = y - model_y.predict(control_var.values.reshape(-1, 1))
-            
-            # 残差間の相関係数
-            return pd.Series(residual_x).corr(pd.Series(residual_y))
-            
-        except Exception:
-            return 0.0
 
     def _perform_logistic_regression_analysis(self) -> Dict[str, Any]:
         """ロジスティック回帰分析を実行"""
@@ -977,30 +820,92 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                     logger.error("❌ 年データが見つかりません。時系列分割を実行できません。")
                     raise ValueError("年データが必要です")
             
-            # 🎯 【修正】標準的分割比率（70-15-15）に基づく期間設定
-            all_years = sorted(self.df['年'].unique())
-            logger.info(f"📊 利用可能データ期間: {all_years[0]}年-{all_years[-1]}年（{len(all_years)}年間）")
-            
+            # 【重要修正】期間情報のオーバーライドを確認
+            if hasattr(self, '_override_period_info') and self._override_period_info:
+                period_info = self._override_period_info
+                logger.info(f"📊 期間情報オーバーライド使用: {period_info['period_name']}")
+                logger.info(f"📊 設定期間: {period_info['start_year']}年-{period_info['end_year']}年（{period_info['total_years']}年間）")
+                
+                # 実際のデータの年範囲も表示
+                all_years = sorted(self.df['年'].unique())
+                logger.info(f"📊 実際のデータ期間: {all_years[0]}年-{all_years[-1]}年（{len(all_years)}年間）")
+                
+                # 期間情報をオーバーライド
+                total_years = period_info['total_years']
+            else:
+                # 🎯 【修正】標準的分割比率（70-15-15）に基づく期間設定
+                all_years = sorted(self.df['年'].unique())
+                logger.info(f"📊 利用可能データ期間: {all_years[0]}年-{all_years[-1]}年（{len(all_years)}年間）")
+                total_years = len(all_years)
+                
             # 【修正】期間が短い場合の特別処理
-            total_years = len(all_years)
             if total_years <= 3:
-                logger.warning(f"⚠️ データ期間が短いです（{total_years}年）。期間別分析用の簡易分割を使用します。")
-                # 短期間の場合は2:1:1の比率で分割（最低1年ずつ）
+                logger.warning(f"⚠️ データ期間が短いです（{total_years}年）。時系列順を維持した改良分割を使用します。")
+                
                 if total_years == 1:
-                    # 1年の場合は全データをテストデータとして使用
-                    train_years = []
+                    # 1年の場合：70%訓練、30%検証（テストなし）
+                    total_records = len(self.df)
+                    train_size = int(total_records * 0.7)
+                    
+                    # 時系列順でソート
+                    sorted_df = self.df.sort_values('年月日' if '年月日' in self.df.columns else '年')
+                    train_data = sorted_df.iloc[:train_size].copy()
+                    val_data = sorted_df.iloc[train_size:].copy()
+                    test_data = pd.DataFrame()  # 空のデータフレーム
+                    
+                    train_years = all_years
                     val_years = []
-                    test_years = all_years
+                    test_years = []
+                    
                 elif total_years == 2:
-                    # 2年の場合は1:0:1で分割
+                    # 2年の場合：1年目訓練、2年目を70%検証・30%テストに分割
                     train_years = all_years[:1]
-                    val_years = []
-                    test_years = all_years[1:]
+                    
+                    # 2年目のデータを70%検証、30%テストに分割
+                    year2_data = self.df[self.df['年'] == all_years[1]]
+                    val_size = int(len(year2_data) * 0.7)
+                    
+                    if '年月日' in year2_data.columns:
+                        year2_sorted = year2_data.sort_values('年月日')
+                    else:
+                        year2_sorted = year2_data
+                    
+                    val_data_year2 = year2_sorted.iloc[:val_size]
+                    test_data_year2 = year2_sorted.iloc[val_size:]
+                    
+                    train_data = self.df[self.df['年'].isin(train_years)].copy()
+                    val_data = val_data_year2.copy()
+                    test_data = test_data_year2.copy()
+                    
+                    val_years = [all_years[1]]
+                    test_years = [all_years[1]]
+                    
                 else:  # total_years == 3
-                    # 3年の場合は1:1:1で分割
-                    train_years = all_years[:1]
-                    val_years = all_years[1:2]
-                    test_years = all_years[2:]
+                    # 3年の場合：時系列順を維持した分割
+                    # 1年目を訓練、2年目を検証、3年目をテストに使用
+                    train_years = all_years[:1]   # 1年目（最古年）
+                    val_years = all_years[1:2]    # 2年目（中間年）
+                    test_years = all_years[2:]    # 3年目（最新年）
+                    
+                    train_data = self.df[self.df['年'].isin(train_years)].copy()
+                    val_data = self.df[self.df['年'].isin(val_years)].copy()
+                    test_data = self.df[self.df['年'].isin(test_years)].copy()
+                    
+                    logger.info("🔄 3年データ: 時系列順分割を適用（1年目→2年目→3年目）")
+                    
+                    # データ量チェック：各期間に最低限のデータがあるか確認
+                    if len(train_data) < 100 or len(val_data) < 50:
+                        logger.warning("⚠️ 各期間のデータ量が不足しています。2期間分割に変更します。")
+                        # 1-2年目を訓練、3年目をテストに使用
+                        train_years = all_years[:2]   # 1-2年目
+                        val_years = []               # 検証なし
+                        test_years = all_years[2:]   # 3年目
+                        
+                        train_data = self.df[self.df['年'].isin(train_years)].copy()
+                        val_data = pd.DataFrame()    # 空のデータフレーム
+                        test_data = self.df[self.df['年'].isin(test_years)].copy()
+                        
+                        logger.info("🔄 修正: 2期間分割（1-2年目訓練、3年目テスト）")
             else:
                 # 70-15-15分割の計算
                 train_years_count = max(1, int(total_years * 0.7))  # 最低1年
@@ -1033,16 +938,25 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.info(f"   検証: {val_count:,}件 ({val_count/total_records*100:.1f}%)")
             logger.info(f"   テスト: {test_count:,}件 ({test_count/total_records*100:.1f}%)")
             
-            # 分割品質の検証
+            # 分割品質の検証（期間別分析用の基準）
             train_pct = train_count/total_records*100
             val_pct = val_count/total_records*100
             test_pct = test_count/total_records*100
             
-            if 60 <= train_pct <= 80 and 10 <= val_pct <= 25 and 10 <= test_pct <= 25:
-                logger.info("✅ 標準的な分割比率に適合（訓練60-80%, 検証・テスト各10-25%）")
+            # 期間別分析では異なる基準を適用
+            if total_years <= 3:
+                # 短期間の場合は柔軟な基準
+                if train_pct >= 30 and (val_pct >= 15 or test_pct >= 15):
+                    logger.info(f"✅ 短期間分析に適した分割比率（訓練{train_pct:.1f}%, 検証{val_pct:.1f}%, テスト{test_pct:.1f}%）")
+                else:
+                    logger.info(f"📊 短期間分析用分割比率: 訓練{train_pct:.1f}% 検証{val_pct:.1f}% テスト{test_pct:.1f}%")
             else:
-                logger.warning(f"⚠️ 分割比率が標準から逸脱: 訓練{train_pct:.1f}% 検証{val_pct:.1f}% テスト{test_pct:.1f}%")
-            
+                # 長期間の場合は標準基準
+                if 50 <= train_pct <= 80 and val_pct >= 10 and test_pct >= 10:
+                    logger.info(f"✅ 標準的な分割比率に適合（訓練{train_pct:.1f}%, 検証{val_pct:.1f}%, テスト{test_pct:.1f}%）")
+                else:
+                    logger.warning(f"⚠️ 分割比率が標準から逸脱: 訓練{train_pct:.1f}% 検証{val_pct:.1f}% テスト{test_pct:.1f}%")
+                
             logger.info(f"📊 最終データセット:")
             if train_years:
                 logger.info(f"   訓練期間データ: {len(train_data):,}行 ({train_years[0]}-{train_years[-1]}年)")
@@ -1109,8 +1023,18 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 # テストデータのみで分析
                 test_horse_stats = self._calculate_horse_stats_for_data(test_data)
                 
-                # 簡易重みを使用
-                simple_weights = {'grade_weight': 0.618, 'venue_weight': 0.337, 'distance_weight': 0.045}
+                # 【修正】動的重みを使用
+                try:
+                    weights = self.get_level_weights()
+                    simple_weights = {
+                        'grade_weight': weights['grade_weight'],
+                        'venue_weight': weights['venue_weight'], 
+                        'distance_weight': weights['distance_weight']
+                    }
+                except (ValueError, KeyError) as e:
+                    # フォールバック（均等重み）
+                    logger.warning(f"⚠️ 動的重み取得失敗: {e}. 均等重みを使用")
+                    simple_weights = {'grade_weight': 0.33, 'venue_weight': 0.33, 'distance_weight': 0.34}
                 test_performance = self._evaluate_weights_on_test_data(simple_weights, test_horse_stats)
                 
                 return {
@@ -1235,39 +1159,63 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             return pd.DataFrame()
 
     def _calculate_optimal_weights(self, horse_stats: pd.DataFrame) -> Dict[str, Any]:
-        """レポート記載の実測重み（固定値）を返す - データリーケージ防止"""
+        """訓練期間（2010-2020年）データでの動的重み計算"""
         try:
-            # レポート5.0.3節記載の実測重み（訓練期間: 2010-2020年で算出済み）
-            # データリーケージ防止のため、動的計算は行わず固定値を使用
-            fixed_weights = {
-                'grade_weight': 0.618,   # 61.8% - グレードレベル  
-                'venue_weight': 0.337,   # 33.7% - レース場所レベル
-                'distance_weight': 0.045 # 4.5%  - 距離レベル
-            }
+            # 【修正】訓練期間データ（2010-2020年）を分離して重み計算
+            train_data = self.df[(self.df['年'] >= 2010) & (self.df['年'] <= 2020)].copy()
             
-            logger.info("📊 レポート記載の実測重み（固定値）を適用:")
-            logger.info(f"   グレード: {fixed_weights['grade_weight']:.3f} (61.8%)")
-            logger.info(f"   場所: {fixed_weights['venue_weight']:.3f} (33.7%)")  
-            logger.info(f"   距離: {fixed_weights['distance_weight']:.3f} (4.5%)")
-            logger.info("✅ データリーケージ防止: 訓練期間算出済み重みを全期間で固定使用")
+            if len(train_data) == 0:
+                logger.warning("⚠️ 訓練期間（2010-2020年）データがありません。全データで計算します。")
+                train_data = self.df.copy()
             
-            if len(horse_stats) == 0:
-                logger.warning("⚠️ 統計データが空ですが、固定重みを返します")
-                return fixed_weights
+            logger.info(f"📊 訓練期間（2010-2020年）データでの動的重み計算:")
+            logger.info(f"   対象データ: {len(train_data):,}行")
+            logger.info(f"   対象期間: {train_data['年'].min()}-{train_data['年'].max()}年")
             
-            # 固定重みに追加情報を付与
-            fixed_weights['calculation_method'] = 'fixed_report_values'
-            fixed_weights['train_r2'] = 0.124  # レポート記載の訓練期間R²
-            fixed_weights['train_correlation'] = 0.352  # レポート記載の訓練期間相関
+            # 訓練期間データで動的重み計算を実行
+            training_weights = self.calculate_dynamic_weights(train_data)
             
-            return fixed_weights
+            # 訓練期間での統計を計算
+            train_horse_stats = self._calculate_horse_stats_for_data(train_data)
+            
+            if len(train_horse_stats) == 0:
+                logger.warning("⚠️ 訓練期間の馬統計データが空です")
+                return training_weights
+            
+            # 訓練期間での性能を評価
+            target_col = 'place_rate'
+            if target_col in train_horse_stats.columns and '平均レベル' in train_horse_stats.columns:
+                grade_corr = train_horse_stats['平均レベル'].corr(train_horse_stats[target_col])
+                train_r2 = grade_corr ** 2
+                
+                training_weights['train_r2'] = train_r2
+                training_weights['train_correlation'] = grade_corr
+                training_weights['calculation_method'] = 'dynamic_training_period'
+            else:
+                logger.warning(f"⚠️ 必要なカラムが不足: target_col={target_col in train_horse_stats.columns if 'train_horse_stats' in locals() else False}, 平均レベル={'平均レベル' in train_horse_stats.columns if 'train_horse_stats' in locals() else False}")
+                logger.info(f"📊 利用可能なカラム: {list(train_horse_stats.columns) if 'train_horse_stats' in locals() else 'データなし'}")
+                # フォールバック重みを使用
+                training_weights['calculation_method'] = 'fallback_fixed_weights'
+                
+                logger.info(f"📊 訓練期間（2010-2020年）重み算出結果:")
+                logger.info(f"   グレード: {training_weights.get('grade_weight', 0):.3f} ({training_weights.get('grade_weight', 0)*100:.1f}%)")
+                logger.info(f"   場所: {training_weights.get('venue_weight', 0):.3f} ({training_weights.get('venue_weight', 0)*100:.1f}%)")  
+                logger.info(f"   距離: {training_weights.get('distance_weight', 0):.3f} ({training_weights.get('distance_weight', 0)*100:.1f}%)")
+                if 'train_r2' in locals():
+                    logger.info(f"   📊 訓練期間R²: {train_r2:.3f}")
+                if 'grade_corr' in locals():
+                    logger.info(f"   📊 訓練期間相関: {grade_corr:.3f}")
+                logger.info("✅ データリーケージ防止: 訓練期間のみで重み算出")
+            
+            return training_weights
             
         except Exception as e:
             logger.error(f"❌ 重み算出エラー: {str(e)}")
             logger.error(f"   詳細: {str(e)}", exc_info=True)
             logger.error("🚫 重大エラー: 重み算出が完全に失敗しました")
             logger.error("📊 緊急対応: レポート記載の固定重みで継続します")
-            return {'grade_weight': 0.618, 'venue_weight': 0.337, 'distance_weight': 0.045, 'emergency_mode': True}
+            # 緊急時も均等配分で対応
+            return {'grade_weight': 0.33, 'venue_weight': 0.33, 'distance_weight': 0.34, 'emergency_mode': True}
 
     def _evaluate_weights_on_test_data(self, weights: Dict[str, Any], test_horse_stats: pd.DataFrame) -> Dict[str, Any]:
         """検証データで重みの性能を評価（実データに基づく計算）"""
@@ -1541,13 +1489,6 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             # 【緊急修正】ハードコードされた比較を削除し、実測値のみを報告
             logger.info("✅ ハードコードされた偽装値を排除し、真正な分析結果を採用")
             
-            # RunningTime分析の実行（有効な場合のみ）
-            if self.enable_time_analysis:
-                logger.info("⏰ RunningTime分析を実行中...")
-                time_analysis_results = self.analyze_time_causality()
-                if time_analysis_results:
-                    results['time_analysis'] = time_analysis_results
-                    logger.info("✅ RunningTime分析が完了しました")
             
             # 層別分析の実行（有効な場合のみ）
             if self.enable_stratified_analysis:
@@ -1809,10 +1750,6 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             self.plotter.plot_race_grade_distance_boxplot(self.df)
             logger.info("✅ 箱ひげ図分析が完了しました")
             
-            # RunningTime分析の可視化
-            if 'time_analysis' in self.stats:
-                self._visualize_time_analysis()
-                logger.info("✅ RunningTime分析の可視化が完了しました")
             
             # 因果関係分析の可視化
             # if 'causal_analysis' in self.stats:
@@ -2133,9 +2070,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             import numpy as np
             import matplotlib.font_manager as fm
             
-            # 日本語フォントの再設定（確実に適用するため）
-            if platform.system() == 'Windows':
-                plt.rcParams['font.family'] = ['Yu Gothic', 'Meiryo', 'MS Gothic', 'sans-serif']
+            # 統一フォント設定を適用
+            from horse_racing.utils.font_config import apply_plot_style
+            apply_plot_style()
             
             # figureサイズを調整し、右側に統計情報用の余白を確保
             fig, ax = plt.subplots(figsize=(14, 8))
@@ -2265,7 +2202,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             return pd.Series([5.0] * len(df), index=df.index)
 
         # グレードカラムの特定
-        grade_col = next((c for c in ['グレード', 'grade', 'レースグレード'] if c in df.columns), None)
+        grade_col = next((c for c in ['グレード_x', 'グレード_y', 'グレード', 'grade', 'レースグレード'] if c in df.columns), None)
         if grade_col is None:
             logger.warning("⚠️ グレードカラムが見つかりません。grade_levelをデフォルト値で設定")
             return pd.Series([5.0] * len(df), index=df.index)
@@ -3066,6 +3003,11 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         for feature in optional_features:
             if feature in self.df.columns:
                 agg_dict[feature] = ["max", "mean"]
+            else:
+                # 特徴量が存在しない場合は0で補完（実際の計算は上位で行われる）
+                logger.warning(f"⚠️ {feature}カラムが存在しません。上位で実際のデータから計算されるべきです。")
+                self.df[feature] = 0.0
+                agg_dict[feature] = ["max", "mean"]
         
         # race_levelには既に複勝結果が組み込まれているため、追加の特徴量は不要
         
@@ -3075,27 +3017,59 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         
         horse_stats = self.df.groupby("馬名").agg(agg_dict).reset_index()
 
-        # カラム名の動的整理
-        new_columns = ["馬名", "最高レベル", "平均レベル"]
+        # MultiIndexカラムの平坦化
+        if isinstance(horse_stats.columns, pd.MultiIndex):
+            # MultiIndexカラムを平坦化
+            flat_columns = []
+            for col in horse_stats.columns:
+                if isinstance(col, tuple):
+                    if col[1] == '':  # 馬名カラム
+                        flat_columns.append(col[0])
+                    else:
+                        flat_columns.append(f"{col[0]}_{col[1]}")
+                else:
+                    flat_columns.append(col)
+            horse_stats.columns = flat_columns
+            logger.info(f"📊 MultiIndexカラムを平坦化: {flat_columns}")
         
-        # 存在する特徴量に応じてカラム名を追加
+        # カラム名の標準化マッピング
+        column_mapping = {
+            'race_level_max': '最高レベル',
+            'race_level_mean': '平均レベル',
+            'is_win_sum': '勝利数',
+            'is_placed_sum': '複勝数',
+            '着順_count': '出走回数'
+        }
+        
+        # 特徴量カラムのマッピングを追加
         for feature in optional_features:
             if feature in self.df.columns:
                 if feature == "venue_level":
-                    new_columns.extend(["最高場所レベル", "平均場所レベル"])
+                    column_mapping[f'{feature}_max'] = '最高場所レベル'
+                    column_mapping[f'{feature}_mean'] = '平均場所レベル'
                 elif feature == "distance_level":
-                    new_columns.extend(["最高距離レベル", "平均距離レベル"])
+                    column_mapping[f'{feature}_max'] = '最高距離レベル'
+                    column_mapping[f'{feature}_mean'] = '平均距離レベル'
                 elif feature == "prize_level":
-                    new_columns.extend(["最高賞金レベル", "平均賞金レベル"])
+                    column_mapping[f'{feature}_max'] = '最高賞金レベル'
+                    column_mapping[f'{feature}_mean'] = '平均賞金レベル'
                 elif feature == "grade_level":
-                    new_columns.extend(["最高グレードレベル", "平均グレードレベル"])
+                    column_mapping[f'{feature}_max'] = '最高グレードレベル'
+                    column_mapping[f'{feature}_mean'] = '平均グレードレベル'
         
-        new_columns.extend(["勝利数", "複勝数", "出走回数"])
+        # カラム名を変更
+        horse_stats = horse_stats.rename(columns=column_mapping)
         
-        if self.class_column and self.class_column in self.df.columns:
-            new_columns.append("主戦クラス")
+        # 必要なカラムが存在するかチェック
+        required_cols = ['馬名', '平均レベル', '出走回数']
+        missing_cols = [col for col in required_cols if col not in horse_stats.columns]
+        if missing_cols:
+            logger.error(f"❌ 必要なカラムが不足: {missing_cols}")
+            logger.info(f"📊 利用可能なカラム: {list(horse_stats.columns)}")
+        else:
+            logger.info(f"✅ 必要なカラムが正常に作成されました: {required_cols}")
         
-        horse_stats.columns = new_columns
+        logger.info(f"📊 最終カラム名: {list(horse_stats.columns)}")
         
         # レース回数がmin_races回以上の馬のみをフィルタリング
         min_races = self.config.min_races if hasattr(self.config, 'min_races') else 3
@@ -3265,346 +3239,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             "r2_place": r2_place_max
         } 
 
-    def _interpret_h1_results(self, correlation: float, p_value: float, r2: float) -> str:
-        """仮説H1の結果解釈"""
-        significance = "統計的に有意" if p_value < 0.05 else "統計的に非有意"
-        strength = "強い" if abs(correlation) > 0.5 else "中程度" if abs(correlation) > 0.3 else "弱い"
-        direction = "正の" if correlation > 0 else "負の"
-        
-        return f"レースレベルと走破タイムには{strength}{direction}相関があり、{significance}です（r={correlation:.3f}, R²={r2:.3f}）。"
 
-    def _interpret_h4_results(self, correlation: float, p_value: float, odds_ratio: float) -> str:
-        """仮説H4の結果解釈"""
-        significance = "統計的に有意" if p_value < 0.05 else "統計的に非有意"
-        strength = "強い" if abs(correlation) > 0.5 else "中程度" if abs(correlation) > 0.3 else "弱い"
-        
-        if odds_ratio > 1:
-            effect = f"速いタイムは複勝率を{odds_ratio:.2f}倍高める"
-        else:
-            effect = f"速いタイムは複勝率を{1/odds_ratio:.2f}分の1に下げる"
-        
-        return f"走破タイムと複勝率には{strength}相関があり、{significance}です（r={correlation:.3f}）。{effect}効果があります。"
 
-    def _generate_time_analysis_report(self, results: Dict[str, Any], output_dir: Path) -> None:
-        """RunningTime分析レポートの生成"""
-        try:
-            logger.info("📝 RunningTime分析レポートを生成中...")
-            
-            report_path = output_dir / 'running_time_analysis_report.md'
-            
-            with open(report_path, 'w', encoding='utf-8') as f:
-                f.write("# 走破タイム因果関係分析レポート\n\n")
-                f.write(f"生成日時: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-                
-                # 仮説H1の結果
-                if 'hypothesis_h1' in results:
-                    h1 = results['hypothesis_h1']
-                    f.write("## 🧪 仮説H1検証: RaceLevel → RunningTime\n\n")
-                    f.write("### 分析結果\n")
-                    f.write(f"- **相関係数**: {h1.get('correlation', 0):.3f}\n")
-                    f.write(f"- **決定係数 (R²)**: {h1.get('r2_score', 0):.3f}\n")
-                    f.write(f"- **p値**: {h1.get('p_value', 1):.6f}\n")
-                    f.write(f"- **統計的有意性**: {'有意' if h1.get('is_significant', False) else '非有意'}\n")
-                    f.write(f"- **サンプルサイズ**: {h1.get('sample_size', 0):,}件\n")
-                    f.write(f"- **効果の方向**: {h1.get('effect_direction', '不明')}\n\n")
-                    f.write("### 解釈\n")
-                    f.write(f"{h1.get('interpretation', '解釈情報なし')}\n\n")
-                
-                # 仮説H4の結果
-                if 'hypothesis_h4' in results:
-                    h4 = results['hypothesis_h4']
-                    f.write("## 🧪 仮説H4検証: RunningTime → PlaceRate\n\n")
-                    f.write("### 分析結果\n")
-                    f.write(f"- **相関係数**: {h4.get('correlation', 0):.3f}\n")
-                    f.write(f"- **予測精度**: {h4.get('accuracy', 0):.3f}\n")
-                    f.write(f"- **p値**: {h4.get('p_value', 1):.6f}\n")
-                    f.write(f"- **統計的有意性**: {'有意' if h4.get('is_significant', False) else '非有意'}\n")
-                    f.write(f"- **サンプルサイズ**: {h4.get('sample_size', 0):,}件\n")
-                    if 'odds_ratios' in h4 and len(h4['odds_ratios']) > 0:
-                        f.write(f"- **タイムのオッズ比**: {h4['odds_ratios'][0]:.3f}\n")
-                    f.write("\n### 解釈\n")
-                    f.write(f"{h4.get('interpretation', '解釈情報なし')}\n\n")
-                
-                # 包括的分析の結果
-                if 'comprehensive_analysis' in results:
-                    comp = results['comprehensive_analysis']
-                    f.write("## 📊 包括的因果関係分析\n\n")
-                    
-                    # 媒介効果分析
-                    if 'mediation_analysis' in comp:
-                        med = comp['mediation_analysis']
-                        f.write("### 媒介効果分析 (RaceLevel → Time → PlaceRate)\n")
-                        f.write(f"- **総効果**: {med.get('total_effect', 0):.3f}\n")
-                        f.write(f"- **直接効果**: {med.get('direct_effect', 0):.3f}\n")
-                        f.write(f"- **間接効果**: {med.get('indirect_effect', 0):.3f}\n")
-                        f.write(f"- **媒介比率**: {med.get('mediation_ratio', 0):.3f}\n\n")
-                    
-                    # 距離別効果分析
-                    if 'distance_specific_effects' in comp:
-                        dist_effects = comp['distance_specific_effects']
-                        f.write("### 距離別効果分析\n\n")
-                        f.write("| 距離カテゴリ | サンプル数 | RaceLevel→Time相関 | Time→PlaceRate相関 |\n")
-                        f.write("|------------|-----------|-------------------|------------------|\n")
-                        
-                        for category, stats in dist_effects.items():
-                            sample_size = stats.get('sample_size', 0)
-                            race_time_corr = stats.get('race_level_time_correlation', 0)
-                            time_place_corr = stats.get('time_place_correlation', 0)
-                            f.write(f"| {category} | {sample_size:,} | {race_time_corr:.3f} | {time_place_corr:.3f} |\n")
-                        f.write("\n")
-                
-                # 論文仮説との対応
-                f.write("## 📋 論文仮説との対応状況\n\n")
-                f.write("| 仮説 | 検証状況 | 結果 |\n")
-                f.write("|------|----------|------|\n")
-                
-                h1_status = "✅ 検証済み" if 'hypothesis_h1' in results else "❌ 未検証"
-                h1_result = "有意" if results.get('hypothesis_h1', {}).get('is_significant', False) else "非有意"
-                f.write(f"| H1: RaceLevel → RunningTime | {h1_status} | {h1_result} |\n")
-                
-                h4_status = "✅ 検証済み" if 'hypothesis_h4' in results else "❌ 未検証"
-                h4_result = "有意" if results.get('hypothesis_h4', {}).get('is_significant', False) else "非有意"
-                f.write(f"| H4: RunningTime → PlaceRate | {h4_status} | {h4_result} |\n")
-                
-                f.write("| H2: RaceLevel → HorseAbility → RunningTime | ❌ 未実装 | - |\n")
-                f.write("| H3: TrackBias × HorseAbility → RunningTime | ❌ 未実装 | - |\n")
-                f.write("| H5: RaceLevel → RunningTime → PlaceRate | 🔄 部分実装 | 媒介効果分析済み |\n\n")
-                
-                # 今後の改善点
-                f.write("## 🚀 今後の改善点\n\n")
-                f.write("1. **馬能力指標の実装**: IDM・スピード指数・上がり指数の統合\n")
-                f.write("2. **トラックバイアス詳細化**: 脚質・枠順・距離別バイアスの実装\n")
-                f.write("3. **仮説H2, H3の完全検証**: 媒介分析と交互作用分析の実装\n")
-                f.write("4. **機械学習手法の適用**: Random Forest, XGBoostによる予測精度向上\n")
-                f.write("5. **高度因果推論の実装**: 傾向スコアマッチング、IPWの適用\n\n")
-                
-                f.write("## 💡 結論\n\n")
-                f.write("RunningTime分析により、論文で提案された因果関係の一部が実証されました。\n")
-                f.write("レースレベルと走破タイム、走破タイムと複勝率の関係について、統計的に有意な結果が得られています。\n")
-                f.write("今後、残りの仮説検証と高度な因果推論手法の実装により、より完全な因果モデルの構築が期待されます。\n")
-            
-            logger.info(f"📝 RunningTime分析レポート生成完了: {report_path}")
-            
-        except Exception as e:
-            logger.error(f"❌ レポート生成中にエラー: {str(e)}")
-
-    def _visualize_time_analysis(self) -> None:
-        """RunningTime分析の可視化"""
-        try:
-            logger.info("📊 RunningTime分析の可視化を開始...")
-            
-            output_dir = Path(self.config.output_dir)
-            time_viz_dir = output_dir / 'time_analysis'
-            time_viz_dir.mkdir(exist_ok=True)
-            
-            time_results = self.stats['time_analysis']
-            
-            # 1. RaceLevel vs RunningTime の散布図（仮説H1）
-            if 'hypothesis_h1' in time_results:
-                self._plot_race_level_time_relationship(time_viz_dir)
-            
-            # 2. RunningTime vs PlaceRate の散布図（仮説H4）
-            if 'hypothesis_h4' in time_results:
-                self._plot_time_place_relationship(time_viz_dir)
-            
-            # 3. 距離別効果の可視化
-            if 'comprehensive_analysis' in time_results:
-                self._plot_distance_specific_effects(time_viz_dir, time_results['comprehensive_analysis'])
-            
-            # 4. 媒介効果の可視化
-            if 'comprehensive_analysis' in time_results and 'mediation_analysis' in time_results['comprehensive_analysis']:
-                self._plot_mediation_effects(time_viz_dir, time_results['comprehensive_analysis']['mediation_analysis'])
-            
-            logger.info("✅ RunningTime分析の可視化が完了しました")
-            
-        except Exception as e:
-            logger.error(f"❌ RunningTime分析可視化中にエラー: {str(e)}")
-
-    def _plot_race_level_time_relationship(self, output_dir: Path) -> None:
-        """RaceLevel vs RunningTime の関係を可視化（仮説H1）"""
-        try:
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
-            
-            # 左側: 散布図
-            data = self.df.dropna(subset=['race_level', 'time_zscore'])
-            
-            ax1.scatter(data['race_level'], -data['time_zscore'], alpha=0.5, s=30)
-            
-            # 回帰直線
-            z = np.polyfit(data['race_level'], -data['time_zscore'], 1)
-            p = np.poly1d(z)
-            ax1.plot(data['race_level'], p(data['race_level']), "r--", alpha=0.8, linewidth=2)
-            
-            correlation = data['race_level'].corr(-data['time_zscore'])
-            ax1.set_title(f'仮説H1: レースレベル vs 走破タイム\n相関係数: {correlation:.3f}')
-            ax1.set_xlabel('レースレベル')
-            ax1.set_ylabel('走破タイム（正規化、速い=高い値）')
-            ax1.grid(True, alpha=0.3)
-            
-            # 右側: レースレベル別箱ひげ図
-            level_categories = pd.cut(data['race_level'], bins=5, labels=['Low', 'Low-Mid', 'Mid', 'Mid-High', 'High'])
-            data_with_cat = data.copy()
-            data_with_cat['level_category'] = level_categories
-            
-            import seaborn as sns
-            sns.boxplot(data=data_with_cat, x='level_category', y='time_zscore', ax=ax2)
-            ax2.set_title('レースレベル別 走破タイム分布')
-            ax2.set_xlabel('レースレベルカテゴリ')
-            ax2.set_ylabel('走破タイム（Z-score）')
-            ax2.grid(True, alpha=0.3)
-            
-            plt.tight_layout()
-            plt.savefig(output_dir / 'h1_race_level_time_relationship.png', dpi=300, bbox_inches='tight')
-            plt.close()
-            
-        except Exception as e:
-            logger.error(f"❌ H1可視化中にエラー: {str(e)}")
-
-    def _plot_time_place_relationship(self, output_dir: Path) -> None:
-        """RunningTime vs PlaceRate の関係を可視化（仮説H4）"""
-        try:
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
-            
-            data = self.df.dropna(subset=['time_zscore', 'is_placed'])
-            
-            # 左側: 散布図（ジッター付き）
-            placed_data = data[data['is_placed'] == 1]
-            not_placed_data = data[data['is_placed'] == 0]
-            
-            ax1.scatter(not_placed_data['time_zscore'], 
-                       np.random.normal(0, 0.05, len(not_placed_data)), 
-                       alpha=0.6, s=20, color='red', label='複勝圏外')
-            ax1.scatter(placed_data['time_zscore'], 
-                       np.random.normal(1, 0.05, len(placed_data)), 
-                       alpha=0.6, s=20, color='blue', label='複勝圏内')
-            
-            correlation = (-data['time_zscore']).corr(data['is_placed'])
-            ax1.set_title(f'仮説H4: 走破タイム vs 複勝率\n相関係数: {correlation:.3f}')
-            ax1.set_xlabel('走破タイム（Z-score、速い=低い値）')
-            ax1.set_ylabel('複勝結果')
-            ax1.set_yticks([0, 1])
-            ax1.set_yticklabels(['圏外', '圏内'])
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
-            
-            # 右側: タイム区間別複勝率
-            time_bins = pd.cut(data['time_zscore'], bins=10)
-            place_rate_by_time = data.groupby(time_bins)['is_placed'].agg(['mean', 'count']).reset_index()
-            
-            # ビンの中央値を計算
-            bin_centers = [interval.mid for interval in place_rate_by_time['time_zscore']]
-            
-            ax2.bar(range(len(bin_centers)), place_rate_by_time['mean'], alpha=0.7)
-            ax2.set_title('タイム区間別 複勝率')
-            ax2.set_xlabel('タイム区間（速い→遅い）')
-            ax2.set_ylabel('複勝率')
-            ax2.set_xticks(range(len(bin_centers)))
-            ax2.set_xticklabels([f'{center:.2f}' for center in bin_centers], rotation=45)
-            ax2.grid(True, alpha=0.3)
-            
-            # サンプル数を表示
-            for i, count in enumerate(place_rate_by_time['count']):
-                ax2.text(i, place_rate_by_time['mean'].iloc[i] + 0.01, f'n={count}', 
-                        ha='center', va='bottom', fontsize=8)
-            
-            plt.tight_layout()
-            plt.savefig(output_dir / 'h4_time_place_relationship.png', dpi=300, bbox_inches='tight')
-            plt.close()
-            
-        except Exception as e:
-            logger.error(f"❌ H4可視化中にエラー: {str(e)}")
-
-    def _plot_distance_specific_effects(self, output_dir: Path, comprehensive_results: Dict[str, Any]) -> None:
-        """距離別効果の可視化"""
-        try:
-            if 'distance_specific_effects' not in comprehensive_results:
-                return
-            
-            distance_effects = comprehensive_results['distance_specific_effects']
-            
-            if not distance_effects:
-                return
-            
-            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
-            
-            categories = list(distance_effects.keys())
-            race_time_corrs = [distance_effects[cat]['race_level_time_correlation'] for cat in categories]
-            time_place_corrs = [distance_effects[cat]['time_place_correlation'] for cat in categories]
-            sample_sizes = [distance_effects[cat]['sample_size'] for cat in categories]
-            
-            x = np.arange(len(categories))
-            
-            # 左側: RaceLevel → Time 相関
-            bars1 = ax1.bar(x, race_time_corrs, alpha=0.7, color='skyblue')
-            ax1.set_title('距離別: レースレベル → 走破タイム 相関')
-            ax1.set_xlabel('距離カテゴリ')
-            ax1.set_ylabel('相関係数')
-            ax1.set_xticks(x)
-            ax1.set_xticklabels(categories)
-            ax1.grid(True, alpha=0.3)
-            
-            # サンプル数を表示
-            for i, (bar, size) in enumerate(zip(bars1, sample_sizes)):
-                ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
-                        f'n={size:,}', ha='center', va='bottom', fontsize=9)
-            
-            # 右側: Time → PlaceRate 相関
-            bars2 = ax2.bar(x, time_place_corrs, alpha=0.7, color='lightcoral')
-            ax2.set_title('距離別: 走破タイム → 複勝率 相関')
-            ax2.set_xlabel('距離カテゴリ')
-            ax2.set_ylabel('相関係数')
-            ax2.set_xticks(x)
-            ax2.set_xticklabels(categories)
-            ax2.grid(True, alpha=0.3)
-            
-            # サンプル数を表示
-            for i, (bar, size) in enumerate(zip(bars2, sample_sizes)):
-                ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, 
-                        f'n={size:,}', ha='center', va='bottom', fontsize=9)
-            
-            plt.tight_layout()
-            plt.savefig(output_dir / 'distance_specific_effects.png', dpi=300, bbox_inches='tight')
-            plt.close()
-            
-        except Exception as e:
-            logger.error(f"❌ 距離別効果可視化中にエラー: {str(e)}")
-
-    def _plot_mediation_effects(self, output_dir: Path, mediation_results: Dict[str, Any]) -> None:
-        """媒介効果の可視化"""
-        try:
-            fig, ax = plt.subplots(1, 1, figsize=(12, 8))
-            
-            effects = ['総効果', '直接効果', '間接効果（媒介）']
-            values = [
-                mediation_results.get('total_effect', 0),
-                mediation_results.get('direct_effect', 0),
-                mediation_results.get('indirect_effect', 0)
-            ]
-            colors = ['blue', 'green', 'orange']
-            
-            bars = ax.bar(effects, values, color=colors, alpha=0.7)
-            
-            ax.set_title('媒介効果分析: RaceLevel → Time → PlaceRate')
-            ax.set_ylabel('効果の大きさ')
-            ax.grid(True, alpha=0.3)
-            
-            # 値をバーの上に表示
-            for bar, value in zip(bars, values):
-                ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005, 
-                       f'{value:.3f}', ha='center', va='bottom', fontweight='bold')
-            
-            # 媒介比率を表示
-            mediation_ratio = mediation_results.get('mediation_ratio', 0)
-            ax.text(0.02, 0.98, f'媒介比率: {mediation_ratio:.3f}\n（間接効果/総効果）', 
-                   transform=ax.transAxes, verticalalignment='top',
-                   bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
-            
-            plt.tight_layout()
-            plt.savefig(output_dir / 'mediation_effects.png', dpi=300, bbox_inches='tight')
-            plt.close()
-            
-        except Exception as e:
-            logger.error(f"❌ 媒介効果可視化中にエラー: {str(e)}") 
     
     def _create_weighting_comparison_plots(self, methods_results: Dict[str, Dict]) -> None:
         """重み付け手法比較の散布図・回帰直線図を作成"""

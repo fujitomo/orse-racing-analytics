@@ -18,9 +18,11 @@ class RacePlotter:
 
     def _setup_style(self) -> None:
         """プロットスタイルの設定"""
-        plt.rcParams['font.family'] = 'MS Gothic'  # Windows用
-        mpl.rcParams['axes.unicode_minus'] = False  # マイナス記号の文字化け防止
-        plt.rcParams['font.size'] = 12
+        from horse_racing.utils.font_config import setup_japanese_fonts, apply_plot_style
+        setup_japanese_fonts(suppress_warnings=True)
+        apply_plot_style(fig_size=(15, 10))
+        
+        # 追加のカスタマイズ
         plt.rcParams['axes.labelsize'] = 14
         plt.rcParams['axes.titlesize'] = 16
 

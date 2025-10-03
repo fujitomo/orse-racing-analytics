@@ -18,10 +18,9 @@ import json
 # ロガーの設定
 logger = logging.getLogger(__name__)
 
-# 日本語フォントの設定
-plt.rcParams['font.family'] = 'MS Gothic'
-mpl.rcParams['axes.unicode_minus'] = False
-plt.rcParams['font.size'] = 12
+# 日本語フォントの設定（統一設定を使用）
+from horse_racing.utils.font_config import setup_japanese_fonts
+setup_japanese_fonts(suppress_warnings=True)
 
 class IndividualElementValidator:
     """
@@ -195,7 +194,7 @@ class IndividualElementValidator:
         
     def _find_grade_column(self, df: pd.DataFrame) -> str:
         """グレードカラムを探索"""
-        grade_candidates = ['グレード_y', 'クラスコード', 'グレード', 'クラス']
+        grade_candidates = ['グレード_x', 'グレード_y', 'クラスコード', 'グレード', 'クラス']
         for col in grade_candidates:
             if col in df.columns and df[col].nunique() > 1:
                 return col
@@ -481,26 +480,103 @@ class IndividualElementValidator:
         
     def _calculate_weights(self, validation_results: Dict[str, Any]) -> Dict[str, float]:
         """
-        レポート記載の実測重み（固定値）を返す
-        データリーケージ防止のため、訓練期間で算出された重みを固定使用
-        レポート5.0.3節の実測値: グレード61.8%, 場所33.7%, 距離4.5%
+        レポート5.1.3節記載の動的重み計算（訓練期間: 2010-2020年）
+        w_i = r_i² / (r_grade² + r_venue² + r_distance²)
         """
-        logger.info("⚖️ レポート記載の実測重み（固定値）を適用中...")
+        logger.info("⚖️ レポート5.1.3節準拠の動的重み計算中...")
         
-        # レポート5.0.3節記載の実測重み（訓練期間: 2010-2020年で算出済み）
-        weights = {
-            'grade_weight': 0.618,   # 61.8% - グレードレベル
-            'venue_weight': 0.337,   # 33.7% - レース場所レベル
-            'distance_weight': 0.045 # 4.5%  - 距離レベル
-        }
-        
-        logger.info(f"📊 適用された固定重み（レポート実測値）:")
-        logger.info(f"   グレード: {weights['grade_weight']:.3f} (61.8%)")
-        logger.info(f"   競馬場: {weights['venue_weight']:.3f} (33.7%)")
-        logger.info(f"   距離: {weights['distance_weight']:.3f} (4.5%)")
-        logger.info("✅ データリーケージ防止: 訓練期間算出済み重みを固定使用")
-        
-        return weights
+        try:
+            # 訓練期間（2010-2020年）のデータを分離
+            if hasattr(self, 'df') and self.df is not None:
+                train_data = self.df[(self.df['年'] >= 2010) & (self.df['年'] <= 2020)].copy()
+                
+                if len(train_data) == 0:
+                    logger.warning("⚠️ 訓練期間（2010-2020年）データがありません。全データで計算します。")
+                    train_data = self.df.copy()
+                
+                logger.info(f"📊 訓練期間（2010-2020年）データでの動的重み計算:")
+                logger.info(f"   対象データ: {len(train_data):,}行")
+                logger.info(f"   対象期間: {train_data['年'].min()}-{train_data['年'].max()}年")
+                
+                # レポート5.1.3節の方法で相関分析
+                target_col = 'horse_place_rate'
+                if target_col not in train_data.columns:
+                    target_col = '複勝率'  # 代替列名
+                
+                if target_col in train_data.columns:
+                    # 各要素の相関計算
+                    grade_corr = abs(train_data.get('grade_level', train_data.get('グレードレベル', pd.Series([0]))).corr(train_data[target_col]))
+                    venue_corr = abs(train_data.get('venue_level', train_data.get('場所レベル', pd.Series([0]))).corr(train_data[target_col]))
+                    distance_corr = abs(train_data.get('distance_level', train_data.get('距離レベル', pd.Series([0]))).corr(train_data[target_col]))
+                    
+                    # NaN処理
+                    grade_corr = grade_corr if not pd.isna(grade_corr) else 0.0
+                    venue_corr = venue_corr if not pd.isna(venue_corr) else 0.0
+                    distance_corr = distance_corr if not pd.isna(distance_corr) else 0.0
+                    
+                    # 寄与度計算（相関の2乗）
+                    grade_contribution = grade_corr ** 2
+                    venue_contribution = venue_corr ** 2
+                    distance_contribution = distance_corr ** 2
+                    total_contribution = grade_contribution + venue_contribution + distance_contribution
+                    
+                    logger.info(f"🔍 レポート5.1.3節の相関分析結果:")
+                    logger.info(f"   グレード相関: r = {grade_corr:.3f}, r² = {grade_contribution:.3f}")
+                    logger.info(f"   場所相関: r = {venue_corr:.3f}, r² = {venue_contribution:.3f}")
+                    logger.info(f"   距離相関: r = {distance_corr:.3f}, r² = {distance_contribution:.3f}")
+                    logger.info(f"   総寄与度: {total_contribution:.3f}")
+                    
+                    # 重み計算（レポート5.1.3節の式）
+                    if total_contribution > 0:
+                        grade_weight = grade_contribution / total_contribution
+                        venue_weight = venue_contribution / total_contribution
+                        distance_weight = distance_contribution / total_contribution
+                        
+                        logger.info(f"📊 訓練期間（2010-2020年）動的重み算出結果:")
+                        logger.info(f"   グレード: {grade_weight:.3f} ({grade_weight*100:.1f}%)")
+                        logger.info(f"   場所: {venue_weight:.3f} ({venue_weight*100:.1f}%)")
+                        logger.info(f"   距離: {distance_weight:.3f} ({distance_weight*100:.1f}%)")
+                        logger.info("✅ レポート5.1.3節準拠: w_i = r_i² / Σr_i²")
+                        
+                        # 📝 詳細な重み情報をログに出力
+                        logger.info("📊 ========== 個別検証で動的重み計算完了 ==========")
+                        logger.info("⚖️ 算出された重み配分:")
+                        logger.info(f"   📊 グレード重み: {grade_weight:.4f} ({grade_weight*100:.2f}%)")
+                        logger.info(f"   📊 場所重み: {venue_weight:.4f} ({venue_weight*100:.2f}%)")
+                        logger.info(f"   📊 距離重み: {distance_weight:.4f} ({distance_weight*100:.2f}%)")
+                        logger.info("📊 REQI計算式:")
+                        logger.info(f"   race_level = {grade_weight:.4f} × grade_level + {venue_weight:.4f} × venue_level + {distance_weight:.4f} × distance_level")
+                        logger.info("=" * 60)
+                        
+                        return {
+                            'grade_weight': grade_weight,
+                            'venue_weight': venue_weight, 
+                            'distance_weight': distance_weight
+                        }
+            
+            # フォールバック: レポート記載の参考値
+            logger.warning("⚠️ 動的計算失敗。レポート記載の参考値を使用します。")
+            weights = {
+                'grade_weight': 0.636,   # 63.6% - レポート5.1.3節記載値
+                'venue_weight': 0.323,   # 32.3% - レポート5.1.3節記載値
+                'distance_weight': 0.041 # 4.1%  - レポート5.1.3節記載値
+            }
+            
+            logger.info(f"📊 適用されたフォールバック重み（レポート5.1.3節参考値）:")
+            logger.info(f"   グレード: {weights['grade_weight']:.3f} (63.6%)")
+            logger.info(f"   場所: {weights['venue_weight']:.3f} (32.3%)")
+            logger.info(f"   距離: {weights['distance_weight']:.3f} (4.1%)")
+            
+            return weights
+            
+        except Exception as e:
+            logger.error(f"❌ 動的重み計算エラー: {str(e)}")
+            # 最終フォールバック
+            return {
+                'grade_weight': 0.33,
+                'venue_weight': 0.33,
+                'distance_weight': 0.34
+            }
         
     def create_scatter_plots(self, horse_stats: pd.DataFrame, results: Dict[str, Any]) -> None:
         """
