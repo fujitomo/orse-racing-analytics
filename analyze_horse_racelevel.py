@@ -1878,6 +1878,14 @@ def analyze_by_periods_optimized(analyzer, periods, base_output_dir):
     
     logger.info("🚀 最適化版期間別分析を開始...")
     
+    # 【重要】グローバル重み設定完了で設定した重みに統一
+    logger.info("🎯 期間別分析用の統一重みを確認中...")
+    if WeightManager.is_initialized():
+        global_weights = WeightManager.get_weights()
+        logger.info(f"✅ グローバル重み設定完了で設定された重みを使用: {global_weights}")
+    else:
+        logger.warning("⚠️ グローバル重みが未初期化です。最初の期間で重みを計算します")
+    
     # 1. グローバル変数から計算済みデータを取得（重複処理完全回避）
     import sys
     main_module = sys.modules.get('__main__')
@@ -1975,6 +1983,17 @@ def analyze_by_periods_optimized(analyzer, periods, base_output_dir):
             if len(period_df) < analyzer.config.min_races:
                 logger.warning(f"期間 {period_name}: データ不足のためスキップ ({len(period_df)}行)")
                 continue
+            
+            # 【重要】グローバル重み設定完了で設定した重みに統一（再計算を防ぐ）
+            if WeightManager.is_initialized():
+                logger.info(f"♻️ 期間 {period_name} ではグローバル重み設定完了で設定された重みを再利用します")
+                # 重みの再計算を防ぐ
+                WeightManager.prevent_recalculation()
+            else:
+                logger.warning(f"⚠️ 期間 {period_name} でグローバル重みが未初期化です。重みを計算します")
+                # 最初の期間でのみ重みを計算
+                weights = WeightManager.initialize_from_training_data(df_with_features)
+                logger.info(f"✅ 期間 {period_name} で重み設定完了: {weights}")
             
             # 【重要修正】期間別アナライザーを作成し、全データから特定期間を直接設定
             period_config = AnalysisConfig(
@@ -2471,7 +2490,9 @@ def create_simple_visualizations(horse_stats: pd.DataFrame, correlations: Dict[s
         
         plt.tight_layout()
         scatter_plot_path = viz_dir / 'correlation_scatter_plots.png'
-        plt.savefig(scatter_plot_path, dpi=300, bbox_inches='tight')
+        plt.savefig(scatter_plot_path, dpi=300, bbox_inches='tight',
+                   facecolor='white', edgecolor='none',
+                   format='png', pad_inches=0.1)
         plt.close()
         logger.info(f"✅ 相関散布図を保存: {scatter_plot_path}")
         
@@ -2509,7 +2530,9 @@ def create_simple_visualizations(horse_stats: pd.DataFrame, correlations: Dict[s
             
             plt.tight_layout()
             performance_plot_path = viz_dir / 'model_performance_comparison.png'
-            plt.savefig(performance_plot_path, dpi=300, bbox_inches='tight')
+            plt.savefig(performance_plot_path, dpi=300, bbox_inches='tight',
+                       facecolor='white', edgecolor='none',
+                       format='png', pad_inches=0.1)
             plt.close()
             logger.info(f"✅ H2仮説検証チャートを保存: {performance_plot_path}")
         

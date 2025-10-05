@@ -166,7 +166,13 @@ class WeightManager:
         Returns:
             初期化済みかどうか
         """
-        return cls._initialized
+        return cls._initialized and cls._global_weights is not None
+    
+    @classmethod
+    def prevent_recalculation(cls) -> None:
+        """重みの再計算を防ぐ（期間別分析用）"""
+        cls._initialized = True
+        logger.info("🔒 重みの再計算を防止しました")
     
     @classmethod
     def reset(cls):
@@ -647,7 +653,7 @@ class WeightManager:
         Returns:
             デフォルト重み辞書
         """
-        logger.info("📊 循環論理回避版の固定重みを使用します")
+        logger.info("📊 フォールバック重み（固定値）の定義:")
         logger.info("📋 勝率ベース相関による重み（2024年改善版）:")
         logger.info("   🎯 グレード重み: 65.0% (G1-G3勝利の価値)")
         logger.info("   🏇 場所重み: 30.0% (東京・阪神の格式)")

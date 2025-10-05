@@ -663,7 +663,15 @@ class IndividualElementValidator:
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
         
         plt.tight_layout()
-        plt.savefig(self.output_dir / filename, dpi=300, bbox_inches='tight')
+        
+        # 日本語フォント設定を再適用
+        from horse_racing.utils.font_config import setup_japanese_fonts
+        setup_japanese_fonts(suppress_warnings=True)
+        
+        # より強力な保存設定
+        plt.savefig(self.output_dir / filename, dpi=300, bbox_inches='tight',
+                   facecolor='white', edgecolor='none',
+                   format='png', pad_inches=0.1)
         plt.close()
         
     def _create_comprehensive_scatter_plot(self, results: Dict[str, Any]) -> None:
@@ -704,8 +712,15 @@ class IndividualElementValidator:
         
         plt.suptitle('個別要素の有効性検証（相関分析）', fontsize=16, y=1.02)
         plt.tight_layout()
+        
+        # 日本語フォント設定を再適用
+        from horse_racing.utils.font_config import setup_japanese_fonts
+        setup_japanese_fonts(suppress_warnings=True)
+        
+        # より強力な保存設定
         plt.savefig(self.output_dir / 'individual_elements_validation_comprehensive.png', 
-                   dpi=300, bbox_inches='tight')
+                   dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none',
+                   format='png', pad_inches=0.1)
         plt.close()
         
     def save_results(self, results: Dict[str, Any]) -> None:

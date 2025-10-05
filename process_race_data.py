@@ -55,7 +55,7 @@ class DataQualityChecker:
     """
     
     def __init__(self):
-        self.quality_report = {}
+        self.quality_report = {}  # 各処理段階のデータ品質レポートを格納する辞書
         
     def check_data_quality(self, df: pd.DataFrame, stage_name: str) -> Dict[str, Any]:
         """
@@ -72,17 +72,17 @@ class DataQualityChecker:
         start_time = time.time()
         
         report = {
-            'stage': stage_name,
-            'timestamp': datetime.now().isoformat(),
-            'total_rows': len(df),
-            'total_columns': len(df.columns),
-            'memory_usage_mb': df.memory_usage(deep=True).sum() / 1024 / 1024,
-            'missing_values': {},
-            'data_types': {},
-            'duplicates': 0,
-            'outliers': {},
-            'warnings': [],
-            'recommendations': []
+            'stage': stage_name,  # 処理段階名（例：'BAC処理後', '統合後'）
+            'timestamp': datetime.now().isoformat(),  # 品質チェック実行時刻（ISO形式）
+            'total_rows': len(df),  # データ行数（レコード数）
+            'total_columns': len(df.columns),  # データ列数（カラム数）
+            'memory_usage_mb': df.memory_usage(deep=True).sum() / 1024 / 1024,  # メモリ使用量（MB）
+            'missing_values': {},  # 欠損値分析結果（列別の欠損数・割合）
+            'data_types': {},  # データ型情報（列名とデータ型のマッピング）
+            'duplicates': 0,  # 重複行数
+            'outliers': {},  # 外れ値検出結果（列別の外れ値数）
+            'warnings': [],  # 品質警告リスト（異常値、不正データなど）
+            'recommendations': []  # 改善推奨事項リスト
         }
         
         try:
@@ -127,6 +127,7 @@ class DataQualityChecker:
     def _analyze_missing_values(self, df: pd.DataFrame) -> Dict[str, Any]:
         """欠損値の詳細分析"""
         missing_counts = df.isnull().sum()
+        # 欠損値のパーセンテージ
         missing_percentages = (missing_counts / len(df)) * 100
         
         analysis = {
@@ -400,6 +401,16 @@ class MissingValueHandler:
             # グレードはモード補完の対象から除外（推定ロジックに委ねる）
             if column in ['グレード', 'grade', 'レースグレード', 'グレード名']:
                 continue
+            
+            # グレード_yの特別処理（予測マーク付き）
+            if column == 'グレード_y':
+                missing_count = df[column].isnull().sum()
+                if missing_count > 0:
+                    logger.info(f"      • {column}: {missing_count:,}件をmode(特別)で補完（予測マーク付き）")
+                    df[column] = df[column].fillna('特別（予測）')
+                    self.processing_log.append(f"{column}: {missing_count}件をmode(特別)で補完（予測マーク付き）")
+                continue
+            
             missing_count = df[column].isnull().sum()
             missing_rate = missing_count / len(df) if len(df) > 0 else 0
             
@@ -473,24 +484,28 @@ class MissingValueHandler:
             df = self._add_grade_name_column(df, grade_column)
             return df
         
-        logger.info(f"      📊 グレード欠損値: {initial_missing_count:,}件 ({initial_missing_count/initial_rows*100:.1f}%)")
+        logger.info(f"📊 グレード欠損値: {initial_missing_count:,}件 ({initial_missing_count/initial_rows*100:.1f}%)")
         
         # 推定対象データ
         estimation_df = df[grade_missing_mask].copy()
         
-        # 1. 賞金からグレード推定
-        if '本賞金' in df.columns:
+        # 1. 1着賞金(1着算入賞金込み)からグレード推定
+        if '1着賞金(1着算入賞金込み)' in df.columns:
             estimation_df = self._estimate_grade_from_prize(estimation_df, grade_column)
         
-        # 2. レース名からグレード推定（コメントアウト - 欠損値対応を厳密化）
-        # if 'レース名' in df.columns:
-        #     estimation_df = self._estimate_grade_from_race_name(estimation_df, grade_column)
+        # 2. 本賞金からグレード推定（フォールバック）
+        if '本賞金' in df.columns:
+            estimation_df = self._estimate_grade_from_base_prize(estimation_df, grade_column)
         
-        # 3. 出走頭数による補正（コメントアウト - 欠損値対応を厳密化）
+        # 3. レース名からグレード推定（フォールバック）
+        if 'レース名' in df.columns:
+            estimation_df = self._estimate_grade_from_race_name_fallback(estimation_df, grade_column)
+        
+        # 4. 出走頭数による補正（コメントアウト - 欠損値対応を厳密化）
         # if '頭数' in df.columns:
         #     estimation_df = self._adjust_grade_by_field_size(estimation_df, grade_column)
         
-        # 4. 距離による補正（コメントアウト - 欠損値対応を厳密化）
+        # 5. 距離による補正（コメントアウト - 欠損値対応を厳密化）
         # if '距離' in df.columns:
         #     estimation_df = self._adjust_grade_by_distance(estimation_df, grade_column)
         

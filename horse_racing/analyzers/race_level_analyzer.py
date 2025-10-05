@@ -1,4 +1,4 @@
-"""
+﻿"""
 レースレベル分析モジュール
 レースのグレードや賞金額などからレースレベルを分析します。
 """
@@ -71,9 +71,29 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         self._weights_calculated = False  # 重み計算済みフラグ
 
     def get_level_weights(self) -> Dict[str, float]:
-        """重みを取得（未計算の場合は自動計算）"""
+        """重みを取得（グローバル重み設定完了で設定された重みを優先使用）"""
+        # 【重要修正】グローバル重み設定完了で設定された重みを優先使用
+        from horse_racing.core.weight_manager import WeightManager
+        
+        if WeightManager.is_initialized():
+            global_weights = WeightManager.get_weights()
+            logger.info("✅ グローバル重み設定完了で設定された重みを使用します")
+            
+            # グローバル重みをLEVEL_WEIGHTSに設定
+            self.LEVEL_WEIGHTS = {
+                "grade_weight": global_weights.get('grade_weight', 0.65),
+                "venue_weight": global_weights.get('venue_weight', 0.30),
+                "distance_weight": global_weights.get('distance_weight', 0.05),
+                "prize_weight": 0.0,  # 使用しない
+                "field_size_weight": 0.0,  # 使用しない
+                "competition_weight": 0.0,  # 使用しない
+            }
+            self._weights_calculated = True
+            return self.LEVEL_WEIGHTS
+        
+        # フォールバック: 個別計算
         if not self._weights_calculated:
-            logger.warning("⚠️ 重みが未計算です。自動でcalculate_dynamic_weights()を実行します。")
+            logger.warning("⚠️ グローバル重みが未初期化です。個別計算にフォールバックします")
             if hasattr(self, 'df') and self.df is not None:
                 self.calculate_dynamic_weights(self.df)
             else:
@@ -901,14 +921,15 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 # 70-15-15分割の計算
                 train_years_count = max(1, int(total_years * 0.7))  # 最低1年
                 val_years_count = max(1, int(total_years * 0.15))   # 最低1年
-                test_years_count = total_years - train_years_count - val_years_count  # 残り
+                # TODO: テスト期間を追加
+                # test_years_count = total_years - train_years_count - val_years_count  # 残り
                 
                 # 時系列順での分割
                 train_years = all_years[:train_years_count]
                 val_years = all_years[train_years_count:train_years_count + val_years_count]
                 test_years = all_years[train_years_count + val_years_count:]
             
-            logger.info(f"📅 標準的分割比率による期間設定:")
+            logger.info("📅 標準的分割比率による期間設定:")
             logger.info(f"   訓練期間: {train_years} ({len(train_years)}年, 約70%)")
             logger.info(f"   検証期間: {val_years} ({len(val_years)}年, 約15%)")
             logger.info(f"   テスト期間: {test_years} ({len(test_years)}年, 約15%)")
@@ -924,7 +945,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             val_count = len(val_data)
             test_count = len(test_data)
             
-            logger.info(f"📊 分割後データ量:")
+            logger.info("📊 分割後データ量:")
             logger.info(f"   訓練: {train_count:,}件 ({train_count/total_records*100:.1f}%)")
             logger.info(f"   検証: {val_count:,}件 ({val_count/total_records*100:.1f}%)")
             logger.info(f"   テスト: {test_count:,}件 ({test_count/total_records*100:.1f}%)")
@@ -948,7 +969,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 else:
                     logger.warning(f"⚠️ 分割比率が標準から逸脱: 訓練{train_pct:.1f}% 検証{val_pct:.1f}% テスト{test_pct:.1f}%")
             
-            logger.info(f"📊 最終データセット:")
+            logger.info("📊 最終データセット:")
             if train_years:
                 logger.info(f"   訓練期間データ: {len(train_data):,}行 ({train_years[0]}-{train_years[-1]}年)")
             else:
@@ -1042,8 +1063,12 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.info("📊 訓練データで馬ごと統計を計算中...")
             train_horse_stats = self._calculate_horse_stats_for_data(train_data)
             
-            # 2. 訓練データで重みを算出
-            logger.info("⚖️ 訓練データで重みを算出中...")
+            # 2. 訓練データで重みを算出（グローバル重みがある場合は再計算せず適用）
+            from horse_racing.core.weight_manager import WeightManager
+            if WeightManager.is_initialized():
+                logger.info("♻️ グローバル重みを適用します（再計算なし）")
+            else:
+                logger.info("⚖️ 訓練データで重みを算出中...")
             train_weights = self._calculate_optimal_weights(train_horse_stats)
             
             # 3. 検証データで馬ごと統計を計算（未来情報を使わない）
@@ -1155,26 +1180,60 @@ class RaceLevelAnalyzer(BaseAnalyzer):
     def _calculate_optimal_weights(self, horse_stats: pd.DataFrame) -> Dict[str, Any]:
         """訓練期間（2010-2020年）データでの動的重み計算"""
         try:
-            # 【修正】訓練期間データ（2010-2020年）を分離して重み計算
-            train_data = self.df[(self.df['年'] >= 2010) & (self.df['年'] <= 2020)].copy()
+            # 【重要修正】グローバル重み設定完了で設定された重みを使用
+            from horse_racing.core.weight_manager import WeightManager
             
-            if len(train_data) == 0:
-                logger.warning("⚠️ 訓練期間（2010-2020年）データがありません。全データで計算します。")
-                train_data = self.df.copy()
-            
-            logger.info(f"📊 訓練期間（2010-2020年）データでの動的重み計算:")
-            logger.info(f"   対象データ: {len(train_data):,}行")
-            logger.info(f"   対象期間: {train_data['年'].min()}-{train_data['年'].max()}年")
-            
-            # 訓練期間データで動的重み計算を実行
-            training_weights = self.calculate_dynamic_weights(train_data)
-            
-            # 訓練期間での統計を計算
-            train_horse_stats = self._calculate_horse_stats_for_data(train_data)
-            
-            if len(train_horse_stats) == 0:
-                logger.warning("⚠️ 訓練期間の馬統計データが空です")
-                return training_weights
+            if WeightManager.is_initialized():
+                global_weights = WeightManager.get_weights()
+                logger.info("✅ グローバル重み設定完了で設定された重みを使用します")
+                logger.info(f"📊 グローバル重み: {global_weights}")
+                
+                # グローバル重みをLEVEL_WEIGHTSに設定
+                self.LEVEL_WEIGHTS = {
+                    "grade_weight": global_weights.get('grade_weight', 0.65),
+                    "venue_weight": global_weights.get('venue_weight', 0.30),
+                    "distance_weight": global_weights.get('distance_weight', 0.05),
+                    "prize_weight": 0.0,  # 使用しない
+                    "field_size_weight": 0.0,  # 使用しない
+                    "competition_weight": 0.0,  # 使用しない
+                }
+                self._weights_calculated = True
+                
+                # 訓練期間での統計を計算（重み計算はスキップ）
+                train_data = self.df[(self.df['年'] >= 2010) & (self.df['年'] <= 2020)].copy()
+                if len(train_data) == 0:
+                    logger.warning("⚠️ 訓練期間（2010-2020年）データがありません。全データで計算します。")
+                    train_data = self.df.copy()
+                
+                train_horse_stats = self._calculate_horse_stats_for_data(train_data)
+                
+                if len(train_horse_stats) == 0:
+                    logger.warning("⚠️ 訓練期間の馬統計データが空です")
+                    return self.LEVEL_WEIGHTS
+                
+                return self.LEVEL_WEIGHTS
+            else:
+                logger.warning("⚠️ グローバル重みが未初期化です。個別計算にフォールバックします")
+                # フォールバック: 個別計算
+                train_data = self.df[(self.df['年'] >= 2010) & (self.df['年'] <= 2020)].copy()
+                
+                if len(train_data) == 0:
+                    logger.warning("⚠️ 訓練期間（2010-2020年）データがありません。全データで計算します。")
+                    train_data = self.df.copy()
+                
+                logger.info("📊 訓練期間（2010-2020年）データでの動的重み計算:")
+                logger.info(f"   対象データ: {len(train_data):,}行")
+                logger.info(f"   対象期間: {train_data['年'].min()}-{train_data['年'].max()}年")
+                
+                # 訓練期間データで動的重み計算を実行
+                training_weights = self.calculate_dynamic_weights(train_data)
+                
+                # 訓練期間での統計を計算
+                train_horse_stats = self._calculate_horse_stats_for_data(train_data)
+                
+                if len(train_horse_stats) == 0:
+                    logger.warning("⚠️ 訓練期間の馬統計データが空です")
+                    return training_weights
             
             # 訓練期間での性能を評価
             target_col = 'place_rate'
@@ -1191,7 +1250,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 # フォールバック重みを使用
                 training_weights['calculation_method'] = 'fallback_fixed_weights'
                 
-                logger.info(f"📊 訓練期間（2010-2020年）重み算出結果:")
+                logger.info("📊 訓練期間（2010-2020年）重み算出結果:")
                 logger.info(f"   グレード: {training_weights.get('grade_weight', 0):.3f} ({training_weights.get('grade_weight', 0)*100:.1f}%)")
                 logger.info(f"   場所: {training_weights.get('venue_weight', 0):.3f} ({training_weights.get('venue_weight', 0)*100:.1f}%)")  
                 logger.info(f"   距離: {training_weights.get('distance_weight', 0):.3f} ({training_weights.get('distance_weight', 0)*100:.1f}%)")
@@ -1392,10 +1451,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.info("🔍 【修正版】実測値による分析結果:")
             logger.info(f"   検証期間R²: {test_r2:.3f} (実測値)")
             logger.info(f"   検証期間相関: {test_correlation:.3f} (実測値)")
-            
-            # 【緊急修正】ハードコードされた比較を削除し、実測値のみを報告
-            logger.info("✅ ハードコードされた偽装値を排除し、真正な分析結果を採用")
-            
+                       
             
             # 層別分析の実行（有効な場合のみ）
             if self.enable_stratified_analysis:
@@ -1645,7 +1701,10 @@ class RaceLevelAnalyzer(BaseAnalyzer):
 
             # 相関分析の可視化
             try:
-                self.plotter._visualize_correlations(self._calculate_horse_stats(), self.stats['correlation_stats'])
+                if 'correlation_stats' in self.stats:
+                    self.plotter._visualize_correlations(self._calculate_horse_stats(), self.stats['correlation_stats'])
+                else:
+                    logger.info("📊 correlation_statsが見つからないため、相関分析の可視化をスキップします")
             except KeyError as e:
                 logger.warning(f"⚠️ 相関分析の可視化でKeyErrorが発生しました: {e}")
                 logger.info("📊 相関分析の可視化をスキップして続行します")
@@ -1656,9 +1715,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.info("✅ 特徴量散布図の作成が完了しました")
             
             # レース格別・距離別の箱ひげ図分析（論文要求対応）
-            logger.info("📊 レース格別・距離別の箱ひげ図分析を実行中...")
-            self.plotter.plot_race_grade_distance_boxplot(self.df)
-            logger.info("✅ 箱ひげ図分析が完了しました")
+            # logger.info("📊 レース格別・距離別の箱ひげ図分析を実行中...")
+            # self.plotter.plot_race_grade_distance_boxplot(self.df)
+            # logger.info("✅ 箱ひげ図分析が完了しました")
             
             
             # 因果関係分析の可視化
@@ -2022,9 +2081,17 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             # レイアウト調整（統計情報用の余白を確保）
             plt.subplots_adjust(right=0.75)
             
-            # 保存
+            # 保存（日本語フォント設定を確実に適用）
             output_path = self.output_dir / f"{config['filename']}.png"
-            plt.savefig(output_path, dpi=300, bbox_inches='tight')
+            
+            # 日本語フォント設定を再適用
+            from horse_racing.utils.font_config import setup_japanese_fonts
+            setup_japanese_fonts(suppress_warnings=True)
+            
+            # より強力な保存設定
+            plt.savefig(output_path, dpi=300, bbox_inches='tight', 
+                       facecolor='white', edgecolor='none',
+                       format='png', pad_inches=0.1)
             plt.close()
             
             logger.info(f"   💾 散布図を保存: {output_path}")
@@ -2837,7 +2904,13 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 ax.set_title('特徴量間相関行列')
                 
                 plot_path = output_dir / 'multicollinearity_validation.png'
-                plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+                
+                # 日本語フォント設定を再適用
+                from horse_racing.utils.font_config import setup_japanese_fonts
+                setup_japanese_fonts(suppress_warnings=True)
+                
+                plt.savefig(plot_path, dpi=300, bbox_inches='tight', 
+                           facecolor='white', edgecolor='none')
                 plt.close()
                 
                 logger.info(f"📊 可視化保存: {plot_path}")
