@@ -23,13 +23,14 @@ import psutil
 import os
 from functools import wraps
 
+# ログ設定
+logger = logging.getLogger(__name__)
+
 # 統計的妥当性検証フレームワークのインポート
 try:
     from .statistical_validation import OddsAnalysisValidator
 except ImportError:
-    logger.warning("統計的妥当性検証フレームワークが利用できません")
-
-logger = logging.getLogger(__name__)
+    pass
 
 # パフォーマンス監視用のユーティリティ関数
 def log_performance_odds(func_name=None):
@@ -182,7 +183,36 @@ class OddsComparisonAnalyzer:
         # レポート5.1.3節準拠のグローバル重み使用
         from horse_racing.core.weight_manager import get_global_weights, WeightManager
         
-        if WeightManager.is_initialized():
+        # グローバル重みの状態を詳細チェック
+        is_initialized = WeightManager.is_initialized()
+        global_weights = WeightManager._global_weights
+        
+        logger.info("🔍 グローバル重み状態チェック:")
+        logger.info(f"   📊 is_initialized(): {is_initialized}")
+        logger.info(f"   📊 _global_weights存在: {global_weights is not None}")
+        if global_weights:
+            logger.info(f"   📊 グローバル重み内容: {global_weights}")
+        
+        # 【重要修正】グローバル重みが未初期化の場合は強制再初期化
+        if not is_initialized or global_weights is None:
+            logger.warning("⚠️ グローバル重みが未初期化です。強制再初期化を実行...")
+            
+            # 現在のデータでグローバル重みを再初期化
+            try:
+                weights = WeightManager.initialize_from_training_data(df)
+                logger.info(f"✅ グローバル重み再初期化完了: {weights}")
+                
+                # 状態を再チェック
+                is_initialized = WeightManager.is_initialized()
+                global_weights = WeightManager._global_weights
+                logger.info(f"   📊 再初期化後 is_initialized(): {is_initialized}")
+                logger.info(f"   📊 再初期化後 _global_weights存在: {global_weights is not None}")
+                
+            except Exception as e:
+                logger.error(f"❌ グローバル重み再初期化エラー: {e}")
+                logger.warning("📊 個別計算にフォールバックします...")
+        
+        if is_initialized and global_weights is not None:
             WEIGHTS = get_global_weights()
             calculation_details = WeightManager.get_calculation_details()
             
@@ -197,6 +227,7 @@ class OddsComparisonAnalyzer:
         else:
             # フォールバック: 個別計算
             logger.warning("⚠️ グローバル重み未初期化、個別計算を実行")
+            logger.warning(f"   📊 初期化状態: {is_initialized}, 重み存在: {global_weights is not None}")
             WEIGHTS = self._calculate_dynamic_weights_fallback(df)
             
             logger.info("📊 ========== オッズ分析で個別重み計算使用 ==========")
@@ -525,18 +556,55 @@ class OddsComparisonAnalyzer:
         # 複勝フラグ作成
         df['place_flag'] = (df['着順'] <= 3).astype(int)
         
+        # 日付カラムの確認と追加
+        date_cols = []
+        if '年月日' in df.columns:
+            # 年月日カラムのデータ形式を確認
+            sample_dates = df['年月日'].dropna().head(5).tolist()
+            logger.info(f"📅 日付情報を検出: '年月日'カラムを使用")
+            logger.info(f"📅 サンプル日付: {sample_dates}")
+            
+            # 年月日を適切な日付形式に変換
+            try:
+                df['年月日'] = pd.to_datetime(df['年月日'], format='%Y%m%d', errors='coerce')
+                logger.info("📅 年月日を日付型に変換完了")
+            except:
+                try:
+                    df['年月日'] = pd.to_datetime(df['年月日'], errors='coerce')
+                    logger.info("📅 年月日を自動日付型に変換完了")
+                except:
+                    logger.warning("⚠️ 年月日の日付変換に失敗")
+            
+            date_cols.append('年月日')
+        elif 'date' in df.columns:
+            date_cols.append('date')
+            logger.info("📅 日付情報を検出: 'date'カラムを使用")
+        else:
+            logger.warning("⚠️ 日付情報が見つかりません。時系列分割が制限されます")
+        
         # 馬ごとの統計をgroupbyで一括計算
-        horse_stats = df.groupby('馬名').agg({
+        agg_dict = {
             'race_level': ['mean', 'max'],
             'place_flag': 'mean',
             'win_prob': 'mean',
             'place_prob': 'mean',
             '馬名': 'count'  # total_races
-        }).round(6)
+        }
+        
+        # 日付情報がある場合は追加
+        if date_cols:
+            agg_dict[date_cols[0]] = ['min', 'max']
+        
+        horse_stats = df.groupby('馬名').agg(agg_dict).round(6)
         
         # カラム名を平坦化
-        horse_stats.columns = ['avg_race_level', 'max_race_level', 'place_rate', 
-                              'avg_win_prob_from_odds', 'avg_place_prob_from_odds', 'total_races']
+        if date_cols:
+            horse_stats.columns = ['avg_race_level', 'max_race_level', 'place_rate', 
+                                  'avg_win_prob_from_odds', 'avg_place_prob_from_odds', 'total_races',
+                                  'first_race_date', 'last_race_date']
+        else:
+            horse_stats.columns = ['avg_race_level', 'max_race_level', 'place_rate', 
+                                  'avg_win_prob_from_odds', 'avg_place_prob_from_odds', 'total_races']
         
         # 最小レース数でフィルタ
         horse_stats = horse_stats[horse_stats['total_races'] >= self.min_races]
@@ -545,8 +613,20 @@ class OddsComparisonAnalyzer:
         horse_stats = horse_stats.reset_index()
         horse_stats = horse_stats.rename(columns={'馬名': 'horse_name'})
         
-        # 欠損値を0で埋める
-        horse_stats = horse_stats.fillna(0)
+        # 欠損値処理（日付データは除外）
+        if date_cols:
+            # 日付カラム以外を0で埋める
+            numeric_cols = ['avg_race_level', 'max_race_level', 'place_rate', 
+                           'avg_win_prob_from_odds', 'avg_place_prob_from_odds', 'total_races']
+            horse_stats[numeric_cols] = horse_stats[numeric_cols].fillna(0)
+            
+            # 日付データのデバッグ情報
+            logger.info(f"📅 日付データ確認:")
+            logger.info(f"   first_race_date範囲: {horse_stats['first_race_date'].min()} - {horse_stats['first_race_date'].max()}")
+            logger.info(f"   last_race_date範囲: {horse_stats['last_race_date'].min()} - {horse_stats['last_race_date'].max()}")
+        else:
+            # 日付データがない場合は全カラムを0で埋める
+            horse_stats = horse_stats.fillna(0)
         
         logger.info(f"✅ 高速馬統計計算完了: {len(horse_stats):,}頭")
         return horse_stats
@@ -793,29 +873,62 @@ class OddsComparisonAnalyzer:
         if use_temporal_split:
             # 【重大修正】真の時系列分割の実装
             if 'first_race_date' in horse_df.columns and 'last_race_date' in horse_df.columns:
-                # 実際の日付情報を使用した厳密な時系列分割
-                cutoff_date = pd.to_datetime('2021-01-01')
+                # データの実際の期間を確認
+                first_dates = pd.to_datetime(horse_df['first_race_date'])
+                min_date = first_dates.min()
+                max_date = first_dates.max()
+                logger.info(f"📅 馬統計データ期間: {min_date.strftime('%Y-%m-%d')} - {max_date.strftime('%Y-%m-%d')}")
                 
-                # 訓練データ: 2020年以前にキャリアを開始した馬
-                train_mask = pd.to_datetime(horse_df['first_race_date']) < cutoff_date
+                # データ期間に基づいて適切な分割基準を設定
+                if max_date.year >= 2021:
+                    # 2021年以降のデータがある場合
+                    cutoff_date = pd.to_datetime('2021-01-01')
+                    logger.info("📊 2021年基準の時系列分割を使用")
+                elif max_date.year >= 2020:
+                    # 2020年以降のデータがある場合
+                    cutoff_date = pd.to_datetime('2020-01-01')
+                    logger.info("📊 2020年基準の時系列分割を使用")
+                elif max_date.year >= 2019:
+                    # 2019年以降のデータがある場合
+                    cutoff_date = pd.to_datetime('2019-01-01')
+                    logger.info("📊 2019年基準の時系列分割を使用")
+                else:
+                    # 2019年以前のデータのみの場合
+                    cutoff_date = pd.to_datetime('2018-01-01')
+                    logger.info("📊 2018年基準の時系列分割を使用")
+                
+                # 訓練データ: 基準年以前にキャリアを開始した馬
+                train_mask = first_dates < cutoff_date
                 train_df = horse_df[train_mask].copy()
                 
-                # 検証データ: 2021年以降にキャリアを開始した馬
-                test_mask = pd.to_datetime(horse_df['first_race_date']) >= cutoff_date
+                # 検証データ: 基準年以降にキャリアを開始した馬
+                test_mask = first_dates >= cutoff_date
                 test_df = horse_df[test_mask].copy()
                 
-                logger.info("✅ 真の時系列分割（Out-of-Time）を使用")
-                logger.info(f"   訓練期間: ~2020年, 検証期間: 2021年~")
+                logger.info(f"📊 時系列分割結果: 訓練{len(train_df):,}頭, 検証{len(test_df):,}頭")
+                
+                # 検証データが不足している場合のフォールバック
+                if len(test_df) < 100:  # 最低100頭は必要
+                    logger.warning(f"⚠️ 時系列分割で検証データが不足: {len(test_df)}頭")
+                    logger.warning("📊 保守的分割（70%/30%）にフォールバックします...")
+                    
+                    split_idx = int(len(horse_df) * 0.7)
+                    train_df = horse_df.iloc[:split_idx].copy()
+                    test_df = horse_df.iloc[split_idx:].copy()
+                    
+                    logger.info("⚠️ 保守的分割（70%/30%）を使用（データリーケージリスク軽減）")
+                else:
+                    logger.info(f"✅ 時系列分割を使用（基準: {cutoff_date.strftime('%Y年')}）")
             else:
                 # 日付情報がない場合の警告と代替手法
                 logger.warning("⚠️ 日付情報が不足しています。統計的に保守的な分割を適用")
                 
-                # より保守的な分割（60%/40%）でデータリーケージリスクを軽減
-                split_idx = int(len(horse_df) * 0.6)
+                # より保守的な分割（70%/30%）でデータリーケージリスクを軽減
+                split_idx = int(len(horse_df) * 0.7)
                 train_df = horse_df.iloc[:split_idx].copy()
                 test_df = horse_df.iloc[split_idx:].copy()
                 
-                logger.info("⚠️ 保守的分割（60%/40%）を使用（データリーケージリスク軽減）")
+                logger.info("⚠️ 保守的分割（70%/30%）を使用（データリーケージリスク軽減）")
         else:
             # ランダム分割
             train_df, test_df = train_test_split(horse_df, test_size=0.3, random_state=42)
@@ -823,9 +936,17 @@ class OddsComparisonAnalyzer:
         
         logger.info(f"📊 訓練データ: {len(train_df):,}頭, 検証データ: {len(test_df):,}頭")
         
-        # データ分割の妥当性チェック
-        if len(train_df) < 100 or len(test_df) < 50:
-            logger.warning(f"⚠️ サンプル数が少なすぎます: 訓練{len(train_df)}, 検証{len(test_df)}")
+        # データ分割の妥当性チェック（強化版）
+        if len(test_df) == 0:
+            logger.error("❌ 検証データが0件です。回帰分析を実行できません。")
+            raise ValueError("検証データが0件です。データ分割を確認してください。")
+        
+        if len(train_df) < 100:
+            logger.error("❌ 訓練データが不足しています（100頭未満）。")
+            raise ValueError("訓練データが不足しています。")
+        
+        if len(test_df) < 50:
+            logger.warning(f"⚠️ 検証データが少なすぎます: {len(test_df)}頭")
             logger.warning("   統計的信頼性が低下する可能性があります")
         
         results = {}

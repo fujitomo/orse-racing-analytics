@@ -94,6 +94,12 @@ def log_performance(func_name=None):
                 execution_time = end_time - start_time
                 memory_diff = end_memory - start_memory
                 
+                # メモリ使用量の監視と警告
+                if memory_diff > 200:  # 200MB以上の増加
+                    logger.warning(f"⚠️ [{name}] メモリ使用量が200MB増加しました: {memory_diff:+.1f}MB")
+                elif memory_diff > 500:  # 500MB以上の増加
+                    logger.warning(f"⚠️ [{name}] メモリ使用量が500MB増加しました: {memory_diff:+.1f}MB")
+                
                 # ログ出力
                 logger.info(f"✅ [{name}] 完了 - 実行時間: {execution_time:.2f}秒")
                 logger.info(f"   💾 メモリ使用量: {end_memory:.1f}MB (差分: {memory_diff:+.1f}MB)")
@@ -225,6 +231,7 @@ def load_all_data_once(input_path: str, encoding: str = 'utf-8') -> pd.DataFrame
             # グローバル変数に保存
             _global_raw_data = combined_df.copy()
             logger.info("💾 生データをグローバル変数に保存しました")
+            logger.info(f"🔍 グローバル変数確認: _global_raw_data is not None = {_global_raw_data is not None}")
             return combined_df
         else:
             logger.error("❌ 有効なCSVファイルが見つかりませんでした")
@@ -259,12 +266,16 @@ def initialize_global_weights(args) -> bool:
                 logger.error(f"❌ CSVファイルが見つかりません: {data_path}")
                 return False
                 
-            # 最初の数ファイルから代表データを作成
+            # 重み計算用に全データを読み込み（重複処理回避のため）
             sample_dfs = []
-            for csv_file in csv_files[:min(5, len(csv_files))]:  # 最初の5ファイル
+            files_to_read = len(csv_files)  # 全ファイルを読み込み
+            logger.info(f"📊 重み計算用データ読み込み: {files_to_read}ファイル（全データ統合）")
+            
+            for csv_file in csv_files[:files_to_read]:
                 try:
                     df = pd.read_csv(csv_file, encoding='utf-8')
                     sample_dfs.append(df)
+                    logger.info(f"📊 読み込み完了: {csv_file.name} ({len(df):,}行)")
                 except Exception as e:
                     logger.warning(f"⚠️ ファイル読み込みエラー（スキップ）: {csv_file} - {str(e)}")
                     continue
@@ -272,6 +283,41 @@ def initialize_global_weights(args) -> bool:
             if sample_dfs:
                 combined_df = pd.concat(sample_dfs, ignore_index=True)
                 logger.info(f"📊 重み算出用データ: {len(combined_df):,}行（{len(sample_dfs)}ファイル）")
+                
+                # グローバル変数に保存（統一分析器での重複処理回避）
+                _global_raw_data = combined_df.copy()
+                logger.info("💾 生データをグローバル変数に保存しました（重み計算時）")
+                
+                # __main__モジュールにも設定（統一分析器でのアクセス用）
+                import sys
+                main_module = sys.modules.get('__main__')
+                if main_module:
+                    main_module._global_raw_data = combined_df.copy()
+                    logger.info("💾 __main__モジュールにもグローバル変数を設定しました")
+                
+                # 【重要修正】レベルカラムを事前に生成
+                logger.info("🔧 レベルカラムを事前生成中...")
+                combined_df = calculate_race_level_features_with_position_weights(combined_df)
+                
+                # レベルカラムの存在確認
+                required_level_cols = ['grade_level', 'venue_level', 'distance_level']
+                missing_cols = [col for col in required_level_cols if col not in combined_df.columns]
+                
+                if missing_cols:
+                    logger.warning(f"⚠️ レベルカラム生成後も不足: {missing_cols}")
+                    logger.warning("📊 フォールバック重みを使用します...")
+                    # フォールバック重みを設定
+                    fallback_weights = {
+                        'grade_weight': 0.65,
+                        'venue_weight': 0.30,
+                        'distance_weight': 0.05
+                    }
+                    WeightManager._global_weights = fallback_weights
+                    WeightManager._initialized = True
+                    logger.info(f"✅ フォールバック重み設定完了: {fallback_weights}")
+                    return True
+                else:
+                    logger.info("✅ レベルカラム生成完了")
                 
                 # グローバル重みを初期化
                 weights = WeightManager.initialize_from_training_data(combined_df)
@@ -309,6 +355,26 @@ def initialize_global_weights(args) -> bool:
                 logger.info("🧮 重み計算用特徴量レベル列を計算中...")
                 df = calculate_accurate_feature_levels(df)
                 
+                # レベルカラムの存在確認
+                required_level_cols = ['grade_level', 'venue_level', 'distance_level']
+                missing_cols = [col for col in required_level_cols if col not in df.columns]
+                
+                if missing_cols:
+                    logger.warning(f"⚠️ レベルカラム生成後も不足: {missing_cols}")
+                    logger.warning("📊 フォールバック重みを使用します...")
+                    # フォールバック重みを設定
+                    fallback_weights = {
+                        'grade_weight': 0.65,
+                        'venue_weight': 0.30,
+                        'distance_weight': 0.05
+                    }
+                    WeightManager._global_weights = fallback_weights
+                    WeightManager._initialized = True
+                    logger.info(f"✅ フォールバック重み設定完了: {fallback_weights}")
+                    return True
+                else:
+                    logger.info("✅ レベルカラム生成完了")
+                
                 # グローバル変数に保存（重複処理回避のため）
                 _global_data = combined_df.copy()
                 _global_feature_levels = df.copy()
@@ -336,10 +402,13 @@ def initialize_global_weights(args) -> bool:
                 if len(training_data) > 0:
                     df = training_data
                     training_year_range = f"{training_data['年'].min()}-{training_data['年'].max()}年"
-                    logger.info(f"📊 訓練期間データ: {len(training_data):,}行 ({training_year_range})")
+                    logger.info(f"📊 重み計算用訓練期間データ: {len(training_data):,}行 ({training_year_range})")
                 else:
                     logger.warning("⚠️ 訓練期間（2010-2020年）データが見つかりませんでした")
                     df = combined_df  # 全データを使用
+                
+                # 全データも保存（時系列分割用）
+                logger.info(f"📊 全データ期間: {len(combined_df):,}行 ({combined_df['年'].min()}-{combined_df['年'].max()}年)")
             else:
                 logger.warning("⚠️ 年列が見つかりません。全データを使用します")
                 df = combined_df
@@ -349,9 +418,17 @@ def initialize_global_weights(args) -> bool:
             df = calculate_accurate_feature_levels(df)
             
             # グローバル変数に保存（重複処理回避のため）
-            _global_data = combined_df.copy()
-            _global_feature_levels = df.copy()
+            _global_data = combined_df.copy()  # 全データ（時系列分割用）
+            _global_feature_levels = df.copy()  # 重み計算用データ
+            
+            # レースレベル特徴量も事前計算して保存（期間別分析の高速化）
+            logger.info("🚀 レースレベル特徴量を事前計算中...")
+            _global_feature_levels = calculate_race_level_features_with_position_weights(_global_feature_levels)
+            
             logger.info("💾 計算済みデータをグローバル変数に保存しました")
+            logger.info(f"📊 グローバルデータ: {len(_global_data):,}行（全期間）")
+            logger.info(f"📊 重み計算データ: {len(_global_feature_levels):,}行（2010-2020年）")
+            logger.info("🚀 レースレベル特徴量も事前計算済み（期間別分析高速化）")
             
             # グローバル重みを初期化
             weights = WeightManager.initialize_from_training_data(df)
@@ -1736,7 +1813,7 @@ def calculate_accurate_feature_levels(df: pd.DataFrame) -> pd.DataFrame:
         これをgrade_levelでは「大きいほど高グレード」に変換
         """
         # グレード列の候補を確認
-        grade_cols = ['グレード_x', 'グレード_y', 'グレード', 'grade']
+        grade_cols = ['グレード_x', 'グレード_y']
         grade_value = None
         
         for col in grade_cols:
@@ -1796,30 +1873,76 @@ def calculate_accurate_feature_levels(df: pd.DataFrame) -> pd.DataFrame:
     return df_copy
 
 def analyze_by_periods_optimized(analyzer, periods, base_output_dir):
-    """【最適化版】データフレーム一括処理による期間別分析"""
+    """【最適化版】データフレーム一括処理による期間別分析（重複処理完全回避）"""
     global _global_data, _global_feature_levels
     
     logger.info("🚀 最適化版期間別分析を開始...")
     
-    # 1. グローバル変数から計算済みデータを取得（重複処理回避）
-    if _global_data is not None and _global_feature_levels is not None:
-        logger.info("💾 グローバル変数から計算済みデータを取得中...")
-        combined_df = _global_data.copy()
-        df_with_features = _global_feature_levels.copy()
-        logger.info(f"✅ 計算済みデータ取得完了: {len(combined_df):,}行")
+    # 1. グローバル変数から計算済みデータを取得（重複処理完全回避）
+    import sys
+    main_module = sys.modules.get('__main__')
+    
+    # データ取得成功フラグ
+    data_loaded = False
+    
+    # __main__モジュールからグローバル変数を取得
+    if main_module and hasattr(main_module, '_global_data') and hasattr(main_module, '_global_feature_levels'):
+        global_data = getattr(main_module, '_global_data')
+        global_feature_levels = getattr(main_module, '_global_feature_levels')
+        
+        if global_data is not None and global_feature_levels is not None:
+            logger.info("💾 __main__モジュールからグローバル変数を取得中...")
+            combined_df = global_data.copy()
+            df_with_features = global_feature_levels.copy()
+            logger.info(f"✅ 計算済みデータ取得完了: {len(combined_df):,}行")
+            data_loaded = True
+        else:
+            logger.warning(f"⚠️ __main__モジュールのグローバル変数がNone: _global_data={global_data is not None}, _global_feature_levels={global_feature_levels is not None}")
     else:
-        # グローバル関数を使用してデータを読み込み
-        combined_df = load_all_data_once(analyzer.config.input_path, 'utf-8')
-        if combined_df.empty:
-            return {}
+        logger.warning("⚠️ __main__モジュールにグローバル変数が存在しません")
+    
+    # フォールバック: ローカルグローバル変数をチェック（データ取得に失敗した場合のみ）
+    if not data_loaded and '_global_data' in locals() and '_global_feature_levels' in locals():
+        logger.info(f"🔍 ローカルグローバル変数チェック: _global_data={_global_data is not None}, _global_feature_levels={_global_feature_levels is not None}")
+        
+        if _global_data is not None and _global_feature_levels is not None:
+            logger.info("💾 ローカルグローバル変数から計算済みデータを取得中...")
+            combined_df = _global_data.copy()
+            df_with_features = _global_feature_levels.copy()
+            logger.info(f"✅ 計算済みデータ取得完了: {len(combined_df):,}行")
+            data_loaded = True
+        
+    
+    # データ取得に成功した場合はレースレベル特徴量をチェック
+    if data_loaded:
+        # レースレベル特徴量が既に計算済みかチェック
+        if 'race_level' in df_with_features.columns:
+            logger.info("💾 レースレベル特徴量も既に計算済みです（完全最適化）")
+        else:
+            logger.info("🧮 レースレベル特徴量を計算中...")
+            df_with_features = calculate_race_level_features_with_position_weights(df_with_features)
+    else:
+        logger.warning("⚠️ グローバル変数が設定されていません。フォールバック処理を実行します...")
+        # グローバル変数が設定されていない場合は、既に読み込まれたデータを再利用
+        logger.info(f"🔍 _global_raw_dataチェック: {_global_raw_data is not None}")
+        
+        if _global_raw_data is not None:
+            logger.info("💾 既存のグローバル生データを再利用中...")
+            combined_df = _global_raw_data.copy()
+        else:
+            # 最後の手段として新規読み込み
+            logger.warning("⚠️ _global_raw_dataも利用できません。新規読み込みを実行します...")
+            combined_df = load_all_data_once(analyzer.config.input_path, 'utf-8')
+            if combined_df.empty:
+                return {}
         
         # 特徴量レベル列を計算
         logger.info("🧮 実際のCSVデータから特徴量を正確に計算中...")
         df_with_features = calculate_accurate_feature_levels(combined_df)
     
-    # 2. レースレベル特徴量一括計算
-    logger.info("🧮 レースレベル特徴量一括計算中...")
-    df_with_features = calculate_race_level_features_with_position_weights(df_with_features)
+        # レースレベル特徴量一括計算
+        logger.info("🧮 レースレベル特徴量一括計算中...")
+        df_with_features = calculate_race_level_features_with_position_weights(df_with_features)
     
     logger.info(f"✅ 全データ前処理完了: {len(df_with_features):,}レース")
     
@@ -2598,12 +2721,21 @@ def main():
         if args.odds_analysis:
             logger.info("🎯 競走経験質指数（REQI）とオッズの比較分析を実行します...")
             try:
-                results = perform_comprehensive_odds_analysis(
-                    args.odds_analysis, 
-                    args.output_dir, 
-                    args.sample_size,
-                    args.min_races
-                )
+                # 統一分析器を使用
+                from horse_racing.base.unified_analyzer import create_unified_analyzer
+                analyzer = create_unified_analyzer('odds', args.min_races, enable_stratified)
+                
+                # データ読み込み
+                df = analyzer.load_data_unified(args.odds_analysis, args.encoding)
+                
+                # グローバル重み初期化
+                analyzer.initialize_global_weights(df)
+                
+                # 前処理
+                df = analyzer.preprocess_data_unified(df)
+                
+                # 分析実行
+                results = analyzer.analyze(df)
                 
                 logger.info("✅ オッズ比較分析が完了しました。")
                 logger.info(f"📊 分析対象: {results['data_summary']['total_records']:,}レコード, {results['data_summary']['horse_count']:,}頭")
@@ -2641,97 +2773,49 @@ def main():
 
         if args.three_year_periods:
             logger.info("📊 3年間隔での期間別分析を実行します...")
-            
-            # 初期データ読み込みで年データ範囲を確認
-            temp_config = AnalysisConfig(
-                input_path=args.input_path,
-                min_races=args.min_races,
-                output_dir=str(output_dir),
-                date_str=datetime.now().strftime('%Y%m%d'),
-                start_date=args.start_date,
-                end_date=args.end_date
-            )
-            
-            # データ読み込みと基本的な前処理（期間フィルタリングなし）
-            temp_analyzer = RaceLevelAnalyzer(temp_config, 
-                                            enable_stratified_analysis=enable_stratified)
-            logger.info("📖 全データ読み込み中...")
-            temp_df = temp_analyzer.load_data()
-            
-            logger.info(f"📊 読み込んだデータ件数: {len(temp_df):,}件")
-            
-            # 年データが存在するかチェック
-            if '年' in temp_df.columns and temp_df['年'].notna().any():
-                min_year = int(temp_df['年'].min())
-                max_year = int(temp_df['年'].max())
-                logger.info(f"📊 年データ範囲: {min_year}年 - {max_year}年")
+            try:
+                # 統一分析器を使用
+                from horse_racing.base.unified_analyzer import create_unified_analyzer
+                analyzer = create_unified_analyzer('period', args.min_races, enable_stratified)
                 
-                # 3年間隔での期間設定
-                periods = []
-                for start_year in range(min_year, max_year + 1, 3):
-                    end_year = min(start_year + 2, max_year)
-                    period_name = f"{start_year}-{end_year}"
-                    
-                    # 期間内にデータが存在するかチェック
-                    period_data = temp_df[
-                        (temp_df['年'] >= start_year) & (temp_df['年'] <= end_year)
-                    ]
-                    
-                    if len(period_data) >= args.min_races:
-                        periods.append((period_name, start_year, end_year))
-                        logger.info(f"  📊 期間 {period_name}: {len(period_data):,}件のデータ")
-                    else:
-                        logger.warning(f"  ⚠️  期間 {period_name}: データ不足 ({len(period_data)}件)")
+                # データ読み込み
+                df = analyzer.load_data_unified(args.input_path, args.encoding)
                 
-                if periods:
-                    logger.info(f"📊 有効な分析期間: {[p[0] for p in periods]}")
+                # グローバル重み初期化
+                analyzer.initialize_global_weights(df)
+                
+                # 前処理
+                df = analyzer.preprocess_data_unified(df)
+                
+                logger.info(f"📊 読み込んだデータ件数: {len(df):,}件")
+                
+                # 年データが存在するかチェック
+                if '年' in df.columns and df['年'].notna().any():
+                    min_year = int(df['年'].min())
+                    max_year = int(df['年'].max())
+                    logger.info(f"📊 年データ範囲: {min_year}年 - {max_year}年")
                     
-                    # 期間別分析の実行
-                    all_results = analyze_by_periods(temp_analyzer, periods, output_dir)
+                    # 期間別分析実行
+                    results = analyzer.analyze(df)
                     
-                    if all_results:
-                        # 総合レポートの生成
-                        generate_period_summary_report(all_results, output_dir)
+                    if results:
+                        logger.info(f"📊 期間別分析完了: {len(results)}期間")
                         
-                        logger.info("\n" + "="*60)
-                        logger.info("🎉 3年間隔分析完了！結果:")
-                        logger.info("="*60)
+                        # 結果の保存（必要に応じて）
+                        logger.info(f"📁 結果保存先: {args.output_dir}")
                         
-                        for period_name, results in all_results.items():
-                            period_info = results.get('period_info', {})
-                            correlation_stats = results.get('correlation_stats', {})
-                            
-                            total_horses = period_info.get('total_horses', 0)
-                            total_races = period_info.get('total_races', 0)
-                            corr_avg = correlation_stats.get('correlation_place_avg', 0.0)
-                            
-                            logger.info(f"📊 期間 {period_name}: {total_horses:,}頭, {total_races:,}レース")
-                            logger.info(f"   📈 平均レベル vs 複勝率相関: r={corr_avg:.3f}")
-                        
-                        logger.info("="*60)
-                        logger.info(f"✅ 全ての結果は {args.output_dir} に保存されました。")
-                        logger.info(f"📝 ログファイル: {log_file}")
-                        logger.info("📋 生成されたファイル:")
-                        logger.info("  - レースレベル分析_期間別総合レポート.md")
-                        logger.info("  - 各期間フォルダ内の分析結果PNG")
-                        
-                        # 層別分析の実行
-                        logger.info("📊 層別分析を実行中...")
-                        try:
-                            stratified_dataset = create_stratified_dataset_from_export('export/dataset')
-                            stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
-                            _ = generate_stratified_report(stratified_results, stratified_dataset, output_dir)
-                            logger.info("✅ 層別分析完了")
-                        except Exception as e:
-                            logger.error(f"❌ 層別分析でエラー: {str(e)}")
+                        return 0
                     else:
-                        logger.warning("⚠️  有効な期間別分析結果がありませんでした。")
+                        logger.warning("⚠️ 有効な期間が見つかりませんでした")
+                        return 1
                 else:
-                    logger.warning("⚠️  十分なデータがある期間が見つかりませんでした。全期間での分析に切り替えます。")
-                    args.three_year_periods = False
-            else:
-                logger.warning("⚠️  年データが見つかりません。全期間での分析に切り替えます。")
-                args.three_year_periods = False
+                    logger.warning("⚠️ 年データが見つかりません")
+                    return 1
+                    
+            except Exception as e:
+                logger.error(f"❌ 期間別分析でエラー: {str(e)}")
+                logger.error("詳細なエラー情報:", exc_info=True)
+                return 1
         
         if not args.three_year_periods:
             logger.info("📊 【修正版】厳密な時系列分割による分析を実行します...")

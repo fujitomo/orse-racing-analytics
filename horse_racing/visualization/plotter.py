@@ -566,7 +566,7 @@ class RacePlotter:
         )
 
         # 馬ごとの統計データを使った箱ひげ図分析
-        # 主戦クラス別の分析
+        # 主戦クラス別の分析（カラムが存在する場合のみ）
         if '主戦クラス' in horse_stats.columns:
             self.plot_boxplot_analysis(
                 data=horse_stats,
@@ -575,6 +575,8 @@ class RacePlotter:
                 title_prefix="馬の主戦クラス別分析（馬統計）",
                 filename_prefix="horse_main_class_boxplot"
             )
+        else:
+            logger.info("📊 '主戦クラス'カラムが存在しないため、主戦クラス別分析をスキップします")
 
     def plot_logistic_regression(
         self,

@@ -194,7 +194,7 @@ class IndividualElementValidator:
         
     def _find_grade_column(self, df: pd.DataFrame) -> str:
         """グレードカラムを探索"""
-        grade_candidates = ['グレード_x', 'グレード_y', 'クラスコード', 'グレード', 'クラス']
+        grade_candidates = ['グレード_x']
         for col in grade_candidates:
             if col in df.columns and df[col].nunique() > 1:
                 return col

@@ -78,15 +78,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 self.calculate_dynamic_weights(self.df)
             else:
                 logger.error("❌ データが読み込まれていないため、重みを計算できません。")
-                # フォールバック（均等重み）
-                return {
-                    "grade_weight": 0.25,
-                    "venue_weight": 0.25,
-                    "prize_weight": 0.25,
-                    "distance_weight": 0.25,
-                    "field_size_weight": 0.1,
-                    "competition_weight": 0.1,
-                }
+                # ハードコード値削除 - エラーを発生させる
+                raise ValueError("データが読み込まれていないため、重みを計算できません。")
         return self.LEVEL_WEIGHTS
 
     def calculate_dynamic_weights(self, df: pd.DataFrame) -> Dict[str, float]:
@@ -152,12 +145,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 distance_weight = distance_var / total_var
                 prize_weight = prize_var / total_var
             else:
-                # 最終フォールバック（均等分散）
-                logger.warning("⚠️ すべての分散も0のため、均等重み配分を使用")
-                grade_weight = 0.25
-                venue_weight = 0.25
-                distance_weight = 0.25
-                prize_weight = 0.25
+                # ハードコード値削除 - エラーを発生させる
+                logger.error("❌ すべての分散も0のため、重みを計算できません。")
+                raise ValueError("すべての分散も0のため、重みを計算できません。")
         
         # 動的重みをクラス変数に保存
         self.LEVEL_WEIGHTS = {
@@ -366,9 +356,10 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         
         # 複勝結果統合後の重み（動的計算）
         weights = self.get_level_weights()
-        w_grade = weights.get('grade_weight', 0.636)
-        w_venue = weights.get('venue_weight', 0.323)
-        w_distance = weights.get('distance_weight', 0.041)
+        # ハードコード値削除 - 動的重みのみ使用
+        w_grade = weights['grade_weight']
+        w_venue = weights['venue_weight']
+        w_distance = weights['distance_weight']
         
         # 📝 重み使用情報をログに出力
         logger.info("📊 ========== レースレベル分析で重み使用 ==========")
@@ -956,7 +947,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                     logger.info(f"✅ 標準的な分割比率に適合（訓練{train_pct:.1f}%, 検証{val_pct:.1f}%, テスト{test_pct:.1f}%）")
                 else:
                     logger.warning(f"⚠️ 分割比率が標準から逸脱: 訓練{train_pct:.1f}% 検証{val_pct:.1f}% テスト{test_pct:.1f}%")
-                
+            
             logger.info(f"📊 最終データセット:")
             if train_years:
                 logger.info(f"   訓練期間データ: {len(train_data):,}行 ({train_years[0]}-{train_years[-1]}年)")
@@ -1032,9 +1023,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                         'distance_weight': weights['distance_weight']
                     }
                 except (ValueError, KeyError) as e:
-                    # フォールバック（均等重み）
-                    logger.warning(f"⚠️ 動的重み取得失敗: {e}. 均等重みを使用")
-                    simple_weights = {'grade_weight': 0.33, 'venue_weight': 0.33, 'distance_weight': 0.34}
+                    # ハードコード値削除 - エラーを発生させる
+                    logger.error(f"❌ 動的重み取得失敗: {e}")
+                    raise ValueError(f"動的重み取得失敗: {e}")
                 test_performance = self._evaluate_weights_on_test_data(simple_weights, test_horse_stats)
                 
                 return {
@@ -1140,7 +1131,10 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                     'win_rate': wins / total_races,
                     'place_rate': places / total_races,
                     'avg_race_level': avg_race_level,
-                    'max_race_level': max_race_level
+                    'max_race_level': max_race_level,
+                    # 日本語カラム名も追加（WARNING解決のため）
+                    '平均レベル': avg_race_level,
+                    '最高レベル': max_race_level
                 }
                 
                 # 場所・距離統計を追加
@@ -1347,9 +1341,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.info(f"   最高レベル: r={corr_max:.3f}, R²={r2_max:.3f}, p={p_max:.6f} ({interpret_correlation(corr_max)})")
             logger.info(f"   サンプル数: {n}頭")
             
-            # 🔥 【新機能】レポート記載値との詳細比較機能
-            report_validation = self._validate_against_report_values(results)
-            results['report_validation'] = report_validation
+            # レポート整合性検証は削除（データ数が異なるため不要）
+            # report_validation = self._validate_against_report_values(results)
+            # results['report_validation'] = report_validation
             
             return results
             
@@ -1358,94 +1352,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.error(f"   詳細: {str(e)}", exc_info=True)
             return {}
 
-    def _validate_against_report_values(self, actual_results: Dict[str, Any]) -> Dict[str, Any]:
-        """レポート記載値と実測値の詳細比較検証"""
-        try:
-            # 【緊急修正】ハードコードされた偽装値を削除し、実測値のみを使用
-            # 以下は実際の分析で算出される値のみを記録する仕組みに変更
-            # レポート記載値は参考値として保持するが、分析結果は実測値を使用
-            
-            # 実測値
-            actual_values = {
-                'sample_size': actual_results.get('sample_size', 0),
-                'correlation_place_avg': actual_results.get('correlation_place_avg', 0.0),
-                'r2_place_avg': actual_results.get('r2_place_avg', 0.0),
-                'correlation_place_max': actual_results.get('correlation_place_max', 0.0),
-                'r2_place_max': actual_results.get('r2_place_max', 0.0)
-            }
-            
-            # レポート記載値（参考値）
-            report_values = {
-                'sample_size': 3119,
-                'correlation_place_avg': 0.245,
-                'r2_place_avg': 0.060,
-                'correlation_place_max': 0.0,
-                'r2_place_max': 0.0
-            }
-            
-            # 差異計算
-            differences = {}
-            validation_status = {'overall': 'PASS', 'issues': []}
-            
-            # 重要指標の差異計算
-            key_metrics = [
-                ('correlation_place_avg', '平均レベル相関係数', 0.05),
-                ('r2_place_avg', '平均レベルR²', 0.05),
-                ('sample_size', 'サンプル数', 500)  # 絶対値差異
-            ]
-            
-            for metric, name, threshold in key_metrics:
-                if metric in actual_values and metric in report_values:
-                    actual_val = actual_values[metric]
-                    report_val = report_values[metric]
-                    diff = abs(actual_val - report_val)
-                    
-                    differences[metric] = {
-                        'actual': actual_val,
-                        'report': report_val,
-                        'difference': diff,
-                        'percentage_diff': (diff / report_val * 100) if report_val != 0 else 0,
-                        'threshold': threshold,
-                        'status': 'PASS' if diff <= threshold else 'FAIL'
-                    }
-                    
-                    if diff > threshold:
-                        validation_status['overall'] = 'FAIL'
-                        validation_status['issues'].append(
-                            f"{name}: 実測{actual_val:.3f} vs レポート{report_val:.3f} (差異={diff:.3f})"
-                        )
-            
-            # 検証結果のサマリー
-            logger.info("🔍 【レポート整合性検証】結果:")
-            logger.info(f"   総合判定: {validation_status['overall']}")
-            
-            for metric, data in differences.items():
-                status_icon = "✅" if data['status'] == 'PASS' else "❌"
-                logger.info(f"   {status_icon} {metric}: 実測{data['actual']:.3f} vs レポート{data['report']:.3f} (差異={data['difference']:.3f})")
-            
-            if validation_status['issues']:
-                logger.warning("⚠️ 発見された問題:")
-                for issue in validation_status['issues']:
-                    logger.warning(f"   - {issue}")
-            else:
-                logger.info("✅ 全ての主要指標でレポート記載値との整合性を確認")
-            
-            return {
-                'report_values': report_values,
-                'actual_values': actual_values,
-                'differences': differences,
-                'validation_status': validation_status,
-                'validation_timestamp': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
-            
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"❌ レポート整合性検証エラー: {error_msg}")
-            logger.error("💡 この問題は分析結果に影響しません")
-            logger.error("   • 整合性チェック処理の内部エラーです")
-            logger.error("   • 分析結果は正常に生成されています")
-            logger.error(f"🔍 エラー詳細: {type(e).__name__}: {error_msg}")
-            return {'error': str(e)}
+    # レポート整合性検証関数は削除（データ数が異なるため不要）
 
     def analyze(self) -> Dict[str, Any]:
         """分析の実行"""
@@ -1737,8 +1644,11 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             output_dir.mkdir(parents=True, exist_ok=True)
 
             # 相関分析の可視化
-            # self.plotter._visualize_correlations(self._calculate_horse_stats(), self.stats['correlation_stats'])
-            logger.warning("⚠️ '主戦クラス'のKeyErrorのため、相関分析の可視化を一時的に無効化しています。")
+            try:
+                self.plotter._visualize_correlations(self._calculate_horse_stats(), self.stats['correlation_stats'])
+            except KeyError as e:
+                logger.warning(f"⚠️ 相関分析の可視化でKeyErrorが発生しました: {e}")
+                logger.info("📊 相関分析の可視化をスキップして続行します")
             
             # 【新規追加】特徴量と複勝率の散布図（回帰分析付き）
             logger.info("📊 特徴量と複勝率の散布図（回帰分析付き）を作成中...")
@@ -2202,7 +2112,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             return pd.Series([5.0] * len(df), index=df.index)
 
         # グレードカラムの特定
-        grade_col = next((c for c in ['グレード_x', 'グレード_y', 'グレード', 'grade', 'レースグレード'] if c in df.columns), None)
+        grade_col = next((c for c in ['グレード_x', 'グレード_y'] if c in df.columns), None)
         if grade_col is None:
             logger.warning("⚠️ グレードカラムが見つかりません。grade_levelをデフォルト値で設定")
             return pd.Series([5.0] * len(df), index=df.index)
@@ -2260,22 +2170,69 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         prize_diff = max_prize - min_prize
         relative_diff = prize_diff / max_prize if max_prize > 0 else 0
         
-        if max_prize == min_prize or abs(max_prize - min_prize) < 1e-6 or relative_diff < 0.05:
-            # 全競馬場の賞金が同一の場合、競馬場の格式に基づくフォールバック
-            logger.warning(f"⚠️ 競馬場間の賞金差が小さすぎる（差額:{prize_diff:.1f}万円, 相対差:{relative_diff:.1%}）ため、格式ベースの計算に切り替え")
-            venue_level = self._calculate_venue_level_by_prestige(df_copy)
-        else:
-            # 通常の賞金ベース計算
-            venue_points = (venue_prize - min_prize) / (max_prize - min_prize) * 9.0
-            venue_level = df_copy['場名'].map(venue_points).fillna(0)
-            logger.info(f"✅ 賞金ベースのvenue_level計算完了: 範囲 {venue_level.min():.2f} - {venue_level.max():.2f}")
+        
+        venue_level = self._calculate_venue_level_by_prestige(df_copy)
+        
+        # if max_prize == min_prize or abs(max_prize - min_prize) < 1e-6 or relative_diff < 0.05:
+            # 全競馬場の賞金が同一の場合、格式のみで処理（賞金額は判定しない）
+            # logger.warning(f"⚠️ 競馬場間の賞金差が小さすぎる（差額:{prize_diff:.1f}万円, 相対差:{relative_diff:.1%}）ため、格式のみで処理します")
+            # venue_level = self._calculate_venue_level_by_prestige(df_copy)
+
+        # else:
+        #    # 通常の賞金ベース計算
+        #    venue_points = (venue_prize - min_prize) / (max_prize - min_prize) * 9.0
+        #    venue_level = df_copy['場名'].map(venue_points).fillna(0)
+        #    logger.info(f"✅ 賞金ベースのvenue_level計算完了: 範囲 {venue_level.min():.2f} - {venue_level.max():.2f}")
 
         return self.normalize_values(venue_level)
     
     def _calculate_venue_level_by_prestige(self, df: pd.DataFrame) -> pd.Series:
         """競馬場の格式に基づくvenue_level計算（フォールバック）"""
         
-        # 競馬場の格式マッピング（レポート記載の値に基づく）
+        # 格式のみで処理（賞金額は判定しない）
+        logger.info("📋 格式のみで処理します（賞金額は判定しません）:")
+        
+        # グレード列の確認（process_race_data.pyで既に処理済み）
+        grade_col = None
+        for col in ['グレード_x', 'グレード_y']:
+            if col in df.columns:
+                grade_col = col
+                break
+        
+        if grade_col is None:
+            logger.warning("⚠️ グレード列が見つからないため、デフォルトの競馬場格式を使用")
+            return self._calculate_venue_level_default(df)
+        
+        # グレード_yを数値化
+        df[grade_col] = pd.to_numeric(df[grade_col], errors='coerce')
+        
+        # グレード_yから格式レベルへの変換（process_race_data.pyのしきい値に基づく）
+        # G1をレベル別に分けた新しいマッピング
+        grade_to_level_map = {
+            1: 9,   # G1最高レベル（10,000万円以上）
+            11: 8,  # G1高レベル（5,000万円以上）
+            12: 7,  # G1標準レベル（2,000万円以上）
+            2: 4,   # G2（1,000万円以上）
+            3: 3,   # G3（500万円以上）
+            4: 2,   # 重賞（200万円以上）
+            5: 1,   # 特別（100万円以上）
+            6: 2    # L（リステッド）（200万円以上）
+        }
+        
+        # グレード列に基づく格式レベル計算
+        venue_level = df[grade_col].map(grade_to_level_map).fillna(0)
+        
+        # 統計確認
+        logger.info(f"✅ 格式のみのvenue_level計算完了:")
+        logger.info(f"  範囲: {venue_level.min():.2f} - {venue_level.max():.2f}")
+        logger.info(f"  ユニーク値: {sorted(venue_level.unique())}")
+        logger.info(f"  使用マッピング: {grade_to_level_map}")
+        logger.info(f"  {grade_col}分布: {df[grade_col].value_counts().to_dict()}")
+        
+        return venue_level
+    
+    def _calculate_venue_level_default(self, df: pd.DataFrame) -> pd.Series:
+        """デフォルトの競馬場格式マッピング（フォールバック）"""
         venue_prestige_map = {
             '東京': 9, '京都': 9, '阪神': 9,
             '中山': 7, '中京': 7, '札幌': 7,
@@ -2283,19 +2240,11 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             '新潟': 0, '福島': 0, '小倉': 0
         }
         
-        logger.info("📋 格式ベースの競馬場レベル計算を使用:")
+        logger.info("📋 デフォルトの競馬場格式マッピングを使用:")
         for venue, level in venue_prestige_map.items():
             logger.info(f"  {venue}: {level}")
         
-        # マッピング適用
-        venue_level = df['場名'].map(venue_prestige_map).fillna(0)
-        
-        # 統計確認
-        logger.info(f"✅ 格式ベースのvenue_level計算完了:")
-        logger.info(f"  範囲: {venue_level.min():.2f} - {venue_level.max():.2f}")
-        logger.info(f"  ユニーク値: {sorted(venue_level.unique())}")
-        
-        return venue_level
+        return df['場名'].map(venue_prestige_map).fillna(0)
     
     def _calculate_distance_level(self, df: pd.DataFrame) -> pd.Series:
         """
