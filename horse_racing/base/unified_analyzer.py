@@ -55,42 +55,73 @@ class UnifiedAnalyzerBase(ABC):
         import sys
         import os
         
-        # analyze_horse_racelevelモジュールを直接インポート
+        # analyze_REQIモジュールを直接インポート
         current_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         if current_dir not in sys.path:
             sys.path.insert(0, current_dir)
         
         try:
-            # まずanalyze_horse_racelevelモジュールからグローバル変数を取得
-            import analyze_horse_racelevel
+            # まずanalyze_REQIモジュールからグローバル変数を取得
+            import analyze_REQI
             
             # グローバル変数の存在と内容を詳細チェック
-            has_global_data = hasattr(analyze_horse_racelevel, '_global_raw_data')
-            global_data_not_none = has_global_data and analyze_horse_racelevel._global_raw_data is not None
+            has_global_data = hasattr(analyze_REQI, '_global_raw_data')
+            global_data_not_none = has_global_data and analyze_REQI._global_raw_data is not None
             
-            logger.info(f"🔍 analyze_horse_racelevelモジュールチェック: has_attr={has_global_data}, not_none={global_data_not_none}")
+            logger.info(f"🔍 analyze_REQIモジュールチェック: has_attr={has_global_data}, not_none={global_data_not_none}")
             
             if global_data_not_none:
-                logger.info("💾 analyze_horse_racelevelモジュールからグローバル変数を取得中...")
-                df = analyze_horse_racelevel._global_raw_data.copy()
+                logger.info("💾 analyze_REQIモジュールからグローバル変数を取得中...")
+                df = analyze_REQI._global_raw_data.copy()
                 logger.info(f"✅ グローバルデータ取得完了: {len(df):,}行")
                 self.data = df
                 return df
             else:
-                logger.info(f"🔍 analyze_horse_racelevelモジュールのグローバル変数: has_attr={has_global_data}, not_none={global_data_not_none}")
+                logger.info(f"🔍 analyze_REQIモジュールのグローバル変数: has_attr={has_global_data}, not_none={global_data_not_none}")
             
             # __main__ フォールバックは廃止（取得経路を統一）
                 
         except ImportError as e:
-            logger.error(f"❌ analyze_horse_racelevelモジュールのインポートに失敗: {e}")
+            logger.error(f"❌ analyze_REQIモジュールのインポートに失敗: {e}")
             logger.warning("⚠️ フォールバック処理を実行します...")
         
         # グローバル変数がない場合のみ新規読み込み（初回起動時の通常フロー）
         logger.info("ℹ️ グローバル変数が未設定のため、新規読み込みルートに切り替えます")
         
-        # 直接インポートでload_all_data_onceを呼び出し
-        import analyze_horse_racelevel
-        df = analyze_horse_racelevel.load_all_data_once(input_path, encoding)
+        # 直接CSVを読み込み統合（*_formatted_dataset.csv を優先、なければ *.csv を再帰探索）
+        try:
+            from pathlib import Path
+            import pandas as pd
+            dataset_dir = Path(input_path)
+            if not dataset_dir.exists():
+                raise ValueError(f"入力パスが存在しません: {input_path}")
+            
+            csv_files = list(dataset_dir.glob("*_formatted_dataset.csv"))
+            if not csv_files:
+                # サブディレクトリも含めて探索
+                csv_files = list(dataset_dir.rglob("*_formatted_dataset.csv"))
+            if not csv_files:
+                # 最後の手段として全CSV
+                csv_files = list(dataset_dir.rglob("*.csv"))
+            
+            if not csv_files:
+                raise ValueError("データファイルが見つかりません")
+            
+            dfs = []
+            for f in csv_files:
+                try:
+                    df_part = pd.read_csv(f, encoding=encoding)
+                    dfs.append(df_part)
+                except Exception as e:
+                    logger.warning(f"⚠️ 読み込み失敗のためスキップ: {f} - {str(e)}")
+            
+            if not dfs:
+                raise ValueError("読込可能なCSVがありません")
+            
+            df = pd.concat(dfs, ignore_index=True)
+        except Exception as e:
+            logger.error(f"❌ フォールバック読込エラー: {str(e)}")
+            raise
         
         if df.empty:
             raise ValueError("データファイルが見つかりません")
@@ -123,9 +154,9 @@ class UnifiedAnalyzerBase(ABC):
                 main_module = sys.modules['__main__']
                 logger.info("🔍 __main__モジュールからグローバル変数を参照します")
             else:
-                import analyze_horse_racelevel
-                main_module = analyze_horse_racelevel
-                logger.info("🔍 analyze_horse_racelevelモジュールからグローバル変数を参照します")
+                import analyze_REQI
+                main_module = analyze_REQI
+                logger.info("🔍 analyze_REQIモジュールからグローバル変数を参照します")
             
             # グローバル変数の状態を詳細にログ出力
             has_global_data = hasattr(main_module, '_global_data')
@@ -145,12 +176,12 @@ class UnifiedAnalyzerBase(ABC):
                 import importlib.util
                 import os
                 
-                # analyze_horse_racelevel.pyのパスを取得
+                # analyze_REQI.pyのパスを取得
                 current_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-                module_path = os.path.join(current_dir, 'analyze_horse_racelevel.py')
+                module_path = os.path.join(current_dir, 'analyze_REQI.py')
                 
                 # モジュールを動的にインポート
-                spec = importlib.util.spec_from_file_location("analyze_horse_racelevel", module_path)
+                spec = importlib.util.spec_from_file_location("analyze_REQI", module_path)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
                 
@@ -311,12 +342,12 @@ class PeriodAnalysisUnifiedAnalyzer(UnifiedAnalyzerBase):
             import importlib.util
             import os
             
-            # analyze_horse_racelevel.pyのパスを取得
+            # analyze_REQI.pyのパスを取得
             current_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            module_path = os.path.join(current_dir, 'analyze_horse_racelevel.py')
+            module_path = os.path.join(current_dir, 'analyze_REQI.py')
             
             # モジュールを動的にインポート
-            spec = importlib.util.spec_from_file_location("analyze_horse_racelevel", module_path)
+            spec = importlib.util.spec_from_file_location("analyze_REQI", module_path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             
@@ -335,20 +366,20 @@ class PeriodAnalysisUnifiedAnalyzer(UnifiedAnalyzerBase):
             self.race_analyzer = REQIAnalyzer(temp_config, self.enable_stratified)
             
             # グローバル変数を設定（analyze_by_periods_optimizedが使用するため）
-            import analyze_horse_racelevel
+            import analyze_REQI
             
             # 前処理済みデータをグローバル変数に設定（重複処理回避）
-            if hasattr(analyze_horse_racelevel, '_global_data') and analyze_horse_racelevel._global_data is not None:
+            if hasattr(analyze_REQI, '_global_data') and analyze_REQI._global_data is not None:
                 logger.info("💾 既存のグローバルデータを活用中...")
-                analyze_horse_racelevel._global_data = analyze_horse_racelevel._global_data.copy()
+                analyze_REQI._global_data = analyze_REQI._global_data.copy()
             else:
-                analyze_horse_racelevel._global_data = df.copy()
+                analyze_REQI._global_data = df.copy()
             
-            if hasattr(analyze_horse_racelevel, '_global_feature_levels') and analyze_horse_racelevel._global_feature_levels is not None:
+            if hasattr(analyze_REQI, '_global_feature_levels') and analyze_REQI._global_feature_levels is not None:
                 logger.info("💾 既存のグローバル特徴量を活用中...")
-                analyze_horse_racelevel._global_feature_levels = analyze_horse_racelevel._global_feature_levels.copy()
+                analyze_REQI._global_feature_levels = analyze_REQI._global_feature_levels.copy()
             else:
-                analyze_horse_racelevel._global_feature_levels = df.copy()
+                analyze_REQI._global_feature_levels = df.copy()
             
             # 期間別分析実行
             all_results = module.analyze_by_periods_optimized(self.race_analyzer, periods, Path("temp"))
