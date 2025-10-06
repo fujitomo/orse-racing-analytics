@@ -13,11 +13,11 @@ from abc import ABC, abstractmethod
 # 既存の分析器をインポート
 try:
     from ..analyzers.odds_comparison_analyzer import OddsComparisonAnalyzer
-    from ..analyzers.race_level_analyzer import RaceLevelAnalyzer
+    from ..analyzers.race_level_analyzer import REQIAnalyzer
     from ..core.weight_manager import WeightManager
 except ImportError:
     OddsComparisonAnalyzer = None
-    RaceLevelAnalyzer = None
+    REQIAnalyzer = None
     WeightManager = None
 
 logger = logging.getLogger(__name__)
@@ -79,31 +79,17 @@ class UnifiedAnalyzerBase(ABC):
             else:
                 logger.info(f"🔍 analyze_horse_racelevelモジュールのグローバル変数: has_attr={has_global_data}, not_none={global_data_not_none}")
             
-            # analyze_horse_racelevelから取得できない場合は、__main__モジュールを試行
-            import sys
-            main_module = sys.modules.get('__main__')
-            
-            if main_module and hasattr(main_module, '_global_raw_data'):
-                global_data = getattr(main_module, '_global_raw_data')
-                if global_data is not None:
-                    logger.info("💾 __main__モジュールからグローバル変数を取得中...")
-                    df = global_data.copy()
-                    logger.info(f"✅ グローバルデータ取得完了: {len(df):,}行")
-                    self.data = df
-                    return df
-                else:
-                    logger.info("🔍 __main__モジュールのグローバル変数は存在しますが、値がNoneです")
-            else:
-                logger.info("🔍 __main__モジュールにグローバル変数が存在しません")
+            # __main__ フォールバックは廃止（取得経路を統一）
                 
         except ImportError as e:
-            logger.error(f"❌ モジュールのインポートに失敗: {e}")
+            logger.error(f"❌ analyze_horse_racelevelモジュールのインポートに失敗: {e}")
             logger.warning("⚠️ フォールバック処理を実行します...")
         
-        # グローバル変数がない場合のみ新規読み込み
-        logger.warning("⚠️ グローバル変数が設定されていません。フォールバック処理を実行します...")
+        # グローバル変数がない場合のみ新規読み込み（初回起動時の通常フロー）
+        logger.info("ℹ️ グローバル変数が未設定のため、新規読み込みルートに切り替えます")
         
         # 直接インポートでload_all_data_onceを呼び出し
+        import analyze_horse_racelevel
         df = analyze_horse_racelevel.load_all_data_once(input_path, encoding)
         
         if df.empty:
@@ -131,10 +117,27 @@ class UnifiedAnalyzerBase(ABC):
         
         try:
             # グローバル変数から既に計算済みの特徴量を取得
-            import analyze_horse_racelevel
-            if hasattr(analyze_horse_racelevel, '_global_feature_levels') and analyze_horse_racelevel._global_feature_levels is not None:
+            # __main__として実行されている場合とimportされる場合の両方に対応
+            import sys
+            if '__main__' in sys.modules and hasattr(sys.modules['__main__'], '_global_data'):
+                main_module = sys.modules['__main__']
+                logger.info("🔍 __main__モジュールからグローバル変数を参照します")
+            else:
+                import analyze_horse_racelevel
+                main_module = analyze_horse_racelevel
+                logger.info("🔍 analyze_horse_racelevelモジュールからグローバル変数を参照します")
+            
+            # グローバル変数の状態を詳細にログ出力
+            has_global_data = hasattr(main_module, '_global_data')
+            has_feature_levels = hasattr(main_module, '_global_feature_levels')
+            data_not_none = has_global_data and main_module._global_data is not None
+            features_not_none = has_feature_levels and main_module._global_feature_levels is not None
+            logger.info(f"🔍 グローバル変数状態: _global_data存在={has_global_data}, 非None={data_not_none}")
+            logger.info(f"🔍 グローバル変数状態: _global_feature_levels存在={has_feature_levels}, 非None={features_not_none}")
+            
+            if features_not_none:
                 logger.info("💾 グローバル変数から計算済み特徴量を取得中...")
-                df_with_features = analyze_horse_racelevel._global_feature_levels.copy()
+                df_with_features = main_module._global_feature_levels.copy()
                 logger.info(f"✅ グローバル特徴量取得完了: {len(df_with_features):,}行")
             else:
                 # グローバル変数がない場合のみ新規計算
@@ -152,6 +155,12 @@ class UnifiedAnalyzerBase(ABC):
                 spec.loader.exec_module(module)
                 
                 df_with_features = module.calculate_accurate_feature_levels(df)
+                
+                # 【重要】計算済みデータを正しいモジュールのグローバル変数に保存
+                logger.info("💾 計算済みデータをグローバル変数に保存中...")
+                main_module._global_data = df.copy()
+                main_module._global_feature_levels = df_with_features.copy()
+                logger.info(f"✅ グローバル変数保存完了: _global_data={len(df):,}行, _global_feature_levels={len(df_with_features):,}行")
             
             # グローバル重みを初期化
             weights = WeightManager.initialize_from_training_data(df_with_features)
@@ -241,9 +250,9 @@ class OddsComparisonUnifiedAnalyzer(UnifiedAnalyzerBase):
             # OddsComparisonAnalyzerのインスタンス化
             self.odds_analyzer = OddsComparisonAnalyzer(min_races=self.min_races)
             
-            # HorseRaceLevel計算
+            # HorseREQI計算
             horse_stats_df = self.odds_analyzer.calculate_horse_race_level(df)
-            logger.info(f"HorseRaceLevel計算完了: {len(horse_stats_df):,}頭")
+            logger.info(f"HorseREQI計算完了: {len(horse_stats_df):,}頭")
             
             # 相関分析
             correlation_results = self.odds_analyzer.perform_correlation_analysis(horse_stats_df)
@@ -290,8 +299,8 @@ class PeriodAnalysisUnifiedAnalyzer(UnifiedAnalyzerBase):
         """
         logger.info("📊 期間別分析開始...")
         
-        if RaceLevelAnalyzer is None:
-            raise ImportError("RaceLevelAnalyzerが利用できません")
+        if REQIAnalyzer is None:
+            raise ImportError("REQIAnalyzerが利用できません")
         
         try:
             # 期間が指定されていない場合は自動生成
@@ -323,7 +332,7 @@ class PeriodAnalysisUnifiedAnalyzer(UnifiedAnalyzerBase):
             )
             
             # 一時的な分析器を作成
-            self.race_analyzer = RaceLevelAnalyzer(temp_config, self.enable_stratified)
+            self.race_analyzer = REQIAnalyzer(temp_config, self.enable_stratified)
             
             # グローバル変数を設定（analyze_by_periods_optimizedが使用するため）
             import analyze_horse_racelevel

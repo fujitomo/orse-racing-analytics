@@ -505,7 +505,7 @@ class RacePlotter:
             correlation=correlation_stats["correlation_win_max"],
             model=correlation_stats["model_win_max"],
             r2=correlation_stats["r2_win_max"],
-            feature_name="最高レースレベルと勝率",
+            feature_name="最高競走経験質指数（REQI）と勝率",
             x_column="最高レベル",
             y_column="win_rate"
         )
@@ -516,7 +516,7 @@ class RacePlotter:
             correlation=correlation_stats["correlation_place_max"],
             model=correlation_stats["model_place_max"],
             r2=correlation_stats["r2_place_max"],
-            feature_name="最高レースレベルと複勝率",
+            feature_name="最高競走経験質指数（REQI）と複勝率",
             x_column="最高レベル",
             y_column="place_rate"
         )
@@ -527,7 +527,7 @@ class RacePlotter:
             correlation=correlation_stats["correlation_win_avg"],
             model=correlation_stats["model_win_avg"],
             r2=correlation_stats["r2_win_avg"],
-            feature_name="平均レースレベルと勝率",
+            feature_name="平均競走経験質指数（REQI）と勝率",
             x_column="平均レベル",
             y_column="win_rate"
         )
@@ -538,7 +538,7 @@ class RacePlotter:
             correlation=correlation_stats["correlation_place_avg"],
             model=correlation_stats["model_place_avg"],
             r2=correlation_stats["r2_place_avg"],
-            feature_name="平均レースレベルと複勝率",
+            feature_name="平均競走経験質指数（REQI）と複勝率",
             x_column="平均レベル",
             y_column="place_rate"
         )
@@ -747,7 +747,7 @@ class RacePlotter:
         if class_column:
             df_analysis['レース格'] = df_analysis[class_column].map(grade_mapping).fillna("その他")
         else:
-            # クラス情報がない場合はレースレベルで代用
+            # クラス情報がない場合は競走経験質指数（REQI）で代用
             def level_to_grade(level):
                 if level >= 8.5:
                     return "G1相当"

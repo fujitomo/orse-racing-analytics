@@ -846,7 +846,7 @@ class IndividualElementValidator:
 2. **統計的有意性:** {self._count_significant_elements(results)}つの要素で統計的有意な相関を確認
 3. **実用性評価:** 算出された重み付けは実用的な予測システムの構築に適用可能
 
-これらの結果は、次節の統合分析において合成特徴量`HorseRaceLevel`の算出に活用される。
+これらの結果は、次節の統合分析において合成特徴量`HorseREQI`の算出に活用される。
 """
         
         return report

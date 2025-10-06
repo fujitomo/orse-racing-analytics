@@ -217,7 +217,7 @@ class OddsComparisonAnalyzer:
             calculation_details = WeightManager.get_calculation_details()
             
             logger.info("📊 ========== オッズ分析でグローバル重み使用 ==========")
-            logger.info("✅ グローバル重みシステムを使用してHorseRaceLevel計算:")
+            logger.info("✅ グローバル重みシステムを使用してHorseREQI計算:")
             logger.info(f"   📊 グレード重み: {WEIGHTS['grade_weight']:.4f} ({WEIGHTS['grade_weight']*100:.2f}%)")
             logger.info(f"   📊 場所重み: {WEIGHTS['venue_weight']:.4f} ({WEIGHTS['venue_weight']*100:.2f}%)")
             logger.info(f"   📊 距離重み: {WEIGHTS['distance_weight']:.4f} ({WEIGHTS['distance_weight']*100:.2f}%)")
@@ -237,7 +237,7 @@ class OddsComparisonAnalyzer:
             logger.info(f"   📊 距離重み: {WEIGHTS['distance_weight']:.4f} ({WEIGHTS['distance_weight']*100:.2f}%)")
             logger.info("=" * 60)
         
-        # 基本レースレベルの計算
+        # 基本競走経験質指数（REQI）の計算
         df['base_race_level'] = (
             df['grade_level'] * WEIGHTS['grade_weight'] +
             df['venue_level'] * WEIGHTS['venue_weight'] +
@@ -248,7 +248,7 @@ class OddsComparisonAnalyzer:
         df = self._apply_historical_result_weights(df)
         
         # 馬ごとの集約
-        logger.info("🐎 馬ごとのHorseRaceLevel集約開始...")
+        logger.info("🐎 馬ごとのHorseREQI集約開始...")
         
         # 【最適化】大量データの場合はgroupbyで一括計算
         if len(df) > 50000:  # 5万レース以上の場合
@@ -274,10 +274,10 @@ class OddsComparisonAnalyzer:
                 if len(horse_data) < self.min_races:
                     continue
                 
-                # 平均レースレベル（AvgRaceLevel）
+                # 平均競走経験質指数（REQI）（AvgREQI）
                 avg_race_level = horse_data['race_level'].mean()
                 
-                # 最高レースレベル（MaxRaceLevel）
+                # 最高競走経験質指数（REQI）（MaxREQI）
                 max_race_level = horse_data['race_level'].max()
                 
                 # 複勝率
@@ -365,7 +365,7 @@ class OddsComparisonAnalyzer:
         - 統計的に妥当な調整係数を適用
         
         Args:
-            avg_race_level: 基本レースレベル
+            avg_race_level: 基本競走経験質指数（REQI）
             place_rate: 複勝率（過去実績の代理指標）
             total_sample_size: 全体サンプル数（調整強度決定用）
             
@@ -374,13 +374,13 @@ class OddsComparisonAnalyzer:
         """
         # レポート5.1.3準拠の調整係数算出
         if place_rate >= 0.5:
-            # 高成績馬: レースレベルを1.0-1.2倍に調整
+            # 高成績馬: 競走経験質指数（REQI）を1.0-1.2倍に調整
             adjustment_factor = 1.0 + (place_rate - 0.5) * 0.4
         elif place_rate >= 0.3:
             # 標準成績馬: 基本値を維持
             adjustment_factor = 1.0
         else:
-            # 低成績馬: レースレベルを0.8-1.0倍に調整
+            # 低成績馬: 競走経験質指数（REQI）を0.8-1.0倍に調整
             adjustment_factor = 1.0 - (0.3 - place_rate) * 0.67
         
         # 調整係数の上限・下限設定（統計的安定性確保）
@@ -476,7 +476,7 @@ class OddsComparisonAnalyzer:
         - 統計的に妥当な時間的分離を実現
         """
         if '年月日' not in df.columns:
-            logger.warning("年月日列が見つかりません。基本レースレベルをそのまま使用します。")
+            logger.warning("年月日列が見つかりません。基本競走経験質指数（REQI）をそのまま使用します。")
             df['race_level'] = df['base_race_level'].copy()
             return df
             
@@ -523,7 +523,7 @@ class OddsComparisonAnalyzer:
                     else:
                         adjustment_factor = 1.0 - (0.3 - past_place_rate) * 0.67  # 0.8-1.0倍
                     
-                    # レースレベルに調整係数を適用
+                    # 競走経験質指数（REQI）に調整係数を適用
                     current_idx = horse_data.index[idx]
                     df.loc[current_idx, 'race_level'] = df.loc[current_idx, 'base_race_level'] * adjustment_factor
                 
@@ -1030,7 +1030,7 @@ class OddsComparisonAnalyzer:
         
         logger.info("回帰分析完了")
         logger.info(f"オッズベースライン R²: {results['odds_baseline']['r2_test']:.4f}")
-        logger.info(f"HorseRaceLevel R²: {results['horse_race_level']['r2_test']:.4f}")
+        logger.info(f"HorseREQI R²: {results['horse_race_level']['r2_test']:.4f}")
         logger.info(f"統合モデル R²: {results['combined_model']['r2_test']:.4f}")
         logger.info(f"H2仮説サポート: {h2_verification['h2_hypothesis_supported']}")
         
@@ -1277,7 +1277,7 @@ class OddsComparisonAnalyzer:
                 f.write("| モデル | 検証期間R² | MSE | MAE |\n")
                 f.write("|--------|------------|-----|-----|\n")
                 f.write(f"| オッズベースライン | {regression_results['odds_baseline']['r2_test']:.4f} | {regression_results['odds_baseline']['mse_test']:.6f} | {regression_results['odds_baseline']['mae_test']:.6f} |\n")
-                f.write(f"| HorseRaceLevel | {regression_results['horse_race_level']['r2_test']:.4f} | {regression_results['horse_race_level']['mse_test']:.6f} | {regression_results['horse_race_level']['mae_test']:.6f} |\n")
+                f.write(f"| HorseREQI | {regression_results['horse_race_level']['r2_test']:.4f} | {regression_results['horse_race_level']['mse_test']:.6f} | {regression_results['horse_race_level']['mae_test']:.6f} |\n")
                 f.write(f"| 統合モデル | {regression_results['combined_model']['r2_test']:.4f} | {regression_results['combined_model']['mse_test']:.6f} | {regression_results['combined_model']['mae_test']:.6f} |\n\n")
                 
                 f.write("### 2.2 H2仮説検証結果（統計的検定付き）\n\n")
@@ -1296,7 +1296,7 @@ class OddsComparisonAnalyzer:
                         f.write("\n")
                         
                         improvement = h2['combined_r2'] - h2['odds_r2']
-                        f.write(f"統合モデル（HorseRaceLevel + オッズ）のR²（{h2['combined_r2']:.4f}）が")
+                        f.write(f"統合モデル（HorseREQI + オッズ）のR²（{h2['combined_r2']:.4f}）が")
                         f.write(f"オッズベースラインのR²（{h2['odds_r2']:.4f}）を{improvement:.4f}上回り、")
                         f.write(f"この差は統計的に有意です（p < 0.05）。\n\n")
                     else:
@@ -1310,7 +1310,7 @@ class OddsComparisonAnalyzer:
                     if h2.get('simple_comparison', False):
                         f.write("⚠️ **H2仮説は数値的に支持されました（統計的検定なし）**\n\n")
                         improvement = h2['combined_r2'] - h2['odds_r2']
-                        f.write(f"統合モデル（HorseRaceLevel + オッズ）のR²（{h2['combined_r2']:.4f}）が")
+                        f.write(f"統合モデル（HorseREQI + オッズ）のR²（{h2['combined_r2']:.4f}）が")
                         f.write(f"オッズベースラインのR²（{h2['odds_r2']:.4f}）を{improvement:.4f}上回りました。\n")
                         f.write("**注意**: 統計的有意性は検証されていません。\n\n")
                     else:
@@ -1329,7 +1329,7 @@ class OddsComparisonAnalyzer:
             if 'h2_verification' in regression_results:
                 best_model = max([
                     ('オッズベースライン', regression_results['odds_baseline']['r2_test']),
-                    ('HorseRaceLevel', regression_results['horse_race_level']['r2_test']),
+                    ('HorseREQI', regression_results['horse_race_level']['r2_test']),
                     ('統合モデル', regression_results['combined_model']['r2_test'])
                 ], key=lambda x: x[1])
                 

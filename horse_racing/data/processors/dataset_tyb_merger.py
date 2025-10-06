@@ -130,7 +130,7 @@ class DatasetTYBMerger:
             
             tyb_df = tyb_df.rename(columns=tyb_columns_rename)
             
-            # レースレベルでの統合（場コード + レースNo）
+            # 競走経験質指数（REQI）での統合（場コード + レースNo）
             merge_columns = []
             
             # 場コード
@@ -143,7 +143,7 @@ class DatasetTYBMerger:
                 merge_columns.append('レースNo')
             
             if merge_columns:
-                # TYBデータをレースレベルで集約
+                # TYBデータを競走経験質指数（REQI）で集約
                 tyb_race_agg = self.aggregate_tyb_by_race(tyb_df)
                 
                 # データ結合
@@ -206,13 +206,13 @@ class DatasetTYBMerger:
     
     def aggregate_tyb_by_race(self, tyb_df: pd.DataFrame) -> pd.DataFrame:
         """
-        TYBデータをレースレベルで集約
+        TYBデータを競走経験質指数（REQI）で集約
         
         Args:
             tyb_df: TYBデータフレーム
             
         Returns:
-            レースレベルで集約されたTYBデータ
+            競走経験質指数（REQI）で集約されたTYBデータ
         """
         try:
             # レース単位での集約

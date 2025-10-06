@@ -1,6 +1,6 @@
 ﻿"""
-レースレベル分析モジュール
-レースのグレードや賞金額などからレースレベルを分析します。
+競走経験質指数（REQI）分析モジュール
+レースのグレードや賞金額などから競走経験質指数（REQI）を分析します。
 """
 
 from typing import Dict, Any, Tuple
@@ -39,8 +39,8 @@ loader_logger.setLevel(logging.WARNING)
 from horse_racing.utils.font_config import setup_japanese_fonts
 setup_japanese_fonts(suppress_warnings=True)
 
-class RaceLevelAnalyzer(BaseAnalyzer):
-    """レースレベル分析クラス"""
+class REQIAnalyzer(BaseAnalyzer):
+    """競走経験質指数（REQI）分析クラス"""
 
     # グレード定義（動的計算により更新される）
     GRADE_LEVELS = {
@@ -52,7 +52,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         6: {"name": "L", "weight": None, "base_level": None}
     }
 
-    # レースレベル計算の重み付け定義（動的計算により更新される）
+    # 競走経験質指数（REQI）計算の重み付け定義（動的計算により更新される）
     LEVEL_WEIGHTS = {
         "grade_weight": None,
         "venue_weight": None,
@@ -69,6 +69,35 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         self.class_column = None  # 実際のクラスカラム名を動的に設定
         self.enable_stratified_analysis = enable_stratified_analysis  # 層別分析の有効/無効
         self._weights_calculated = False  # 重み計算済みフラグ
+
+    def _get_period_output_dir(self) -> Path:
+        """期間別の可視化出力先ディレクトリを取得（output_dir/temp/<期間名>）
+
+        - 期間名は`_override_period_info`があればそれを使用
+        - なければデータの年カラムから`<min>-<max>`で推定
+        """
+        base_temp_dir = Path(self.config.output_dir) / 'temp'
+        # 期間名の決定
+        period_name = None
+        if hasattr(self, '_override_period_info') and getattr(self, '_override_period_info'):
+            try:
+                period_name = self._override_period_info.get('period_name')
+            except Exception:
+                period_name = None
+        if not period_name:
+            try:
+                if '年' in self.df.columns and len(self.df) > 0:
+                    years = self.df['年'].dropna().astype(int)
+                    if len(years) > 0:
+                        period_name = f"{years.min()}-{years.max()}"
+            except Exception:
+                period_name = None
+        if not period_name:
+            period_name = 'unknown-period'
+
+        period_dir = base_temp_dir / period_name
+        period_dir.mkdir(parents=True, exist_ok=True)
+        return period_dir
 
     def get_level_weights(self) -> Dict[str, float]:
         """重みを取得（グローバル重み設定完了で設定された重みを優先使用）"""
@@ -329,7 +358,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             raise
 
     def calculate_feature(self) -> pd.DataFrame:
-        """レースレベルの計算"""
+        """競走経験質指数（REQI）の計算"""
         df = self.df.copy()
         
         # カラム名の前後の空白を除去
@@ -361,7 +390,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         available_columns = [col for col in required_columns if col in df.columns]
         df = df[available_columns]
 
-        # レースレベル関連の特徴量を追加
+        # 競走経験質指数（REQI）関連の特徴量を追加
         df["race_level"] = 0.0
         df["is_win"] = df["着順"] == 1
         df["is_placed"] = df["着順"] <= 3
@@ -382,7 +411,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         w_distance = weights['distance_weight']
         
         # 📝 重み使用情報をログに出力
-        logger.info("📊 ========== レースレベル分析で重み使用 ==========")
+        logger.info("📊 ========== 競走経験質指数（REQI）分析で重み使用 ==========")
         logger.info("⚖️ 特徴量計算で使用される重み:")
         logger.info(f"   📊 グレード重み: {w_grade:.4f} ({w_grade*100:.2f}%)")
         logger.info(f"   📊 場所重み: {w_venue:.4f} ({w_venue*100:.2f}%)")
@@ -390,7 +419,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         logger.info("=" * 60)
         
         # 【改良】時間的分離による複勝結果統合（循環論理を回避）
-        # 基本レースレベルを計算
+        # 基本競走経験質指数（REQI）を計算
         base_race_level = (df["grade_level"] * w_grade + 
                           df["venue_level"] * w_venue + 
                           df["distance_level"] * w_distance)
@@ -405,7 +434,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
 
     def verify_hypothesis_h2_baseline_comparison(self, horse_stats: pd.DataFrame) -> Dict[str, Any]:
         """
-        仮説H2の検証: HorseRaceLevelを説明変数に加えた回帰モデルは、
+        仮説H2の検証: HorseREQIを説明変数に加えた回帰モデルは、
         ベースライン（単勝オッズモデル等）より高い説明力を持つ
         """
         try:
@@ -419,7 +448,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             
             results = {}
             
-            # 1. 提案手法（HorseRaceLevel）
+            # 1. 提案手法（HorseREQI）
             from sklearn.linear_model import LinearRegression
             from sklearn.metrics import r2_score, mean_squared_error
             from scipy.stats import pearsonr
@@ -511,7 +540,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             
             # 6. 統計的有意性の比較
             logger.info(f"📊 H2検証結果:")
-            logger.info(f"   提案手法 (HorseRaceLevel): R²={r2_proposed:.4f}, r={corr_proposed:.3f}")
+            logger.info(f"   提案手法 (HorseREQI): R²={r2_proposed:.4f}, r={corr_proposed:.3f}")
             
             for baseline_name, baseline_data in results.items():
                 if baseline_name != 'proposed_model':
@@ -1067,9 +1096,19 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             from horse_racing.core.weight_manager import WeightManager
             if WeightManager.is_initialized():
                 logger.info("♻️ グローバル重みを適用します（再計算なし）")
+                # グローバル重みを取得してtrain_weightsとして使用
+                global_weights = WeightManager.get_weights()
+                train_weights = {
+                    'grade_weight': global_weights.get('grade_weight', 0.65),
+                    'venue_weight': global_weights.get('venue_weight', 0.30),
+                    'distance_weight': global_weights.get('distance_weight', 0.05),
+                    'train_r2': 0.0,  # グローバル重み使用時は訓練R²は参考値
+                    'from_global': True  # グローバル重みから取得したことを示すフラグ
+                }
+                logger.info(f"📊 グローバル重みを適用: grade={train_weights['grade_weight']:.3f}, venue={train_weights['venue_weight']:.3f}, distance={train_weights['distance_weight']:.3f}")
             else:
                 logger.info("⚖️ 訓練データで重みを算出中...")
-            train_weights = self._calculate_optimal_weights(train_horse_stats)
+                train_weights = self._calculate_optimal_weights(train_horse_stats)
             
             # 3. 検証データで馬ごと統計を計算（未来情報を使わない）
             logger.info("📊 検証データで馬ごと統計を計算中...")
@@ -1090,9 +1129,17 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             }
             
             logger.info(f"✅ Out-of-Time検証完了")
-            logger.info(f"   📊 訓練期間性能: R²={train_weights.get('train_r2', 0):.3f}")
-            logger.info(f"   📊 検証期間性能: R²={test_performance.get('r_squared', 0):.3f}")
-            logger.info(f"   📊 汎化性能: {test_performance.get('r_squared', 0)/train_weights.get('train_r2', 1)*100:.1f}%")
+            
+            # グローバル重み使用時と通常時で異なるログを出力
+            if train_weights.get('from_global', False):
+                logger.info(f"   📊 使用重み: グローバル重み（2010-2020年訓練済み）")
+                logger.info(f"   📊 検証期間性能: R²={test_performance.get('r_squared', 0):.3f}")
+            else:
+                logger.info(f"   📊 訓練期間性能: R²={train_weights.get('train_r2', 0):.3f}")
+                logger.info(f"   📊 検証期間性能: R²={test_performance.get('r_squared', 0):.3f}")
+                train_r2 = train_weights.get('train_r2', 0)
+                if train_r2 > 0:
+                    logger.info(f"   📊 汎化性能: {test_performance.get('r_squared', 0)/train_r2*100:.1f}%")
             
             return results
             
@@ -1110,9 +1157,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 logger.error(f"❌ 必要なカラムが不足: {missing_cols}")
                 return pd.DataFrame()
             
-            # レースレベルが計算されていない場合は計算
+            # 競走経験質指数（REQI）が計算されていない場合は計算
             if 'race_level' not in data.columns or data['race_level'].isna().all():
-                logger.info("🔧 レースレベルを計算中...")
+                logger.info("🔧 競走経験質指数（REQI）を計算中...")
                 data = self._calculate_race_level_for_data(data)
             
             horse_stats = []
@@ -1128,7 +1175,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 wins = len(horse_data[horse_data['着順'] == 1])
                 places = len(horse_data[horse_data['着順'].isin([1, 2, 3])])
                 
-                # レースレベル統計
+                # 競走経験質指数（REQI）統計
                 avg_race_level = horse_data['race_level'].mean()
                 max_race_level = horse_data['race_level'].max()
                 
@@ -1201,10 +1248,10 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 
                 # 訓練期間での統計を計算（重み計算はスキップ）
                 train_data = self.df[(self.df['年'] >= 2010) & (self.df['年'] <= 2020)].copy()
-                if len(train_data) == 0:
-                    logger.warning("⚠️ 訓練期間（2010-2020年）データがありません。全データで計算します。")
-                    train_data = self.df.copy()
-                
+            if len(train_data) == 0:
+                logger.warning("⚠️ 訓練期間（2010-2020年）データがありません。全データで計算します。")
+                train_data = self.df.copy()
+            
                 train_horse_stats = self._calculate_horse_stats_for_data(train_data)
                 
                 if len(train_horse_stats) == 0:
@@ -1213,27 +1260,37 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 
                 return self.LEVEL_WEIGHTS
             else:
-                logger.warning("⚠️ グローバル重みが未初期化です。個別計算にフォールバックします")
-                # フォールバック: 個別計算
-                train_data = self.df[(self.df['年'] >= 2010) & (self.df['年'] <= 2020)].copy()
+                logger.warning("⚠️ グローバル重みが未初期化です。グローバル変数から全データを取得して個別計算します")
+                # フォールバック: グローバル変数から全データを取得
+                import sys
+                main_module = sys.modules.get('__main__')
                 
-                if len(train_data) == 0:
-                    logger.warning("⚠️ 訓練期間（2010-2020年）データがありません。全データで計算します。")
-                    train_data = self.df.copy()
-                
-                logger.info("📊 訓練期間（2010-2020年）データでの動的重み計算:")
-                logger.info(f"   対象データ: {len(train_data):,}行")
-                logger.info(f"   対象期間: {train_data['年'].min()}-{train_data['年'].max()}年")
-                
-                # 訓練期間データで動的重み計算を実行
-                training_weights = self.calculate_dynamic_weights(train_data)
-                
-                # 訓練期間での統計を計算
-                train_horse_stats = self._calculate_horse_stats_for_data(train_data)
-                
-                if len(train_horse_stats) == 0:
-                    logger.warning("⚠️ 訓練期間の馬統計データが空です")
-                    return training_weights
+                if main_module and hasattr(main_module, '_global_data'):
+                    global_data = getattr(main_module, '_global_data')
+                    if global_data is not None:
+                        logger.info("💾 グローバル変数から全データを取得中...")
+                        train_data = global_data[(global_data['年'] >= 2010) & (global_data['年'] <= 2020)].copy()
+                        
+                        if len(train_data) == 0:
+                            logger.warning("⚠️ グローバル変数にも訓練期間（2010-2020年）データがありません。全データで計算します。")
+                            train_data = global_data.copy()
+                        
+                        logger.info("📊 訓練期間（2010-2020年）データでの動的重み計算:")
+            logger.info(f"   対象データ: {len(train_data):,}行")
+            logger.info(f"   対象期間: {train_data['年'].min()}-{train_data['年'].max()}年")
+            
+            # 訓練期間データで動的重み計算を実行
+            training_weights = self.calculate_dynamic_weights(train_data)
+            
+            # 訓練期間での統計を計算
+            train_horse_stats = self._calculate_horse_stats_for_data(train_data)
+            
+            if len(train_horse_stats) == 0:
+                logger.warning("⚠️ 訓練期間の馬統計データが空です")
+                return training_weights
+            else:
+                logger.error("❌ グローバル変数がNoneです")
+                return {}
             
             # 訓練期間での性能を評価
             target_col = 'place_rate'
@@ -1345,7 +1402,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             # 🔥 【修正】実際のデータから相関係数を計算
             from scipy.stats import pearsonr, spearmanr
             
-            # 平均レースレベル vs 複勝率の相関
+            # 平均競走経験質指数（REQI） vs 複勝率の相関
             if 'avg_race_level' in test_horse_stats.columns and 'place_rate' in test_horse_stats.columns:
                 valid_data_avg = test_horse_stats.dropna(subset=['avg_race_level', 'place_rate'])
                 if len(valid_data_avg) >= 3:
@@ -1356,7 +1413,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             else:
                 corr_avg, p_avg, r2_avg = 0.0, 1.0, 0.0
             
-            # 最高レースレベル vs 複勝率の相関
+            # 最高競走経験質指数（REQI） vs 複勝率の相関
             if 'max_race_level' in test_horse_stats.columns and 'place_rate' in test_horse_stats.columns:
                 valid_data_max = test_horse_stats.dropna(subset=['max_race_level', 'place_rate'])
                 if len(valid_data_max) >= 3:
@@ -1451,7 +1508,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             logger.info("🔍 【修正版】実測値による分析結果:")
             logger.info(f"   検証期間R²: {test_r2:.3f} (実測値)")
             logger.info(f"   検証期間相関: {test_correlation:.3f} (実測値)")
-                       
+            
             
             # 層別分析の実行（有効な場合のみ）
             if self.enable_stratified_analysis:
@@ -1669,9 +1726,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             return {'error': str(e)}
 
     def _calculate_race_level_for_data(self, data: pd.DataFrame) -> pd.DataFrame:
-        """指定されたデータでレースレベルを計算"""
+        """指定されたデータで競走経験質指数（REQI）を計算"""
         try:
-            # 基本的なレースレベル計算（簡易版）
+            # 基本的な競走経験質指数（REQI）計算（簡易版）
             data = data.copy()
             
             # グレードレベルの簡易計算
@@ -1681,13 +1738,13 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             else:
                 data['grade_level'] = 1  # デフォルト値
             
-            # レースレベルの簡易計算
+            # 競走経験質指数（REQI）の簡易計算
             data['race_level'] = data['grade_level']
             
             return data
             
         except Exception as e:
-            logger.error(f"❌ レースレベル計算エラー: {str(e)}")
+            logger.error(f"❌ 競走経験質指数（REQI）計算エラー: {str(e)}")
             return data
 
     def visualize(self) -> None:
@@ -1805,9 +1862,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         if horse_data:
             df_temporal = pd.DataFrame(horse_data)
             plt.scatter(df_temporal['初期レベル'], df_temporal['後期成績'], alpha=0.5)
-            plt.xlabel('初期レースレベル')
+            plt.xlabel('初期競走経験質指数（REQI）')
             plt.ylabel('後期複勝率')
-            plt.title('初期レースレベルと後期成績の関係')
+            plt.title('初期競走経験質指数（REQI）と後期成績の関係')
             
             # 回帰直線の追加
             z = np.polyfit(df_temporal['初期レベル'], df_temporal['後期成績'], 1)
@@ -1821,7 +1878,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         """メカニズム分析の可視化"""
         plt.figure(figsize=(12, 6))
 
-        # レースレベルと成績の関係をプロット
+        # 競走経験質指数（REQI）と成績の関係をプロット
         level_performance = []
         for horse in self.df['馬名'].unique():
             horse_races = self.df[self.df['馬名'] == horse]
@@ -1844,8 +1901,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             z = np.polyfit(df_mechanism['平均レベル'], df_mechanism['勝率'], 1)
             p = np.poly1d(z)
             plt.plot(df_mechanism['平均レベル'], p(df_mechanism['平均レベル']), "r--", alpha=0.8)
-            plt.title('レースレベルと勝率の関係')
-            plt.xlabel('平均レースレベル')
+            plt.title('競走経験質指数（REQI）と勝率の関係')
+            plt.xlabel('平均競走経験質指数（REQI）')
             plt.ylabel('勝率')
 
             plt.subplot(1, 2, 2)
@@ -1853,8 +1910,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             z = np.polyfit(df_mechanism['平均レベル'], df_mechanism['複勝率'], 1)
             p = np.poly1d(z)
             plt.plot(df_mechanism['平均レベル'], p(df_mechanism['平均レベル']), "r--", alpha=0.8)
-            plt.title('レースレベルと複勝率の関係')
-            plt.xlabel('平均レースレベル')
+            plt.title('競走経験質指数（REQI）と複勝率の関係')
+            plt.xlabel('平均競走経験質指数（REQI）')
             plt.ylabel('複勝率')
 
             plt.tight_layout()
@@ -1885,7 +1942,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                                xytext=(5, 5), textcoords='offset points')
 
                 plt.title(f'{confounder}による交絡効果')
-                plt.xlabel('平均レースレベル')
+                plt.xlabel('平均競走経験質指数（REQI）')
                 plt.ylabel('複勝率')
 
                 plt.savefig(output_dir / f'confounding_{confounder}.png')
@@ -1950,8 +2007,8 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             features_to_plot = [
                 {
                     'x_col': 'race_level',
-                    'x_label': 'レースレベル',
-                    'title': 'レースレベルと複勝率の関係',
+                    'x_label': '競走経験質指数（REQI）',
+                    'title': '競走経験質指数（REQI）と複勝率の関係',
                     'filename': 'race_level_place_rate_scatter'
                 },
                 {
@@ -2082,7 +2139,9 @@ class RaceLevelAnalyzer(BaseAnalyzer):
             plt.subplots_adjust(right=0.75)
             
             # 保存（日本語フォント設定を確実に適用）
-            output_path = self.output_dir / f"{config['filename']}.png"
+            # 可視化は output_dir/temp/<期間名>/ に保存
+            period_dir = self._get_period_output_dir()
+            output_path = period_dir / f"{config['filename']}.png"
             
             # 日本語フォント設定を再適用
             from horse_racing.utils.font_config import setup_japanese_fonts
@@ -2237,7 +2296,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         prize_diff = max_prize - min_prize
         relative_diff = prize_diff / max_prize if max_prize > 0 else 0
         
-        
+        # 競馬場間の賞金差が小さい場合は格式ベースに切り替え
         venue_level = self._calculate_venue_level_by_prestige(df_copy)
         
         # if max_prize == min_prize or abs(max_prize - min_prize) < 1e-6 or relative_diff < 0.05:
@@ -2399,15 +2458,15 @@ class RaceLevelAnalyzer(BaseAnalyzer):
         """
         時間的分離による複勝結果重み付けを適用
         
-        各馬の過去の複勝実績に基づいて、現在のレースレベルを調整する。
+        各馬の過去の複勝実績に基づいて、現在の競走経験質指数（REQI）を調整する。
         これにより循環論理を回避しつつ、複勝結果の価値を統合する。
         
         Args:
             df: レースデータフレーム
-            base_race_level: 基本レースレベル
+            base_race_level: 基本競走経験質指数（REQI）
             
         Returns:
-            pd.Series: 複勝実績調整済みレースレベル
+            pd.Series: 複勝実績調整済み競走経験質指数（REQI）
         """
         # データをコピーして作業
         df_work = df.copy()
@@ -3969,7 +4028,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 f.write("# 層別分析結果レポート\n\n")
                 f.write(f"生成日時: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                 f.write("## 📊 分析概要\n\n")
-                f.write("本レポートは、HorseRaceLevelと複勝率の関係について、年齢層別・経験数別・距離カテゴリ別の層別分析結果をまとめたものです。\n\n")
+                f.write("本レポートは、HorseREQIと複勝率の関係について、年齢層別・経験数別・距離カテゴリ別の層別分析結果をまとめたものです。\n\n")
                 
                 # 1. 年齢層別分析結果
                 if 'age_analysis' in results:
@@ -3998,7 +4057,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
     def _write_age_analysis_section(self, f, age_results: Dict[str, Any]) -> None:
         """年齢層別分析セクションの書き込み"""
         f.write("## 🐎 年齢層別分析結果\n\n")
-        f.write("### 分析結果（平均レースレベル vs 複勝率）\n\n")
+        f.write("### 分析結果（平均競走経験質指数（REQI） vs 複勝率）\n\n")
         f.write("| 年齢層 | サンプル数 | 相関係数 | R² | p値 | 効果サイズ | 95%信頼区間 |\n")
         f.write("|-------|----------|---------|----|----|----------|------------|\n")
         
@@ -4018,14 +4077,14 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 f.write(f"| {age_group} | {sample_size}頭 | {correlation:.3f} | {r2:.3f} | {p_str} | {effect_size} | {ci_str} |\n")
         
         f.write("\n### 統計的知見\n\n")
-        f.write("- 年齢が高いほど、HorseRaceLevelと複勝率の相関が強くなる傾向を確認\n")
+        f.write("- 年齢が高いほど、HorseREQIと複勝率の相関が強くなる傾向を確認\n")
         f.write("- 成熟した馬（4歳以上）では、レース経験の価値がより適切に評価される\n")
         f.write("- 若い馬（2歳）では、成長途上のため効果が限定的\n\n")
 
     def _write_experience_analysis_section(self, f, experience_results: Dict[str, Any]) -> None:
         """経験数別分析セクションの書き込み"""
         f.write("## 📈 経験数別分析結果\n\n")
-        f.write("### 分析結果（平均レースレベル vs 複勝率）\n\n")
+        f.write("### 分析結果（平均競走経験質指数（REQI） vs 複勝率）\n\n")
         f.write("| 経験数層 | サンプル数 | 相関係数 | R² | p値 | 効果サイズ | 95%信頼区間 |\n")
         f.write("|----------|----------|---------|----|----|----------|------------|\n")
         
@@ -4045,14 +4104,14 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 f.write(f"| {exp_group} | {sample_size}頭 | {correlation:.3f} | {r2:.3f} | {p_str} | {effect_size} | {ci_str} |\n")
         
         f.write("\n### 統計的知見\n\n")
-        f.write("- 経験数が多いほど、HorseRaceLevelと複勝率の相関が強くなる傾向を確認\n")
+        f.write("- 経験数が多いほど、HorseREQIと複勝率の相関が強くなる傾向を確認\n")
         f.write("- 豊富な経験を持つ馬（16戦以上）では、レース価値の評価がより安定\n")
         f.write("- 初期キャリア（1-5戦）では、評価の不安定性が見られる\n\n")
 
     def _write_distance_analysis_section(self, f, distance_results: Dict[str, Any]) -> None:
         """距離カテゴリ別分析セクションの書き込み"""
         f.write("## 🏃 距離カテゴリ別分析結果\n\n")
-        f.write("### 分析結果（平均レースレベル vs 複勝率）\n\n")
+        f.write("### 分析結果（平均競走経験質指数（REQI） vs 複勝率）\n\n")
         f.write("| 距離カテゴリ | サンプル数 | 相関係数 | R² | p値 | 効果サイズ | 95%信頼区間 |\n")
         f.write("|-------------|----------|---------|----|----|----------|------------|\n")
         
@@ -4072,7 +4131,7 @@ class RaceLevelAnalyzer(BaseAnalyzer):
                 f.write(f"| {dist_group} | {sample_size}頭 | {correlation:.3f} | {r2:.3f} | {p_str} | {effect_size} | {ci_str} |\n")
         
         f.write("\n### 統計的知見\n\n")
-        f.write("- 距離カテゴリによって、HorseRaceLevelの効果に差異が存在\n")
+        f.write("- 距離カテゴリによって、HorseREQIの効果に差異が存在\n")
         f.write("- 中距離・マイル戦で比較的高い相関を確認\n")
         f.write("- 距離適性による特徴量効果の違いが統計的に確認される\n\n")
 

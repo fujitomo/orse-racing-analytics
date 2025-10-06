@@ -1,6 +1,6 @@
 """
 因果関係分析モジュール
-レースレベルと成績の因果関係を分析します。
+競走経験質指数（REQI）と成績の因果関係を分析します。
 """
 
 from typing import Dict, Any
@@ -127,7 +127,7 @@ class CausalAnalyzer:
     
     def analyze_mechanism(self):
         """メカニズムの分析"""
-        # レースレベルと成績の関係性を詳細に分析
+        # 競走経験質指数（REQI）と成績の関係性を詳細に分析
         level_performance = []
         for horse in self.df['馬名'].unique():
             horse_races = self.df[self.df['馬名'] == horse]
@@ -195,7 +195,7 @@ class CausalAnalyzer:
     
     def _evaluate_specificity(self):
         """特異性の評価"""
-        # レースレベルが他の要因と比べて特に強い影響を持つか確認
+        # 競走経験質指数（REQI）が他の要因と比べて特に強い影響を持つか確認
         return True
     
     def _evaluate_temporality(self):
@@ -234,7 +234,7 @@ def generate_causal_analysis_report(results: dict, output_dir: Path):
     report_path.parent.mkdir(parents=True, exist_ok=True)
     
     with open(report_path, 'w', encoding='utf-8') as f:
-        f.write("# レースレベル因果推論分析レポート\n\n")
+        f.write("# 競走経験質指数（REQI）因果推論分析レポート\n\n")
         f.write(f"生成日時: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         
         # 時間的先行性の分析結果
@@ -296,7 +296,7 @@ def generate_causal_analysis_report(results: dict, output_dir: Path):
         f.write(f"- **{evidence_strength}**: {get_evidence_strength_explanation(evidence_strength)}\n\n")
         
         f.write("### 推奨される解釈\n")
-        f.write("1. **レースレベルと成績の関係**: ")
+        f.write("1. **競走経験質指数（REQI）と成績の関係**: ")
         if evidence_strength in ['強い', '中程度']:
             f.write("因果関係の存在が示唆されます\n")
         else:
@@ -319,11 +319,11 @@ def get_hill_criterion_explanation(criterion: str, value: bool) -> str:
             False: "条件によって結果が大きく異なる"
         },
         'specificity': {
-            True: "レースレベルは成績に特異的な影響を持つ",
+            True: "競走経験質指数（REQI）は成績に特異的な影響を持つ",
             False: "他の要因の影響が大きい可能性がある"
         },
         'temporality': {
-            True: "レースレベルの変化が成績の変化に先行",
+            True: "競走経験質指数（REQI）の変化が成績の変化に先行",
             False: "時間的な順序が不明確"
         },
         'biological_gradient': {

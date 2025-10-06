@@ -4,6 +4,7 @@
 """
 
 import pandas as pd
+import numpy as np
 from typing import Dict, Any, Optional
 import logging
 from scipy.stats import pearsonr
@@ -45,7 +46,7 @@ class WeightManager:
         if cls._initialized and not force_recalculate and not data_changed:
             logger.info("✅ 重みは既に初期化済みです（データ変更なし）。")
             return cls._global_weights
-        
+            
         if data_changed and cls._initialized:
             logger.info("🔄 データ変更を検出しました。重みを再計算します。")
         elif force_recalculate:
@@ -72,14 +73,14 @@ class WeightManager:
                     train_data = df.copy()
                 else:
                     logger.info("✅ 訓練データに全ての特徴量カラムが存在")
-                    
-                if len(train_data) == 0:
-                    logger.warning("⚠️ 訓練期間（2010-2020年）データがありません。全データで計算します。")
-                    train_data = df.copy()
             else:
                 logger.warning("⚠️ '年'列が見つかりません。全データで計算します。")
                 train_data = df.copy()
-                
+            
+            if len(train_data) == 0:
+                logger.warning("⚠️ 訓練期間（2010-2020年）データがありません。全データで計算します。")
+                train_data = df.copy()
+            
             # 最終的なデータの特徴量カラムチェック
             final_feature_cols = [col for col in train_data.columns if col.endswith('_level')]
             logger.info(f"📊 最終計算データの特徴量カラム: {final_feature_cols}")
@@ -91,13 +92,16 @@ class WeightManager:
             
             # 循環論理回避のため勝率ベース相関計算を使用
             try:
-                correlations = cls._calculate_feature_correlations_with_win_rate(train_data)
+                # 期間別と同一の前処理（芝フィルタ・特徴量生成の統一）
+                train_data = cls._prepare_training_data(train_data)
+                # 期間別と同じ相関定義（馬統計ベース、複勝率=place_rate）で算出
+                correlations = cls._calculate_feature_correlations_report_compliant(train_data, target_col='place_rate')
                 
                 # 特徴量レベルが存在しない場合はフォールバック重みを使用
                 if correlations is None or all(corr == 0.0 for corr in correlations.values()):
                     logger.warning("⚠️ 相関計算に失敗しました。循環論理回避版の固定重みを使用します。")
                     return cls._get_fallback_weights()
-                    
+                
                 logger.info("✅ 勝率ベース相関計算が成功しました")
                 
             except Exception as e:
@@ -126,7 +130,6 @@ class WeightManager:
             cls._log_weight_calculation_results(weights, correlations, train_data)
             
             return weights
-            
         except Exception as e:
             logger.error(f"❌ 動的重み計算エラー: {str(e)}")
             return cls._get_fallback_weights()
@@ -376,6 +379,88 @@ class WeightManager:
         
         logger.info("✅ 勝率ベース相関計算完了（循環論理回避）")
         return correlations
+
+    @classmethod
+    def _prepare_training_data(cls, df: pd.DataFrame) -> pd.DataFrame:
+        """期間別分析と同じ前処理で訓練データを整備。
+        - 2010-2020の年範囲（呼び出し側でもフィルタ済み）
+        - 芝レースのみ
+        - venue_levelはグレード優先で生成（フォールバック: 場コード/場名）
+        - distance_levelは期間別と同じ区分に統一
+        - grade_levelがなければ生成
+        """
+        df_prep = df.copy()
+        # 年フィルタ（保険）
+        if '年' in df_prep.columns:
+            df_prep = df_prep[(df_prep['年'] >= 2010) & (df_prep['年'] <= 2020)]
+        # 芝のみ
+        if '芝ダ障害コード' in df_prep.columns:
+            before = len(df_prep)
+            df_prep = df_prep[df_prep['芝ダ障害コード'] == '芝']
+            logger.info(f"📊 芝レースフィルタ: {before:,} → {len(df_prep):,}行")
+        # distance_level
+        if 'distance_level' not in df_prep.columns and '距離' in df_prep.columns:
+            distances = pd.to_numeric(df_prep['距離'], errors='coerce')
+            dist_level = np.ones(len(df_prep))
+            dist_level[(distances <= 1400)] = 0.85
+            dist_level[(distances > 1400) & (distances <= 1800)] = 1.00
+            dist_level[(distances > 1800) & (distances <= 2000)] = 1.35
+            dist_level[(distances > 2000) & (distances <= 2400)] = 1.45
+            dist_level[(distances > 2400)] = 1.25
+            df_prep['distance_level'] = dist_level
+        # venue_level（グレード優先）
+        if 'venue_level' not in df_prep.columns:
+            grade_col = None
+            for col in ['グレード_x', 'グレード_y', 'グレード']:
+                if col in df_prep.columns:
+                    grade_col = col
+                    break
+            if grade_col is not None:
+                grade_map = {1: 9, 11: 8, 12: 7, 2: 4, 3: 3, 4: 2, 5: 1, 6: 2}
+                df_prep[grade_col] = pd.to_numeric(df_prep[grade_col], errors='coerce')
+                df_prep['venue_level'] = df_prep[grade_col].map(grade_map).fillna(0)
+            elif '場コード' in df_prep.columns:
+                codes = pd.to_numeric(df_prep['場コード'], errors='coerce').fillna(0).astype(int)
+                venue_level = np.zeros(len(df_prep))
+                venue_level[np.isin(codes, [1, 5, 6])] = 9.0
+                venue_level[np.isin(codes, [2, 3, 8])] = 7.0
+                venue_level[codes == 7] = 4.0
+                df_prep['venue_level'] = venue_level
+            elif '場名' in df_prep.columns:
+                names = df_prep['場名'].astype(str)
+                venue_level = np.zeros(len(df_prep))
+                venue_level[names.isin(['東京', '京都', '阪神'])] = 9.0
+                venue_level[names.isin(['中山', '中京', '札幌'])] = 7.0
+                venue_level[names == '函館'] = 4.0
+                df_prep['venue_level'] = venue_level
+            else:
+                df_prep['venue_level'] = 0.0
+        # grade_level
+        if 'grade_level' not in df_prep.columns:
+            def map_grade(v):
+                if pd.isna(v):
+                    return 0
+                s = str(v).upper()
+                if s in ['1', 'G1']:
+                    return 9
+                if s in ['2', 'G2']:
+                    return 4
+                if s in ['3', 'G3']:
+                    return 3
+                if 'L' in s or 'リステッド' in s or s == '6':
+                    return 2
+                if 'OP' in s or '特別' in s or s == '5':
+                    return 1
+                return 0
+            src = None
+            for col in ['グレード_x', 'グレード_y', 'グレード']:
+                if col in df_prep.columns:
+                    src = col
+                    break
+            if src is not None:
+                df_prep['grade_level'] = df_prep[src].apply(map_grade)
+        logger.info("📋 訓練データ前処理を期間別と同一化しました")
+        return df_prep
     
     @classmethod
     def _calculate_feature_correlations_report_compliant(cls, df: pd.DataFrame, target_col: str) -> Dict[str, float]:

@@ -2,6 +2,6 @@
 競馬分析用アナライザーパッケージ
 """
 
-from .race_level_analyzer import RaceLevelAnalyzer
+from .race_level_analyzer import REQIAnalyzer
 
-__all__ = ['RaceLevelAnalyzer'] 
+__all__ = ['REQIAnalyzer'] 

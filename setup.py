@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name="horse_racing",
     version="0.1.0",
-    description="競馬のレースデータを分析し、レースレベルや成績の傾向を可視化するツール",
+    description="競馬のレースデータを分析し、競走経験質指数（REQI）や成績の傾向を可視化するツール",
     author="Tomohiro Fujino",
     author_email="",
     url="https://github.com/yourusername/horse-racing-analysis",
