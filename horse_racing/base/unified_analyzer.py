@@ -86,7 +86,7 @@ class UnifiedAnalyzerBase(ABC):
             logger.warning("⚠️ フォールバック処理を実行します...")
         
         # グローバル変数がない場合のみ新規読み込み（初回起動時の通常フロー）
-        logger.info("ℹ️ グローバル変数が未設定のため、新規読み込みルートに切り替えます")
+        # logger.info("ℹ️ グローバル変数が未設定のため、新規読み込みルートに切り替えます")
         
         # 直接CSVを読み込み統合（*_formatted_dataset.csv を優先、なければ *.csv を再帰探索）
         try:

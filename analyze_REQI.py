@@ -22,6 +22,7 @@ import time
 import psutil
 import os
 from functools import wraps
+
 warnings.filterwarnings('ignore')
 
 # 既存のインポートも保持
@@ -30,6 +31,7 @@ try:
     from horse_racing.analyzers.race_level_analyzer import REQIAnalyzer
     from horse_racing.core.weight_manager import WeightManager, get_global_weights
     from horse_racing.analyzers.odds_comparison_analyzer import OddsComparisonAnalyzer
+    from horse_racing.base.unified_analyzer import create_unified_analyzer
 except ImportError as e:
     logging.warning(f"一部のモジュールが見つかりません: {e}")
     logging.info("基本的な分析機能のみ利用できます")
@@ -168,7 +170,7 @@ def log_processing_step(step_name: str, start_time: float, current_idx: int, tot
         avg_time_per_item = elapsed / current_idx
         remaining_items = total_count - current_idx
         eta = remaining_items * avg_time_per_item
-        
+
         logger.info(f"⏳ [{step_name}] 進捗: {current_idx:,}/{total_count:,} "
                    f"({current_idx/total_count*100:.1f}%) - "
                    f"経過時間: {elapsed:.1f}秒, 残り予想: {eta:.1f}秒")
@@ -279,7 +281,8 @@ def initialize_global_weights(args) -> bool:
         logger.info("🎯 グローバル重み初期化開始...")
         
         # データの読み込み（各分析タイプに応じて）
-        if args.odds_analysis:
+        # if args.odds_analysis:
+        if False:
             # オッズ分析用データ
             data_path = Path(args.odds_analysis)
             if not data_path.exists():
@@ -2769,7 +2772,7 @@ def main():
     parser.add_argument('--end-date', help='分析終了日（YYYYMMDD形式）')
     
     # 新機能のオプション
-    parser.add_argument('--odds-analysis', metavar='DATA_DIR', help='競走経験質指数（REQI）とオッズの比較分析を実行（データディレクトリを指定）')
+    parser.add_argument('--odds-analysis', action='store_true', help='競走経験質指数（REQI）とオッズの比較分析を実行')
     parser.add_argument('--sample-size', type=int, default=None, help='オッズ分析でのサンプルファイル数（指定しない場合は全ファイル）')
     
     # 従来のオプション（継続）
@@ -2819,28 +2822,56 @@ def main():
         print("⏳ グローバル重み初期化中...")
         print("="*80 + "\n")
         
-        # 🎯 グローバル重み初期化（オッズ分析時のみ実行）
-        if args.odds_analysis:
-            try:
-                weights_initialized = initialize_global_weights(args)
-                if weights_initialized:
-                    logger.info("✅ グローバル重み初期化完了")
-                else:
-                    logger.warning("⚠️ グローバル重み初期化に失敗、各モジュールで個別計算")
-            except Exception as e:
-                logger.error(f"❌ グローバル重み初期化エラー: {str(e)}")
-                logger.warning("⚠️ 各モジュールで個別重み計算を実行します")
+        
+        # 層別分析設定の処理
+        enable_stratified = args.enable_stratified_analysis and not args.disable_stratified_analysis
+        if enable_stratified:
+            logger.info("📊 層別分析: 有効（年齢層別・経験数別・距離カテゴリ別）")
         else:
-            logger.info("📊 期間別分析モード: 重み初期化は各モジュールで実行")
+            logger.info("📊 層別分析: 無効（--disable-stratified-analysisで無効化）")
+        
+        
+        if args.odds_analysis:
+            logger.info("🎯 競走経験質指数（REQI）とオッズの比較分析を実行します...")
+            analyzer = create_unified_analyzer('odds', args.min_races, enable_stratified)
+        elif args.stratified_only:
+            logger.info("📊 層別分析のみを実行します...")
+        elif args.three_year_periods:
+            logger.info("📊 3年間隔での期間別分析を実行します...")
+            analyzer = create_unified_analyzer('period', args.min_races, enable_stratified)
+        else:
+            logger.info("📊 競走経験質指数（REQI）分析を実行します...")
 
         # ログ設定完了後に開始メッセージを出力
         logger.info("🏇 競走経験質指数（REQI）分析を開始します...")
         logger.info(f"📅 実行日時: {datetime.now()}")
         logger.info(f"🖥️ ログレベル: {args.log_level}")
         logger.info(f"📝 ログファイル: {log_file}")
-        
         # 初期システムリソース状況をログ出力
         log_system_resources()
+        
+        # データ読み込み
+        df = analyzer.load_data_unified(args.input_path, args.encoding)
+
+        # グローバル重み初期化
+        try:
+            weights_initialized = initialize_global_weights(args)
+            if weights_initialized:
+                logger.info("✅ グローバル重み初期化完了")
+            else:
+                logger.warning("⚠️ グローバル重み初期化に失敗、各モジュールで個別計算")
+        except Exception as e:
+            logger.error(f"❌ グローバル重み初期化エラー: {str(e)}")
+            logger.warning("⚠️ 各モジュールで個別重み計算を実行します")
+        # if not WeightManager.is_initialized():
+        #       analyzer.initialize_global_weights(df)
+        #else:
+        #    logger.info("✅ グローバル重みは既に初期化済みです")
+
+        # 前処理
+        df = analyzer.preprocess_data_unified(df)
+
+        logger.info(f"📊 読み込んだデータ件数: {len(df):,}件")
 
         # 出力ディレクトリの作成（親ディレクトリも含めて確実に作成）
         output_dir = Path(args.output_dir)
@@ -2851,7 +2882,6 @@ def main():
             raise FileNotFoundError(f"出力ディレクトリの作成に失敗しました: {output_dir}")
         
         logger.info(f"📁 出力ディレクトリ確認済み: {output_dir.absolute()}")
-
         logger.info(f"📁 入力パス: {args.input_path}")
         logger.info(f"📊 出力ディレクトリ: {args.output_dir}")
         logger.info(f"🎯 最小レース数: {args.min_races}")
@@ -2859,34 +2889,11 @@ def main():
             logger.info(f"📅 分析開始日: {args.start_date}")
         if args.end_date:
             logger.info(f"📅 分析終了日: {args.end_date}")
-        
-        # 層別分析設定の処理
-        enable_stratified = args.enable_stratified_analysis and not args.disable_stratified_analysis
-        if enable_stratified:
-            logger.info(f"📊 層別分析: 有効（年齢層別・経験数別・距離カテゴリ別）")
-        else:
-            logger.info(f"📊 層別分析: 無効（--disable-stratified-analysisで無効化）")
-        
+
         # オッズ分析の場合
         if args.odds_analysis:
             logger.info("🎯 競走経験質指数（REQI）とオッズの比較分析を実行します...")
-            try:
-                # 統一分析器を使用
-                from horse_racing.base.unified_analyzer import create_unified_analyzer
-                analyzer = create_unified_analyzer('odds', args.min_races, enable_stratified)
-                
-                # データ読み込み
-                df = analyzer.load_data_unified(args.odds_analysis, args.encoding)
-                
-                # グローバル重み初期化（オッズ分析時のみ）
-                if not WeightManager.is_initialized():
-                    analyzer.initialize_global_weights(df)
-                else:
-                    logger.info("✅ グローバル重みは既に初期化済みです")
-                
-                # 前処理
-                df = analyzer.preprocess_data_unified(df)
-                
+            try:              
                 # 分析実行
                 results = analyzer.analyze(df)
                 
@@ -2905,7 +2912,7 @@ def main():
                 # 【強制出力】オッズ比較レポートを必ず生成（包括版が失敗しても簡易版を出力）
                 try:
                     logger.info("📋 オッズ比較の簡易レポートを生成します（存在しない場合は新規作成）...")
-                    _ = perform_simple_odds_analysis(args.odds_analysis, args.output_dir, sample_size=None, min_races=args.min_races)
+                    _ = perform_simple_odds_analysis(args.input_path, args.output_dir, sample_size=None, min_races=args.min_races)
                     logger.info("✅ 簡易オッズ比較レポート生成完了: horse_REQI_odds_analysis_report.md")
                 except Exception as e:
                     logger.error(f"❌ 簡易オッズ比較レポート生成でエラー: {str(e)}")
@@ -2947,24 +2954,6 @@ def main():
         if args.three_year_periods:
             logger.info("📊 3年間隔での期間別分析を実行します...")
             try:
-                # 統一分析器を使用
-                from horse_racing.base.unified_analyzer import create_unified_analyzer
-                analyzer = create_unified_analyzer('period', args.min_races, enable_stratified)
-                
-                # データ読み込み
-                df = analyzer.load_data_unified(args.input_path, args.encoding)
-                
-                # グローバル重み初期化（期間別分析時は重複実行を回避）
-                if not WeightManager.is_initialized():
-                    analyzer.initialize_global_weights(df)
-                else:
-                    logger.info("✅ グローバル重みは既に初期化済みです")
-                
-                # 前処理
-                df = analyzer.preprocess_data_unified(df)
-                
-                logger.info(f"📊 読み込んだデータ件数: {len(df):,}件")
-            
             # 年データが存在するかチェック
                 if '年' in df.columns and df['年'].notna().any():
                     min_year = int(df['年'].min())
