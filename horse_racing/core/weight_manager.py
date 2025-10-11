@@ -98,9 +98,9 @@ class WeightManager:
                 correlations = cls._calculate_feature_correlations_report_compliant(train_data, target_col='place_rate')
                 
                 # 特徴量レベルが存在しない場合はフォールバック重みを使用
-                if correlations is None or all(corr == 0.0 for corr in correlations.values()):
-                    logger.warning("⚠️ 相関計算に失敗しました。循環論理回避版の固定重みを使用します。")
-                    return cls._get_fallback_weights()
+                # if correlations is None or all(corr == 0.0 for corr in correlations.values()):
+                #    logger.warning("⚠️ 相関計算に失敗しました。循環論理回避版の固定重みを使用します。")
+                #    return cls._get_fallback_weights()
                 
                 logger.info("✅ 勝率ベース相関計算が成功しました")
                 
@@ -146,7 +146,8 @@ class WeightManager:
             logger.warning("⚠️ 重みが未初期化です。フォールバック重みを返します。")
             logger.warning(f"   📊 _initialized: {cls._initialized}")
             logger.warning(f"   📊 _global_weights存在: {cls._global_weights is not None}")
-            return cls._get_fallback_weights()
+            # return cls._get_fallback_weights()
+            return {}
         
         logger.info("✅ グローバル重みを正常に取得しました")
         return cls._global_weights.copy()
@@ -597,9 +598,9 @@ class WeightManager:
         logger.info(f"   距離寄与度: r² = {r_distance:.3f}² = {contrib_distance:.3f}")
         logger.info(f"   総寄与度: {total_contrib:.3f}")
         
-        if total_contrib == 0:
-            logger.warning("⚠️ 総寄与度が0です。フォールバック重みを使用します。")
-            return cls._get_fallback_weights()
+        # if total_contrib == 0:
+        #    logger.warning("⚠️ 総寄与度が0です。フォールバック重みを使用します。")
+        #    return cls._get_fallback_weights()
         
         # 正規化された重み計算
         weight_grade = contrib_grade / total_contrib
@@ -618,11 +619,11 @@ class WeightManager:
         logger.info(f"   距離重み: {weight_distance:.3f} ({weight_distance*100:.1f}%)")
         
         # レポート値との比較
-        report_weights = cls._get_fallback_weights()
-        logger.info("📋 レポート5.1.3節記載値との比較:")
-        logger.info(f"   グレード: 計算値{weight_grade:.3f} vs レポート値{report_weights['grade_weight']:.3f}")
-        logger.info(f"   場所: 計算値{weight_venue:.3f} vs レポート値{report_weights['venue_weight']:.3f}")
-        logger.info(f"   距離: 計算値{weight_distance:.3f} vs レポート値{report_weights['distance_weight']:.3f}")
+        # report_weights = cls._get_fallback_weights()
+        # logger.info("📋 レポート5.1.3節記載値との比較:")
+        # logger.info(f"   グレード: 計算値{weight_grade:.3f} vs レポート値{report_weights['grade_weight']:.3f}")
+        # logger.info(f"   場所: 計算値{weight_venue:.3f} vs レポート値{report_weights['venue_weight']:.3f}")
+        #logger.info(f"   距離: 計算値{weight_distance:.3f} vs レポート値{report_weights['distance_weight']:.3f}")
         
         return weights
     

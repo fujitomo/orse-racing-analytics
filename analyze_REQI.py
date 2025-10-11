@@ -381,6 +381,8 @@ def initialize_global_weights(args) -> bool:
             if dataset_path.exists():
                 # グローバル関数を使用してデータを読み込み
                 combined_df = load_all_data_once(str(dataset_path), 'utf-8')
+                # 実行時の開始/終了日指定があればここで反映（例: --end-date 20241231 で 2025年を除外）
+                combined_df = _filter_dataframe_by_date_range(combined_df, getattr(args, 'start_date', None), getattr(args, 'end_date', None))
                 if combined_df.empty:
                     return False
                 
@@ -440,6 +442,8 @@ def initialize_global_weights(args) -> bool:
             # 従来の競走経験質指数（REQI）分析
             # グローバル関数を使用してデータを読み込み
             combined_df = load_all_data_once(args.input_path, args.encoding)
+            # 実行時の開始/終了日指定があればここで反映（例: --end-date 20241231 で 2025年を除外）
+            combined_df = _filter_dataframe_by_date_range(combined_df, getattr(args, 'start_date', None), getattr(args, 'end_date', None))
             if combined_df.empty:
                 return False
             
@@ -519,8 +523,9 @@ def _calculate_individual_weights(df: pd.DataFrame) -> Dict[str, float]:
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
             logger.error(f"❌ 必要なカラムが不足: {missing_cols}")
-            return _get_fallback_weights()
-        
+            # return _get_fallback_weights()
+            return {}
+                
         # Phase 1: 馬統計データ作成（レポート5.1.3節準拠）
         logger.info("📊 Phase 1: 馬統計データを作成中...")
         
@@ -533,9 +538,9 @@ def _calculate_individual_weights(df: pd.DataFrame) -> Dict[str, float]:
             df_temp = df.copy()
             df_temp['is_placed'] = pd.to_numeric(df_temp['複勝'], errors='coerce').fillna(0)
             logger.info("📊 複勝列から複勝フラグを作成")
-        else:
-            logger.error("❌ 複勝フラグを作成できません")
-            return _get_fallback_weights()
+        # else:
+        #    logger.error("❌ 複勝フラグを作成できません")
+        #    return _get_fallback_weights()
         
         # 馬ごとの統計を計算（最低出走数6戦以上）
         horse_stats = df_temp.groupby('馬名').agg({
@@ -550,9 +555,9 @@ def _calculate_individual_weights(df: pd.DataFrame) -> Dict[str, float]:
         horse_stats = horse_stats[horse_stats['race_count'] >= 6].copy()
         logger.info(f"📊 最低出走数6戦以上でフィルタ: {len(horse_stats):,}頭")
         
-        if len(horse_stats) < 100:
-            logger.error(f"❌ サンプル数が不足: {len(horse_stats)}頭（最低100頭必要）")
-            return _get_fallback_weights()
+        # if len(horse_stats) < 100:
+        #    logger.error(f"❌ サンプル数が不足: {len(horse_stats)}頭（最低100頭必要）")
+        #    return _get_fallback_weights()
         
         # 特徴量レベルの平均を計算
         feature_cols = ['grade_level', 'venue_level', 'distance_level']
@@ -570,18 +575,18 @@ def _calculate_individual_weights(df: pd.DataFrame) -> Dict[str, float]:
         required_corr_cols = ['place_rate', 'avg_grade_level', 'avg_venue_level', 'avg_distance_level']
         missing_corr_cols = [col for col in required_corr_cols if col not in horse_stats.columns]
         
-        if missing_corr_cols:
-            logger.error(f"❌ 必要な相関列が不足: {missing_corr_cols}")
-            logger.info(f"📊 利用可能な列: {list(horse_stats.columns)}")
-            return _get_fallback_weights()
+        # if missing_corr_cols:
+        #    logger.error(f"❌ 必要な相関列が不足: {missing_corr_cols}")
+        #    logger.info(f"📊 利用可能な列: {list(horse_stats.columns)}")
+        #    return _get_fallback_weights()
         
         # 欠損値を除去
         clean_data = horse_stats[required_corr_cols].dropna()
         logger.info(f"📊 相関計算用データ: {len(clean_data):,}頭")
         
-        if len(clean_data) < 100:
-            logger.error(f"❌ 相関計算用サンプル数が不足: {len(clean_data)}頭（最低100頭必要）")
-            return _get_fallback_weights()
+        # if len(clean_data) < 100:
+        #    logger.error(f"❌ 相関計算用サンプル数が不足: {len(clean_data)}頭（最低100頭必要）")
+        #    return _get_fallback_weights()
         
         # 相関計算
         from scipy.stats import pearsonr
@@ -621,9 +626,9 @@ def _calculate_individual_weights(df: pd.DataFrame) -> Dict[str, float]:
         
         logger.info(f"📊 総寄与度: {total_squared:.3f}")
         
-        if total_squared == 0:
-            logger.warning("⚠️ 総寄与度が0です。フォールバック重みを使用します。")
-            return _get_fallback_weights()
+        # if total_squared == 0:
+        #    logger.warning("⚠️ 総寄与度が0です。フォールバック重みを使用します。")
+        #    return _get_fallback_weights()
         
         # 重みを正規化
         weights = {}
@@ -689,8 +694,67 @@ def validate_args(args):
     
     return args
 
+def _filter_dataframe_by_date_range(df: pd.DataFrame, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+    """
+    入力データフレームを日付範囲でフィルタする（'年月日' もしくは '年' ベース）。
+    - start_date/end_date は 'YYYYMMDD' 形式を想定。
+    - '年月日' があれば日付でフィルタ、なければ '年' でフィルタ。
+    """
+    try:
+        if df is None or len(df) == 0:
+            return df
+        # 日付列がある場合はそれを優先
+        if '年月日' in df.columns:
+            df_copy = df.copy()
+            try:
+                df_copy['__date'] = pd.to_datetime(df_copy['年月日'], format='%Y%m%d', errors='coerce')
+            except Exception:
+                df_copy['__date'] = pd.to_datetime(df_copy['年月日'], errors='coerce')
+            mask = pd.Series(True, index=df_copy.index)
+            if start_date:
+                try:
+                    sd = datetime.strptime(start_date, '%Y%m%d')
+                    mask &= df_copy['__date'] >= sd
+                except Exception:
+                    pass
+            if end_date:
+                try:
+                    ed = datetime.strptime(end_date, '%Y%m%d')
+                    mask &= df_copy['__date'] <= ed
+                except Exception:
+                    pass
+            filtered = df_copy.loc[mask].drop(columns=['__date'])
+            if len(filtered) != len(df):
+                logger.info(f"🧹 日付フィルタ適用(年月日): {len(df):,} → {len(filtered):,}")
+            return filtered
+        # 年列がある場合は年でフィルタ
+        if '年' in df.columns:
+            df_copy = df.copy()
+            mask = pd.Series(True, index=df_copy.index)
+            if start_date and len(start_date) >= 4:
+                try:
+                    start_year = int(start_date[:4])
+                    mask &= pd.to_numeric(df_copy['年'], errors='coerce') >= start_year
+                except Exception:
+                    pass
+            if end_date and len(end_date) >= 4:
+                try:
+                    end_year = int(end_date[:4])
+                    mask &= pd.to_numeric(df_copy['年'], errors='coerce') <= end_year
+                except Exception:
+                    pass
+            filtered = df_copy.loc[mask]
+            if len(filtered) != len(df):
+                logger.info(f"🧹 年フィルタ適用(年): {len(df):,} → {len(filtered):,}")
+            return filtered
+        # フィルタ不可
+        return df
+    except Exception as e:
+        logger.warning(f"⚠️ 日付フィルタ適用中に例外: {str(e)}")
+        return df
+
 @log_performance("データセット作成")
-def create_stratified_dataset_from_export(dataset_dir: str, min_races: int = 6) -> pd.DataFrame:
+def create_stratified_dataset_from_export(dataset_dir: str, min_races: int = 6, start_date: str = None, end_date: str = None) -> pd.DataFrame:
     """export/datasetからデータを読み込み層別分析用データセットを作成"""
     logger.info(f"📁 データセット読み込み開始: {dataset_dir}")
     
@@ -741,6 +805,8 @@ def create_stratified_dataset_from_export(dataset_dir: str, min_races: int = 6) 
     logger.info("🔗 データフレーム統合中...")
     concat_start = time.time()
     unified_df = pd.concat(dfs, ignore_index=True)
+    # 指定があれば日付範囲でフィルタ
+    unified_df = _filter_dataframe_by_date_range(unified_df, start_date, end_date)
     concat_time = time.time() - concat_start
     
     logger.info(f"✅ 統合完了: {len(unified_df):,}行のデータ (統合時間: {concat_time:.2f}秒)")
@@ -772,7 +838,11 @@ def create_stratified_dataset_from_export(dataset_dir: str, min_races: int = 6) 
             
             # 基本統計
             total_races = len(horse_data)
-            win_rate = (horse_data['着順'] == 1).mean()
+            # 勝率を wins/starts で厳密定義（取消・除外・中止などの非数値は分母に含めない）
+            s = pd.to_numeric(horse_data['着順'], errors='coerce')
+            wins = (s == 1).sum()
+            starts = s.notna().sum()
+            win_rate = (wins / starts) if starts > 0 else np.nan
             place_rate = (horse_data['着順'] <= 3).mean()
             
             # 競走経験質指数（REQI）算出（着順重み付き）
@@ -2047,6 +2117,10 @@ def analyze_by_periods_optimized(analyzer, periods, base_output_dir):
             from horse_racing.base.unified_analyzer import create_unified_analyzer
             ua = create_unified_analyzer('period', min_races=analyzer.config.min_races, enable_stratified=True)
             combined_df = ua.load_data_unified(analyzer.config.input_path, 'utf-8')
+            # 分析設定に日付があれば反映
+            start_date = getattr(analyzer.config, 'start_date', None)
+            end_date = getattr(analyzer.config, 'end_date', None)
+            combined_df = _filter_dataframe_by_date_range(combined_df, start_date, end_date)
         except Exception:
             # UA経由での取得に失敗した場合のみ従来フォールバック
             logger.info(f"🔍 _global_raw_dataチェック: {_global_raw_data is not None}")
@@ -2056,6 +2130,10 @@ def analyze_by_periods_optimized(analyzer, periods, base_output_dir):
             else:
                 logger.warning("⚠️ _global_raw_dataも利用できません。新規読み込みを実行します...")
                 combined_df = load_all_data_once(analyzer.config.input_path, 'utf-8')
+                # 分析設定に日付があれば反映
+                start_date = getattr(analyzer.config, 'start_date', None)
+                end_date = getattr(analyzer.config, 'end_date', None)
+                combined_df = _filter_dataframe_by_date_range(combined_df, start_date, end_date)
                 if combined_df.empty:
                     return {}
         
@@ -2256,7 +2334,7 @@ def generate_period_summary_report(all_results, output_dir):
     logger.info(f"期間別総合レポート保存: {report_path}")
 
 @log_performance("包括的オッズ比較分析")
-def perform_comprehensive_odds_analysis(data_dir: str, output_dir: str, sample_size: int = None, min_races: int = 6) -> Dict[str, Any]:
+def perform_comprehensive_odds_analysis(data_dir: str, output_dir: str, sample_size: int = None, min_races: int = 6, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
     """包括的オッズ比較分析の実行"""
     logger.info("🎯 包括的オッズ比較分析を開始...")
     
@@ -2266,6 +2344,8 @@ def perform_comprehensive_odds_analysis(data_dir: str, output_dir: str, sample_s
         
         # グローバル関数を使用してデータを読み込み
         combined_df = load_all_data_once(data_dir, 'utf-8')
+        # 指定があれば日付範囲でフィルタ
+        combined_df = _filter_dataframe_by_date_range(combined_df, start_date, end_date)
         if combined_df.empty:
             raise ValueError("データファイルが見つかりません")
         
@@ -2324,14 +2404,16 @@ def perform_comprehensive_odds_analysis(data_dir: str, output_dir: str, sample_s
     except ImportError:
         # OddsComparisonAnalyzerが利用できない場合の簡易版
         logger.warning("OddsComparisonAnalyzerが利用できません。簡易版を実行します。")
-        return perform_simple_odds_analysis(data_dir, output_dir, sample_size, min_races)
+        return perform_simple_odds_analysis(data_dir, output_dir, sample_size, min_races, start_date, end_date)
 
-def perform_simple_odds_analysis(data_dir: str, output_dir: str, sample_size: int = None, min_races: int = 6) -> Dict[str, Any]:
+def perform_simple_odds_analysis(data_dir: str, output_dir: str, sample_size: int = None, min_races: int = 6, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
     """簡易版オッズ比較分析"""
     logger.info("📊 簡易版オッズ比較分析を実行...")
     
     # グローバル関数を使用してデータを読み込み
     combined_df = load_all_data_once(data_dir, 'utf-8')
+    # 指定があれば日付範囲でフィルタ
+    combined_df = _filter_dataframe_by_date_range(combined_df, start_date, end_date)
     if combined_df.empty:
         raise ValueError("有効なデータが見つかりません")
     
@@ -2852,6 +2934,8 @@ def main():
         
         # データ読み込み
         df = analyzer.load_data_unified(args.input_path, args.encoding)
+        # 実行時の開始/終了日指定があればここで反映（例: --end-date 20241231 で 2025年を除外）
+        df = _filter_dataframe_by_date_range(df, getattr(args, 'start_date', None), getattr(args, 'end_date', None))
 
         # グローバル重み初期化
         try:
@@ -2893,53 +2977,84 @@ def main():
         # オッズ分析の場合
         if args.odds_analysis:
             logger.info("🎯 競走経験質指数（REQI）とオッズの比較分析を実行します...")
-            try:              
-                # 分析実行
-                results = analyzer.analyze(df)
-                
-                logger.info("✅ オッズ比較分析が完了しました。")
-                logger.info(f"📊 分析対象: {results['data_summary']['total_records']:,}レコード, {results['data_summary']['horse_count']:,}頭")
+            try:
+                # まず包括版を実行
+                logger.info("📋 包括版オッズ比較分析を実行します...")
+                comp_results = perform_comprehensive_odds_analysis(
+                    data_dir=args.input_path,
+                    output_dir=args.output_dir,
+                    sample_size=args.sample_size,
+                    min_races=args.min_races,
+                    start_date=args.start_date,
+                    end_date=args.end_date
+                )
+                logger.info("✅ 包括版オッズ比較分析が完了しました。")
+                logger.info(f"📊 分析対象: {comp_results.get('data_summary', {}).get('total_records', 0):,}レコード, "
+                            f"{comp_results.get('data_summary', {}).get('horse_count', 0):,}頭")
                 logger.info(f"📁 結果保存先: {args.output_dir}")
-                
-                # H2仮説結果の表示
-                if 'regression' in results and 'h2_verification' in results['regression']:
-                    h2 = results['regression']['h2_verification']
-                    result_text = "サポート" if h2.get('h2_hypothesis_supported', h2.get('hypothesis_supported', False)) else "非サポート"
-                    logger.info(f"🎯 H2仮説「競走経験質指数（REQI）がオッズベースラインを上回る」: {result_text}")
+
+                # 可能であれば包括版のH2結果をログ
+                if 'regression' in comp_results and 'h2_verification' in comp_results['regression']:
+                    h2 = comp_results['regression']['h2_verification']
+                    result_text = "サポート" if h2.get('hypothesis_supported', False) or h2.get('h2_hypothesis_supported', False) else "非サポート"
+                    logger.info(f"🎯 H2仮説「REQIがオッズベースラインを上回る」: {result_text}")
                     improvement = h2.get('r2_improvement', h2.get('improvement', 0))
                     logger.info(f"   性能改善: {improvement:+.4f}")
-                
-                # 【強制出力】オッズ比較レポートを必ず生成（包括版が失敗しても簡易版を出力）
-                try:
-                    logger.info("📋 オッズ比較の簡易レポートを生成します（存在しない場合は新規作成）...")
-                    _ = perform_simple_odds_analysis(args.input_path, args.output_dir, sample_size=None, min_races=args.min_races)
-                    logger.info("✅ 簡易オッズ比較レポート生成完了: horse_REQI_odds_analysis_report.md")
-                except Exception as e:
-                    logger.error(f"❌ 簡易オッズ比較レポート生成でエラー: {str(e)}")
-                    logger.error("詳細なエラー情報:", exc_info=True)
 
-                # 【追加】オッズ分析モードでも層別レポートを生成
+                # 包括版成功時は簡易版を省略（必要ならフラグで制御可能）
+                logger.info("ℹ️ 包括版が完了したため、簡易版の強制生成はスキップします。")
+
+                # 層別レポートも生成
                 try:
                     logger.info("📋 統合層別分析レポートを生成中...")
-                    stratified_dataset = create_stratified_dataset_from_export('export/dataset')
+                    stratified_dataset = create_stratified_dataset_from_export('export/dataset', start_date=args.start_date, end_date=args.end_date)
                     stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
                     _ = generate_stratified_report(stratified_results, stratified_dataset, output_dir)
                     logger.info("✅ 統合層別分析レポート生成完了")
                 except Exception as e:
                     logger.error(f"❌ 統合層別分析レポート生成エラー: {str(e)}")
                     logger.error("詳細なエラー情報:", exc_info=True)
-                
+
                 return 0
             except Exception as e:
-                logger.error(f"❌ オッズ比較分析でエラー: {str(e)}")
+                logger.error(f"❌ 包括版オッズ比較分析でエラー: {str(e)}")
                 logger.error("詳細なエラー情報:", exc_info=True)
-                return 1
+
+                # フォールバック: 簡易版を実行
+                try:
+                    logger.info("📋 フォールバックとして簡易版オッズ比較分析を実行します...")
+                    _ = perform_simple_odds_analysis(
+                        data_dir=args.input_path,
+                        output_dir=args.output_dir,
+                        sample_size=args.sample_size,
+                        min_races=args.min_races,
+                        start_date=args.start_date,
+                        end_date=args.end_date
+                    )
+                    logger.info("✅ 簡易オッズ比較レポート生成完了: horse_REQI_odds_analysis_report.md")
+                except Exception as e2:
+                    logger.error(f"❌ 簡易版オッズ比較分析でもエラー: {str(e2)}")
+                    logger.error("詳細なエラー情報:", exc_info=True)
+                    return 1
+
+                # 層別レポート試行（簡易版でも実施）
+                try:
+                    logger.info("📋 統合層別分析レポートを生成中...")
+                    stratified_dataset = create_stratified_dataset_from_export('export/dataset', start_date=args.start_date, end_date=args.end_date)
+                    stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
+                    _ = generate_stratified_report(stratified_results, stratified_dataset, output_dir)
+                    logger.info("✅ 統合層別分析レポート生成完了")
+                except Exception as e3:
+                    logger.error(f"❌ 統合層別分析レポート生成エラー: {str(e3)}")
+                    logger.error("詳細なエラー情報:", exc_info=True)
+
+                return 0
         
         # 層別分析のみの場合
         if args.stratified_only:
             logger.info("📊 層別分析のみを実行します...")
             try:
-                stratified_dataset = create_stratified_dataset_from_export('export/dataset')
+                stratified_dataset = create_stratified_dataset_from_export('export/dataset', start_date=args.start_date, end_date=args.end_date)
                 stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
                 _ = generate_stratified_report(stratified_results, stratified_dataset, output_dir)
                 logger.info("✅ 層別分析のみが完了しました。")
@@ -2977,7 +3092,7 @@ def main():
                         # 【追加】統合層別分析レポートも生成
                         try:
                             logger.info("📋 統合層別分析レポートを生成中...")
-                            stratified_dataset = create_stratified_dataset_from_export('export/dataset')
+                            stratified_dataset = create_stratified_dataset_from_export('export/dataset', start_date=args.start_date, end_date=args.end_date)
                             stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
                             _ = generate_stratified_report(stratified_results, stratified_dataset, Path(args.output_dir))
                             logger.info("✅ 統合層別分析レポート生成完了")
@@ -3072,7 +3187,7 @@ def main():
             # 層別分析の実行
             logger.info("📊 統合層別分析を実行中...")
             try:
-                stratified_dataset = create_stratified_dataset_from_export('export/dataset')
+                stratified_dataset = create_stratified_dataset_from_export('export/dataset', start_date=args.start_date, end_date=args.end_date)
                 stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
                 _ = generate_stratified_report(stratified_results, stratified_dataset, output_dir)
                 logger.info("✅ 統合層別分析完了")
