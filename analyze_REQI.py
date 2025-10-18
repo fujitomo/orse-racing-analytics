@@ -1171,7 +1171,7 @@ def calculate_race_level_features_with_position_weights(df: pd.DataFrame) -> pd.
                 grade_num_col = col
                 break
         logger.info("📋 グレード列からvenue_level（格式）を推定中...")
-        grade_map = {1: 9, 11: 8, 12: 7, 2: 4, 3: 3, 4: 2, 5: 1, 6: 2}
+        grade_map = {1: 9, 2: 4, 3: 3, 4: 2, 5: 1, 6: 2}
         df[grade_num_col] = pd.to_numeric(df[grade_num_col], errors='coerce')
         df['venue_level'] = df[grade_num_col].map(grade_map).fillna(0)
         logger.info(f"✅ venue_level生成完了(格式): 平均値 {df['venue_level'].mean():.3f}")
