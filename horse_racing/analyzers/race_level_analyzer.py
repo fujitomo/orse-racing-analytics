@@ -1500,6 +1500,18 @@ class REQIAnalyzer(BaseAnalyzer):
                 'analysis_method': 'strict_time_series_split'
             }
             
+            # 【修正】期間別分析用のcorrelation_statsを追加
+            if validation_correlations:
+                results['correlation_stats'] = {
+                    'correlation_place_avg': validation_correlations.get('correlation_place_avg', 0.0),
+                    'r2_place_avg': validation_correlations.get('r2_place_avg', 0.0),
+                    'correlation_place_max': validation_correlations.get('correlation_place_max', 0.0),
+                    'r2_place_max': validation_correlations.get('r2_place_max', 0.0)
+                }
+                logger.info("✅ correlation_statsを結果に追加しました")
+            else:
+                logger.warning("⚠️ validation_correlationsが空のため、correlation_statsを追加できませんでした")
+            
             # レポート記載数値との整合性チェック
             test_performance = oot_results.get('test_performance', {})
             test_r2 = test_performance.get('r_squared', 0)
