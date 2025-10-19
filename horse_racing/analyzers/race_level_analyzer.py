@@ -2750,7 +2750,7 @@ class REQIAnalyzer(BaseAnalyzer):
             logger.info("=== マルチコリニアリティ検証開始 ===")
             
             # 特徴量の定義（存在するカラムのみ）
-            all_features = ['grade_level', 'venue_level', 'prize_level', 'distance_level']
+            all_features = ['grade_level', 'venue_level', 'distance_level']
             features = [col for col in all_features if col in self.df.columns]
             
             if len(features) < 2:

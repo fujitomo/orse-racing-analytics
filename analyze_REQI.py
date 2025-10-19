@@ -2883,9 +2883,9 @@ def calculate_betting_performance(combined_df: pd.DataFrame, strategy: str = 'od
         data_clean['odds_normalized'] = scaler.fit_transform(data_clean[['avg_place_prob_from_odds']])
         data_clean['reqi_normalized'] = scaler.fit_transform(data_clean[['avg_race_level']])
         
-        # 統合スコア（オッズ70%、REQI 30%の重み）
-        data_clean['integrated_score'] = (0.7 * data_clean['odds_normalized'] + 
-                                         0.3 * data_clean['reqi_normalized'])
+        # 統合スコア（オッズ64%、REQI 36%の重み - 性能比に基づく論理的配分）
+        data_clean['integrated_score'] = (0.64 * data_clean['odds_normalized'] + 
+                                         0.36 * data_clean['reqi_normalized'])
         
         top_horses_list = data_clean.nlargest(n_top, 'integrated_score').index.tolist()
     else:
@@ -3245,6 +3245,24 @@ def generate_simple_report(results: Dict[str, Any], output_dir: Path, combined_d
             f.write(f"- **総レコード数**: {summary.get('total_records', 'N/A'):,}\n")
             f.write(f"- **分析対象馬数**: {summary.get('horse_count', 'N/A'):,}\n")
             f.write(f"- **対象ファイル数**: {summary.get('file_count', 'N/A')}\n\n")
+        
+        # 重み情報
+        try:
+            from horse_racing.core.weight_manager import get_global_weights
+            weights = get_global_weights()
+            f.write("## REQI重み情報\n\n")
+            f.write("**訓練期間（2010-2020年）で算出された固定重み**:\n\n")
+            f.write(f"- **グレード重み**: {weights['grade_weight']:.3f} ({weights['grade_weight']*100:.1f}%)\n")
+            f.write(f"- **場所重み**: {weights['venue_weight']:.3f} ({weights['venue_weight']*100:.1f}%)\n")
+            f.write(f"- **距離重み**: {weights['distance_weight']:.3f} ({weights['distance_weight']*100:.1f}%)\n\n")
+            f.write("**重み算出方法**: 各要素と勝率（win_rate）の相関係数の2乗を正規化\n\n")
+        except Exception as e:
+            logger.warning(f"⚠️ 重み情報の取得に失敗: {e}")
+            f.write("## REQI重み情報\n\n")
+            f.write("**固定重み（フォールバック値）**:\n\n")
+            f.write("- **グレード重み**: 0.636 (63.6%)\n")
+            f.write("- **場所重み**: 0.323 (32.3%)\n")
+            f.write("- **距離重み**: 0.041 (4.1%)\n\n")
         
         # 相関分析結果
         if 'correlations' in results:

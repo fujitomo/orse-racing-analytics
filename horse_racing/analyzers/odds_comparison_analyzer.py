@@ -1255,6 +1255,24 @@ class OddsComparisonAnalyzer:
             f.write(f"- 分析対象: {len(horse_df):,}頭（最低{self.min_races}戦以上）\n")
             f.write(f"- 分析期間: データセット全期間\n\n")
             
+            # 重み情報
+            try:
+                from horse_racing.core.weight_manager import get_global_weights
+                weights = get_global_weights()
+                f.write("## REQI重み情報\n\n")
+                f.write("**訓練期間（2010-2020年）で算出された固定重み**:\n\n")
+                f.write(f"- **グレード重み**: {weights['grade_weight']:.3f} ({weights['grade_weight']*100:.1f}%)\n")
+                f.write(f"- **場所重み**: {weights['venue_weight']:.3f} ({weights['venue_weight']*100:.1f}%)\n")
+                f.write(f"- **距離重み**: {weights['distance_weight']:.3f} ({weights['distance_weight']*100:.1f}%)\n\n")
+                f.write("**重み算出方法**: 各要素と勝率（win_rate）の相関係数の2乗を正規化\n\n")
+            except Exception as e:
+                logger.warning(f"⚠️ 重み情報の取得に失敗: {e}")
+                f.write("## REQI重み情報\n\n")
+                f.write("**固定重み（フォールバック値）**:\n\n")
+                f.write("- **グレード重み**: 0.636 (63.6%)\n")
+                f.write("- **場所重み**: 0.323 (32.3%)\n")
+                f.write("- **距離重み**: 0.041 (4.1%)\n\n")
+            
             f.write("## 1. 相関分析結果\n\n")
             f.write("### 1.1 REQI（競走経験質指数）と複勝率の相関\n\n")
             
@@ -1589,8 +1607,8 @@ class OddsComparisonAnalyzer:
                 data_clean = horse_stats_train.dropna(subset=['avg_place_prob_from_odds', 'avg_race_level']).copy()
                 data_clean['odds_normalized'] = scaler.fit_transform(data_clean[['avg_place_prob_from_odds']])
                 data_clean['reqi_normalized'] = scaler.fit_transform(data_clean[['avg_race_level']])
-                data_clean['integrated_score'] = (0.7 * data_clean['odds_normalized'] + 
-                                                 0.3 * data_clean['reqi_normalized'])
+                data_clean['integrated_score'] = (0.64 * data_clean['odds_normalized'] + 
+                                                 0.36 * data_clean['reqi_normalized'])
                 
                 top20_horses = data_clean.nlargest(n_top, 'integrated_score').index.tolist()
                 
