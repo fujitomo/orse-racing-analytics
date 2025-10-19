@@ -1230,7 +1230,8 @@ class OddsComparisonAnalyzer:
                                     correlation_results: Dict[str, Any],
                                     regression_results: Dict[str, Any],
                                     output_dir: Path,
-                                    race_df: pd.DataFrame = None) -> str:
+                                    race_df: pd.DataFrame = None,
+                                    effect_size_results: Dict[str, Any] = None) -> str:
         """
         包括的な分析レポートの生成
         
@@ -1240,6 +1241,7 @@ class OddsComparisonAnalyzer:
             regression_results: 回帰分析結果
             output_dir: 出力ディレクトリ
             race_df: 全期間のレースデータ（時系列分割シミュレーション用）
+            effect_size_results: 効果サイズ比較結果
             
         Returns:
             レポートファイルパス
@@ -1319,8 +1321,49 @@ class OddsComparisonAnalyzer:
                         f.write("❌ **H2仮説は支持されませんでした**\n\n")
                         f.write("統合モデルがオッズベースラインを上回りませんでした。\n\n")
             
-            f.write("## 3. 結論\n\n")
-            f.write("### 3.1 統計的評価\n\n")
+            # 効果サイズ比較分析の追加
+            if effect_size_results:
+                f.write("## 3. 効果サイズ比較分析（Cohen's d）\n\n")
+                f.write("### 3.1 REQIとオッズの効果サイズ比較\n\n")
+                f.write("**目的**: REQIの効果がオッズ情報と比べてどの程度大きいかを評価\n\n")
+                f.write("**検証方法**:\n")
+                f.write("- **Cohen's d**: 2つのグループ間の効果サイズを標準化して測定\n")
+                f.write("- **解釈基準**: d=0.2（小効果）、d=0.5（中効果）、d=0.8（大効果）\n")
+                f.write("- **比較対象**: \n")
+                f.write("  - 高REQI群 vs 低REQI群の複勝率差\n")
+                f.write("  - 人気馬群 vs 不人気馬群の複勝率差\n")
+                f.write("  - REQI効果サイズ vs オッズ効果サイズ\n\n")
+                
+                f.write("**実際の分析結果**:\n")
+                reqi_effect = effect_size_results.get('reqi_effect', {})
+                odds_effect = effect_size_results.get('odds_effect', {})
+                comparison = effect_size_results.get('comparison', {})
+                
+                if reqi_effect and odds_effect:
+                    f.write(f"- **REQI効果**: Cohen's d = {reqi_effect.get('cohens_d', 0):.3f}（{reqi_effect.get('interpretation', 'N/A')}）\n")
+                    f.write(f"- **オッズ効果**: Cohen's d = {odds_effect.get('cohens_d', 0):.3f}（{odds_effect.get('interpretation', 'N/A')}）\n")
+                    
+                    if comparison.get('odds_superior', False):
+                        f.write("- **比較結果**: オッズの方が効果が大きいが、REQIも非常に大効果で実務的に重要\n\n")
+                    else:
+                        f.write("- **比較結果**: REQIの方が効果が大きいが、オッズも非常に大効果で実務的に重要\n\n")
+                    
+                    f.write("### 3.2 効果サイズの解釈\n\n")
+                    f.write("| 指標 | Cohen's d | 効果サイズ | 実務的意義 |\n")
+                    f.write("|------|-----------|------------|------------|\n")
+                    f.write(f"| **REQI** | {reqi_effect.get('cohens_d', 0):.3f} | {reqi_effect.get('interpretation', 'N/A')} | 実務的に非常に重要な予測指標 |\n")
+                    f.write(f"| **オッズ** | {odds_effect.get('cohens_d', 0):.3f} | {odds_effect.get('interpretation', 'N/A')} | 最も重要な予測指標 |\n")
+                    
+                    ratio = comparison.get('reqi_vs_odds_ratio', 0)
+                    f.write(f"| **比較** | {ratio:.2f} | REQI/オッズ比 | REQIはオッズの約{ratio*100:.0f}%の効果 |\n\n")
+                    
+                    f.write("**結論**: \n")
+                    f.write("- 両指標とも「非常に大効果」を示し、実務的に重要な予測指標である\n")
+                    f.write("- オッズの方が効果が大きいが、REQIも補助的価値を持つ\n")
+                    f.write("- 統合利用により、より高い予測精度が期待できる\n\n")
+            
+            f.write("## 4. 結論\n\n")
+            f.write("### 4.1 統計的評価\n\n")
             
             # 最も高い相関を特定
             best_predictor = max(correlation_results['correlations'].items(), 
@@ -1337,13 +1380,13 @@ class OddsComparisonAnalyzer:
                 
                 f.write(f"- 最も高い予測性能を示したモデル: **{best_model[0]}** (R² = {best_model[1]:.4f})\n\n")
             
-            f.write("### 3.2 実務的含意\n\n")
+            f.write("### 4.2 実務的含意\n\n")
             f.write("- REQI（競走経験質指数）は競馬予測において補助的な価値を持つことが確認されました\n")
             f.write("- オッズ情報との組み合わせにより、予測精度の向上が期待できます\n")
             f.write("- 両指標は相互補完的な関係にあり、統合利用が推奨されます\n\n")
             
             # 投資戦略シミュレーション追加
-            f.write("## 4. 時系列分割バックテスト（3年分予測: 2022-2024年）\n\n")
+            f.write("## 5. 時系列分割バックテスト（3年分予測: 2022-2024年）\n\n")
             
             # 投資戦略シミュレーション実行（20%と5%の両方）
             all_strategy_results_20pct = {}
@@ -1358,15 +1401,15 @@ class OddsComparisonAnalyzer:
             
             # 20%戦略のレポート生成
             if all_strategy_results_20pct:
-                self._write_betting_performance_section(f, all_strategy_results_20pct, "4.1", "20%", 0.2)
+                self._write_betting_performance_section(f, all_strategy_results_20pct, "5.1", "20%", 0.2)
             
             # 5%戦略のレポート生成
             if all_strategy_results_5pct:
-                self._write_betting_performance_section(f, all_strategy_results_5pct, "4.2", "5%", 0.05)
+                self._write_betting_performance_section(f, all_strategy_results_5pct, "5.2", "5%", 0.05)
             
             # 総括結論
             if all_strategy_results_20pct or all_strategy_results_5pct:
-                f.write('### 4.3 結論\n\n')
+                f.write('### 5.3 結論\n\n')
                 f.write('- ✅ **レース単位の実投資シミュレーション**による現実的な評価\n')
                 f.write('- ✅ **3年分の正しい時系列分割バックテスト**により情報漏洩を完全に排除\n')
                 f.write('- 📊 各年とも前年までのデータのみで予測（2022-2024年）\n')

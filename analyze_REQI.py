@@ -2385,6 +2385,10 @@ def perform_comprehensive_odds_analysis(data_dir: str, output_dir: str, sample_s
         # 回帰分析
         regression_results = analyzer.perform_regression_analysis(horse_stats_df)
         
+        # 【追加】効果サイズ比較分析
+        logger.info("📊 REQI vs オッズ効果サイズ比較を実行中...")
+        effect_size_results = compare_reqi_vs_odds_effect_size(horse_stats_df)
+        
         # 結果をまとめる
         analysis_results = {
             'data_summary': {
@@ -2393,7 +2397,8 @@ def perform_comprehensive_odds_analysis(data_dir: str, output_dir: str, sample_s
                 'file_count': file_count
             },
             'correlations': correlation_results,
-            'regression': regression_results
+            'regression': regression_results,
+            'effect_size_comparison': effect_size_results
         }
         
         # 【修正】可視化の作成
@@ -2410,8 +2415,8 @@ def perform_comprehensive_odds_analysis(data_dir: str, output_dir: str, sample_s
             logger.error(f"❌ 可視化作成でエラー: {str(e)}")
             logger.error("詳細なエラー情報:", exc_info=True)
         
-        # レポート生成（レースデータも渡す）
-        analyzer.generate_comprehensive_report(horse_stats_df, correlation_results, regression_results, Path(output_dir), combined_df)
+        # レポート生成（レースデータと効果サイズ結果も渡す）
+        analyzer.generate_comprehensive_report(horse_stats_df, correlation_results, regression_results, Path(output_dir), combined_df, effect_size_results)
         
         return analysis_results
         
@@ -2454,6 +2459,10 @@ def perform_simple_odds_analysis(data_dir: str, output_dir: str, sample_size: in
     # 回帰分析
     regression = perform_simple_regression_analysis(horse_stats)
     
+    # 【追加】効果サイズ比較分析
+    logger.info("📊 REQI vs オッズ効果サイズ比較を実行中...")
+    effect_size_results = compare_reqi_vs_odds_effect_size(horse_stats)
+    
     # 結果
     analysis_results = {
         'data_summary': {
@@ -2462,7 +2471,8 @@ def perform_simple_odds_analysis(data_dir: str, output_dir: str, sample_size: in
             'file_count': file_count
         },
         'correlations': correlations,
-        'regression': regression
+        'regression': regression,
+        'effect_size_comparison': effect_size_results
     }
     
     # 【追加】簡易版でも可視化を作成
@@ -2647,6 +2657,121 @@ def perform_simple_regression_analysis(horse_stats: pd.DataFrame) -> Dict[str, A
             'statistically_meaningful': statistically_meaningful,
             'warning': '本分析は簡易版です。厳密な統計的検定にはOddsComparisonAnalyzerを使用してください。'
         }
+    
+    return results
+
+def compare_reqi_vs_odds_effect_size(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    REQIとオッズの効果サイズ（Cohen's d）を比較する
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        馬統計データ（REQI、オッズ、複勝率等を含む）
+    
+    Returns
+    -------
+    Dict[str, Any]
+        REQIとオッズの効果サイズ比較結果
+    """
+    logger.info("📊 REQI vs オッズ効果サイズ比較を開始...")
+    
+    results = {}
+    
+    # 必要なカラムの確認
+    required_cols = ['avg_race_level', 'avg_place_prob_from_odds', 'place_rate']
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        logger.warning(f"⚠️ 必要なカラムが不足: {missing_cols}")
+        return {}
+    
+    # データのクリーニング
+    clean_df = df[required_cols].dropna()
+    logger.info(f"   分析対象: {len(clean_df):,}頭")
+    
+    if len(clean_df) < 100:
+        logger.warning("⚠️ サンプル数が不足（100頭未満）")
+        return {}
+    
+    # 1. REQI効果サイズの計算
+    logger.info("🔍 REQI効果サイズ計算中...")
+    reqi_median = clean_df['avg_race_level'].median()
+    high_reqi = clean_df[clean_df['avg_race_level'] >= reqi_median]
+    low_reqi = clean_df[clean_df['avg_race_level'] < reqi_median]
+    
+    reqi_high_rate = high_reqi['place_rate'].mean()
+    reqi_low_rate = low_reqi['place_rate'].mean()
+    
+    # Cohen's d計算（REQI）
+    reqi_pooled_std = np.sqrt(((len(high_reqi)-1)*high_reqi['place_rate'].var() + 
+                              (len(low_reqi)-1)*low_reqi['place_rate'].var()) / 
+                             (len(high_reqi)+len(low_reqi)-2))
+    reqi_cohens_d = (reqi_high_rate - reqi_low_rate) / reqi_pooled_std
+    
+    # 2. オッズ効果サイズの計算
+    logger.info("🔍 オッズ効果サイズ計算中...")
+    odds_median = clean_df['avg_place_prob_from_odds'].median()
+    high_odds = clean_df[clean_df['avg_place_prob_from_odds'] >= odds_median]  # 高確率=人気
+    low_odds = clean_df[clean_df['avg_place_prob_from_odds'] < odds_median]   # 低確率=不人気
+    
+    odds_high_rate = high_odds['place_rate'].mean()
+    odds_low_rate = low_odds['place_rate'].mean()
+    
+    # Cohen's d計算（オッズ）
+    odds_pooled_std = np.sqrt(((len(high_odds)-1)*high_odds['place_rate'].var() + 
+                              (len(low_odds)-1)*low_odds['place_rate'].var()) / 
+                             (len(high_odds)+len(low_odds)-2))
+    odds_cohens_d = (odds_high_rate - odds_low_rate) / odds_pooled_std
+    
+    # 3. 効果サイズの解釈
+    def interpret_effect_size(d):
+        if d < 0.2:
+            return "小効果"
+        elif d < 0.5:
+            return "中効果"
+        elif d < 0.8:
+            return "大効果"
+        else:
+            return "非常に大効果"
+    
+    reqi_interpretation = interpret_effect_size(reqi_cohens_d)
+    odds_interpretation = interpret_effect_size(odds_cohens_d)
+    
+    # 4. 結果の整理
+    results = {
+        'reqi_effect': {
+            'high_group_rate': reqi_high_rate,
+            'low_group_rate': reqi_low_rate,
+            'rate_difference': reqi_high_rate - reqi_low_rate,
+            'cohens_d': reqi_cohens_d,
+            'interpretation': reqi_interpretation,
+            'sample_size': len(high_reqi) + len(low_reqi)
+        },
+        'odds_effect': {
+            'high_group_rate': odds_high_rate,
+            'low_group_rate': odds_low_rate,
+            'rate_difference': odds_high_rate - odds_low_rate,
+            'cohens_d': odds_cohens_d,
+            'interpretation': odds_interpretation,
+            'sample_size': len(high_odds) + len(low_odds)
+        },
+        'comparison': {
+            'reqi_vs_odds_ratio': reqi_cohens_d / odds_cohens_d if odds_cohens_d != 0 else np.nan,
+            'odds_superior': odds_cohens_d > reqi_cohens_d,
+            'both_significant': reqi_cohens_d >= 0.2 and odds_cohens_d >= 0.2
+        }
+    }
+    
+    # 5. ログ出力
+    logger.info(f"📈 REQI効果サイズ: Cohen's d = {reqi_cohens_d:.3f} ({reqi_interpretation})")
+    logger.info(f"   - 高REQI群: {reqi_high_rate:.1%}, 低REQI群: {reqi_low_rate:.1%}")
+    logger.info(f"📈 オッズ効果サイズ: Cohen's d = {odds_cohens_d:.3f} ({odds_interpretation})")
+    logger.info(f"   - 人気馬群: {odds_high_rate:.1%}, 不人気馬群: {odds_low_rate:.1%}")
+    
+    if results['comparison']['odds_superior']:
+        logger.info("✅ オッズの方が効果が大きい")
+    else:
+        logger.info("✅ REQIの方が効果が大きい")
     
     return results
 
