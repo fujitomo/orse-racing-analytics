@@ -1035,20 +1035,20 @@ def calculate_race_level_features_fast(df: pd.DataFrame) -> pd.DataFrame:
         """venue_levelを算出（通常版と統一した方法）"""
         # 通常版と同じvenue_level生成ロジックを使用
         if '場コード' in df.columns:
-            # 場コードから判定（通常版と同じマッピング）
+            # 場コードから判定（書籍引用準拠「東京、中山、阪神、京都、札幌 > 中京、函館、新潟 > 福島、小倉」）
             venue_codes = pd.to_numeric(df['場コード'], errors='coerce').fillna(0).astype(int)
             result = np.ones(len(venue_codes)) * 0.0
-            result[venue_codes.isin([1, 5, 6])] = 9.0  # 東京、京都、阪神
-            result[venue_codes.isin([2, 3, 8])] = 7.0  # 中山、中京、札幌
-            result[venue_codes == 7] = 4.0  # 函館
+            result[venue_codes.isin([1, 2, 6, 5, 8])] = 9.0  # 東京、中山、阪神、京都、札幌（第1グループ）
+            result[venue_codes.isin([3, 7, 4])] = 7.0  # 中京、函館、新潟（第2グループ）
+            result[venue_codes.isin([9, 10])] = 4.0  # 福島、小倉（第3グループ）
             return result
         elif '場名' in df.columns:
-            # 場名から判定（通常版と同じマッピング）
+            # 場名から判定（書籍引用準拠）
             venue_names = df['場名'].astype(str)
             result = np.ones(len(venue_names)) * 0.0
-            result[venue_names.isin(['東京', '京都', '阪神'])] = 9.0
-            result[venue_names.isin(['中山', '中京', '札幌'])] = 7.0
-            result[venue_names == '函館'] = 4.0
+            result[venue_names.isin(['東京', '中山', '阪神', '京都', '札幌'])] = 9.0  # 第1グループ
+            result[venue_names.isin(['中京', '函館', '新潟'])] = 7.0  # 第2グループ
+            result[venue_names.isin(['福島', '小倉'])] = 4.0  # 第3グループ
             return result
         else:
             logger.warning("⚠️ 場コード・場名カラムが見つかりません。デフォルト値を使用")
@@ -1136,10 +1136,9 @@ def calculate_race_level_features_with_position_weights(df: pd.DataFrame) -> pd.
         if pd.isna(venue_code):
             return 0
         venue_mapping = {
-            '01': 9, '05': 9, '06': 9,  # 東京、京都、阪神
-            '02': 7, '03': 7, '08': 7,  # 中山、中京、札幌
-            '07': 4,                     # 函館
-            '04': 0, '09': 0, '10': 0   # 新潟、福島、小倉
+            '01': 9, '02': 9, '06': 9, '05': 9, '08': 9,  # 東京、中山、阪神、京都、札幌（第1グループ）
+            '03': 7, '07': 7, '04': 7,  # 中京、函館、新潟（第2グループ）
+            '09': 4, '10': 4            # 福島、小倉（第3グループ）
         }
         return venue_mapping.get(str(venue_code).zfill(2), 0)
     
@@ -1180,15 +1179,15 @@ def calculate_race_level_features_with_position_weights(df: pd.DataFrame) -> pd.
         if '場コード' in df.columns:
             codes = pd.to_numeric(df['場コード'], errors='coerce').fillna(0).astype(int)
             df['venue_level'] = 0.0
-            df.loc[codes.isin([1, 5, 6]), 'venue_level'] = 9.0
-            df.loc[codes.isin([2, 3, 8]), 'venue_level'] = 7.0
-            df.loc[codes == 7, 'venue_level'] = 4.0
+            df.loc[codes.isin([1, 2, 6, 5, 8]), 'venue_level'] = 9.0  # 東京、中山、阪神、京都、札幌（第1グループ）
+            df.loc[codes.isin([3, 7, 4]), 'venue_level'] = 7.0  # 中京、函館、新潟（第2グループ）
+            df.loc[codes.isin([9, 10]), 'venue_level'] = 4.0  # 福島、小倉（第3グループ）
         else:
             names = df['場名'].astype(str)
             df['venue_level'] = 0.0
-            df.loc[names.isin(['東京', '京都', '阪神']), 'venue_level'] = 9.0
-            df.loc[names.isin(['中山', '中京', '札幌']), 'venue_level'] = 7.0
-            df.loc[names == '函館', 'venue_level'] = 4.0
+            df.loc[names.isin(['東京', '中山', '阪神', '京都', '札幌']), 'venue_level'] = 9.0  # 第1グループ
+            df.loc[names.isin(['中京', '函館', '新潟']), 'venue_level'] = 7.0  # 第2グループ
+            df.loc[names.isin(['福島', '小倉']), 'venue_level'] = 4.0  # 第3グループ
         logger.info(f"✅ venue_level生成完了(場コード/場名): 平均値 {df['venue_level'].mean():.3f}")
     else:
         logger.warning("⚠️ グレード/場コード/場名列が存在しません。venue_level=0で設定します")
@@ -1783,26 +1782,23 @@ def calculate_reqi_with_dynamic_weights(df: pd.DataFrame) -> pd.DataFrame:
     
     # 2. 場所レベルの計算
     def calculate_venue_level(row):
-        # 場名から判定
+        # 場名から判定（書籍引用「東京、中山、阪神、京都、札幌 > 中京、函館、新潟 > 福島、小倉」準拠）
         if '場名' in df_copy.columns and pd.notna(row.get('場名')):
             venue_name = str(row['場名'])
-            if venue_name in ['東京', '京都', '阪神']:
-                return 9.0  # 最高格式
-            elif venue_name in ['中山', '中京', '札幌']:
-                return 7.0  # 高格式
-            elif venue_name in ['函館']:
-                return 4.0  # 中格式
-            elif venue_name in ['新潟', '福島', '小倉']:
-                return 0.0  # 標準格式
+            if venue_name in ['東京', '中山', '阪神', '京都', '札幌']:
+                return 9.0  # 第1グループ
+            elif venue_name in ['中京', '函館', '新潟']:
+                return 7.0  # 第2グループ
+            elif venue_name in ['福島', '小倉']:
+                return 4.0  # 第3グループ
         
         # 場コードからフォールバック
         if '場コード' in df_copy.columns and pd.notna(row.get('場コード')):
             venue_code = str(row['場コード']).zfill(2)
             venue_mapping = {
-                '01': 9.0, '05': 9.0, '06': 9.0,  # 東京、京都、阪神
-                '02': 7.0, '03': 7.0, '08': 7.0,  # 中山、中京、札幌
-                '07': 4.0,  # 函館
-                '04': 0.0, '09': 0.0, '10': 0.0   # 新潟、福島、小倉
+                '01': 9.0, '02': 9.0, '06': 9.0, '05': 9.0, '08': 9.0,  # 東京、中山、阪神、京都、札幌（第1グループ）
+                '03': 7.0, '07': 7.0, '04': 7.0,  # 中京、函館、新潟（第2グループ）
+                '09': 4.0, '10': 4.0   # 福島、小倉（第3グループ）
             }
             return venue_mapping.get(venue_code, 0.0)
         
@@ -1891,28 +1887,25 @@ def calculate_accurate_feature_levels(df: pd.DataFrame) -> pd.DataFrame:
         # 場名から判定
         if '場名' in df_copy.columns and pd.notna(row.get('場名')):
             venue_name = str(row['場名'])
-            # レポート記載の格式レベル
-            if venue_name in ['東京', '京都', '阪神']:
-                return 3.0  # 最高格式
-            elif venue_name in ['中山', '中京', '札幌']:
-                return 2.0  # 高格式
-            elif venue_name in ['函館']:
-                return 1.5  # 中格式
-            elif venue_name in ['新潟', '福島', '小倉']:
-                return 1.0  # 標準格式
+            # 書籍引用「東京、中山、阪神、京都、札幌 > 中京、函館、新潟 > 福島、小倉」準拠
+            if venue_name in ['東京', '中山', '阪神', '京都', '札幌']:
+                return 9.0  # 第1グループ
+            elif venue_name in ['中京', '函館', '新潟']:
+                return 7.0  # 第2グループ
+            elif venue_name in ['福島', '小倉']:
+                return 4.0  # 第3グループ
         
         # 場コードから判定（フォールバック）
         if '場コード' in df_copy.columns and pd.notna(row.get('場コード')):
             venue_code = str(row['場コード']).zfill(2)
             venue_mapping = {
-                '01': 3.0, '05': 3.0, '06': 3.0,  # 東京、京都、阪神
-                '02': 2.0, '03': 2.0, '08': 2.0,  # 中山、中京、札幌
-                '07': 1.5,  # 函館
-                '04': 1.0, '09': 1.0, '10': 1.0   # 新潟、福島、小倉
+                '01': 9.0, '02': 9.0, '06': 9.0, '05': 9.0, '08': 9.0,  # 東京、中山、阪神、京都、札幌（第1グループ）
+                '03': 7.0, '07': 7.0, '04': 7.0,  # 中京、函館、新潟（第2グループ）
+                '09': 4.0, '10': 4.0   # 福島、小倉（第3グループ）
             }
-            return venue_mapping.get(venue_code, 1.0)
+            return venue_mapping.get(venue_code, 0.0)
         
-        return 1.0  # 最終フォールバック
+        return 0.0  # 最終フォールバック
     
     # 2. prize_level の計算（1着賞金から）
     def calculate_prize_level(row):
