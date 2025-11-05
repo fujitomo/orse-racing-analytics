@@ -26,7 +26,15 @@ from collections import defaultdict
 
 # 実務レベルのログ設定
 def setup_logging(log_level='INFO', log_file=None):
-    """実務レベルのログ設定"""
+    """実務レベルのログ設定を初期化する。
+
+    Args:
+        log_level (str): ログレベル（例: ``INFO``, ``DEBUG``）。
+        log_file (str | None): ログ出力ファイルパス。``None`` の場合はコンソールのみ。
+
+    Returns:
+        None
+    """
     import logging
     
     # シンプルな設定
@@ -49,24 +57,24 @@ def setup_logging(log_level='INFO', log_file=None):
 logger = logging.getLogger(__name__)
 
 class DataQualityChecker:
-    """
-    データ品質チェッククラス
-    実務レベルのデータ整備に必要な品質管理機能
+    """データ品質チェッククラス。
+
+    実務レベルのデータ整備に必要な品質管理機能を提供する。
     """
     
     def __init__(self):
+        """インスタンスを初期化する。"""
         self.quality_report = {}  # 各処理段階のデータ品質レポートを格納する辞書
         
     def check_data_quality(self, df: pd.DataFrame, stage_name: str) -> Dict[str, Any]:
-        """
-        包括的なデータ品質チェック
-        
+        """包括的なデータ品質チェックを実行する。
+
         Args:
-            df: チェック対象のDataFrame
-            stage_name: 処理段階名
-            
+            df (pd.DataFrame): チェック対象の DataFrame。
+            stage_name (str): 処理段階名（例: ``BAC処理後``）。
+
         Returns:
-            品質レポート辞書
+            Dict[str, Any]: 品質レポートの辞書。
         """
         logger.info(f"📊 {stage_name} - データ品質チェック開始")
         start_time = time.time()
@@ -125,7 +133,14 @@ class DataQualityChecker:
         return report
     
     def _analyze_missing_values(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """欠損値の詳細分析"""
+        """欠損値の詳細分析を行う。
+
+        Args:
+            df (pd.DataFrame): 対象データ。
+
+        Returns:
+            Dict[str, Any]: 欠損セル総数や列別内訳などの分析結果。
+        """
         missing_counts = df.isnull().sum()
         # 欠損値のパーセンテージ
         missing_percentages = (missing_counts / len(df)) * 100
@@ -145,11 +160,25 @@ class DataQualityChecker:
         return analysis
     
     def _check_data_types(self, df: pd.DataFrame) -> Dict[str, str]:
-        """データ型の妥当性チェック"""
+        """データ型の妥当性チェックを行う。
+
+        Args:
+            df (pd.DataFrame): 対象データ。
+
+        Returns:
+            Dict[str, str]: 列名とデータ型のマッピング。
+        """
         return {col: str(dtype) for col, dtype in df.dtypes.items()}
     
     def _detect_outliers(self, df: pd.DataFrame) -> Dict[str, int]:
-        """IQR法による外れ値検出"""
+        """IQR 法による外れ値検出を行う。
+
+        Args:
+            df (pd.DataFrame): 対象データ。
+
+        Returns:
+            Dict[str, int]: 列別の外れ値件数。
+        """
         outlier_counts = {}
         
         numeric_columns = df.select_dtypes(include=[np.number]).columns
@@ -168,7 +197,14 @@ class DataQualityChecker:
         return outlier_counts
     
     def _validate_business_rules(self, df: pd.DataFrame) -> Tuple[List[str], List[str]]:
-        """競馬データ特有のビジネスルール検証"""
+        """競馬データ特有のビジネスルール検証を行う。
+
+        Args:
+            df (pd.DataFrame): 対象データ。
+
+        Returns:
+            Tuple[List[str], List[str]]: 警告リストと推奨リスト。
+        """
         warnings = []
         recommendations = []
         
@@ -203,7 +239,14 @@ class DataQualityChecker:
         return warnings, recommendations
     
     def _log_quality_summary(self, report: Dict[str, Any]):
-        """品質レポートサマリーのログ出力"""
+        """品質レポートサマリーをログ出力する。
+
+        Args:
+            report (Dict[str, Any]): 品質レポート辞書。
+
+        Returns:
+            None
+        """
         logger.info(f"📊 【{report['stage']}】品質サマリー:")
         logger.info(f"   📏 データ規模: {report['total_rows']:,}行 x {report['total_columns']}列")
         logger.info(f"   💾 メモリ使用量: {report['memory_usage_mb']:.1f}MB")
@@ -216,24 +259,24 @@ class DataQualityChecker:
                 logger.warning(f"      • {warning}")
 
 class MissingValueHandler:
-    """
-    戦略的欠損値処理クラス
-    計画書Phase 0の要件に基づく実務レベルの欠損値処理
+    """戦略的欠損値処理クラス。
+
+    計画書 Phase 0 の要件に基づく実務レベルの欠損値処理を提供する。
     """
     
     def __init__(self):
+        """インスタンスを初期化する。"""
         self.processing_log = []
         
     def handle_missing_values(self, df: pd.DataFrame, strategy_config: Dict[str, Any] = None) -> pd.DataFrame:
-        """
-        戦略的欠損値処理の実行
-        
+        """戦略的欠損値処理を実行する。
+
         Args:
-            df: 処理対象DataFrame
-            strategy_config: 処理戦略設定
-            
+            df (pd.DataFrame): 処理対象 DataFrame。
+            strategy_config (Dict[str, Any] | None): 処理戦略設定。
+
         Returns:
-            欠損値処理済みDataFrame
+            pd.DataFrame: 欠損値処理済み DataFrame。
         """
         logger.info("🔧 戦略的欠損値処理開始")
         start_time = time.time()
@@ -279,7 +322,7 @@ class MissingValueHandler:
         return df_processed
     
     def _get_default_strategy(self) -> Dict[str, Any]:
-        """デフォルトの欠損値処理戦略"""
+        """デフォルトの欠損値処理戦略を返す。"""
         return {
             'critical_columns': {
                 '着順': 'drop',  # 着順が欠損の行は削除
@@ -302,7 +345,7 @@ class MissingValueHandler:
         }
     
     def _handle_critical_columns(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
-        """重要列の欠損値処理"""
+        """重要列の欠損値処理を実施する。"""
         logger.info("   🎯 重要列の欠損値処理中...")
         
         critical_config = config.get('critical_columns', {})
@@ -320,7 +363,7 @@ class MissingValueHandler:
         return df
     
     def _handle_numeric_columns(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
-        """数値列の欠損値処理"""
+        """数値列の欠損値処理を実施する。"""
         logger.info("   🔢 数値列の欠損値処理中...")
         
         numeric_config = config.get('numeric_columns', {})
@@ -387,7 +430,7 @@ class MissingValueHandler:
         return df
     
     def _handle_categorical_columns(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
-        """カテゴリ列の欠損値処理"""
+        """カテゴリ列の欠損値処理を実施する。"""
         logger.info("   🏷️ カテゴリ列の欠損値処理中...")
         
         categorical_config = config.get('categorical_columns', {})
@@ -433,7 +476,7 @@ class MissingValueHandler:
         return df
     
     def _handle_remaining_missing(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
-        """残存欠損値の最終処理"""
+        """残存欠損値の最終処理を行う。"""
         remaining_missing = df.isnull().sum().sum()
         
         if remaining_missing > 0:
@@ -463,17 +506,16 @@ class MissingValueHandler:
         return df
     
     def _estimate_grade_from_features(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """
-        実務レベルのグレード推定処理
-        賞金・レース名・出走頭数等からグレードを推定
-        推定できない場合は該当レコードを削除
-        
+        """実務レベルのグレード推定処理を行う。
+
+        賞金・レース名・出走頭数等からグレードを推定し、推定できないレコードを削除する。
+
         Args:
-            df: 処理対象DataFrame
-            grade_column: グレード列名
-            
+            df (pd.DataFrame): 処理対象 DataFrame。
+            grade_column (str): グレード列名。
+
         Returns:
-            グレード推定済みDataFrame（推定失敗レコードは削除済み）
+            pd.DataFrame: グレード推定済み DataFrame（推定失敗レコードは削除済み）。
         """
         initial_rows = len(df)
         grade_missing_mask = df[grade_column].isnull()
@@ -540,9 +582,9 @@ class MissingValueHandler:
         return df
     
     def _estimate_grade_from_prize(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """賞金からグレード推定（実務レポートに基づく基準）
-        1着賞金(1着算入賞金込み)のみを使用
-        しきい値は万円スケールを想定（データのスケール差異はそのまま比較）
+        """賞金からグレード推定（実務レポートに基づく基準）。
+
+        1着賞金(1着算入賞金込み)のみを使用し、しきい値は万円スケールを想定。
         """
         # 1着賞金(1着算入賞金込み)のみを使用
         prize_col = '1着賞金(1着算入賞金込み)'
@@ -592,7 +634,7 @@ class MissingValueHandler:
         return df
     
     def _estimate_grade_from_base_prize(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """本賞金からグレード推定（フォールバック処理）"""
+        """本賞金からグレード推定（フォールバック処理）。"""
         if '本賞金' not in df.columns:
             return df
         
@@ -620,7 +662,7 @@ class MissingValueHandler:
         return df
     
     def _calculate_horse_age_from_registration(self, df: pd.DataFrame) -> pd.DataFrame:
-        """血統登録番号と年月日から馬齢を計算して列を追加"""
+        """血統登録番号と年月日から馬齢を計算して列を追加する。"""
         try:
             from datetime import datetime
             
@@ -700,7 +742,7 @@ class MissingValueHandler:
             return df
     
     def _estimate_grade_from_race_name_fallback(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """レース名からグレード推定（フォールバック処理）"""
+        """レース名からグレード推定（フォールバック処理）。"""
         if 'レース名' not in df.columns:
             return df
         
@@ -776,7 +818,7 @@ class MissingValueHandler:
         return df
     
     def _estimate_grade_from_features_fallback(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """距離・出走頭数からグレード推定（フォールバック処理）"""
+        """距離・出走頭数からグレード推定（フォールバック処理）。"""
         # 距離による推定
         if '距離' in df.columns:
             df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
@@ -804,7 +846,7 @@ class MissingValueHandler:
         return df
     
     def _estimate_grade_from_race_name(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """レース名からグレード推定（実務レベルパターンマッチング）"""
+        """レース名からグレード推定（実務レベルパターンマッチング）。"""
         if 'レース名' not in df.columns:
             return df
         
@@ -842,7 +884,7 @@ class MissingValueHandler:
         return df
     
     def _adjust_grade_by_field_size(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """出走頭数によるグレード補正（実務レベル調整）"""
+        """出走頭数によるグレード補正（実務レベル調整）。"""
         if '頭数' not in df.columns:
             return df
         
@@ -865,7 +907,7 @@ class MissingValueHandler:
         return df
     
     def _adjust_grade_by_distance(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """距離によるグレード補正（実務レベル調整）"""
+        """距離によるグレード補正（実務レベル調整）。"""
         if '距離' not in df.columns:
             return df
         
@@ -889,15 +931,14 @@ class MissingValueHandler:
         return df
     
     def _add_grade_name_column(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """
-        数値グレードから「グレード名」列を作成
-        
+        """数値グレードから「グレード名」列を作成する。
+
         Args:
-            df: 処理対象DataFrame
-            grade_column: グレード列名
-            
+            df (pd.DataFrame): 処理対象 DataFrame。
+            grade_column (str): グレード列名。
+
         Returns:
-            グレード名列が追加されたDataFrame
+            pd.DataFrame: グレード名列が追加された DataFrame。
         """
         # グレード変換マッピング（レポート仕様準拠）
         grade_mapping = {
@@ -929,7 +970,7 @@ class MissingValueHandler:
         return df
     
     def _save_processing_log(self, df: pd.DataFrame):
-        """処理ログの保存（追記モード対応）"""
+        """処理ログを追記モードで保存する。"""
         log_path = Path('export/missing_value_processing_log.txt')
         
         try:
@@ -969,10 +1010,7 @@ class SystemMonitor:
         logger.info(f"   ⏱️ 経過時間: {elapsed_time:.1f}秒")
 
 def ensure_export_dirs():
-    """
-    出力用ディレクトリの存在確認と作成
-    実務レベルの管理機能付き
-    """
+    """出力用ディレクトリの存在確認と作成を行う。"""
     dirs = [
         'export/BAC', 
         'export/SRB', 
@@ -997,7 +1035,7 @@ def ensure_export_dirs():
         logger.info("📁 すべてのディレクトリが既に存在します")
 
 def save_quality_report(quality_checker: DataQualityChecker):
-    """データ品質レポートの保存"""
+    """データ品質レポートを JSON として保存する。"""
     report_path = Path('export/quality_reports/data_quality_report.json')
     
     try:
@@ -1011,10 +1049,7 @@ def save_quality_report(quality_checker: DataQualityChecker):
         logger.warning(f"⚠️ 品質レポート保存エラー: {str(e)}")
 
 def display_deletion_statistics():
-    """
-    グレード欠損による削除統計の表示
-    SEDとdatasetディレクトリを比較して削除統計を出力
-    """
+    """グレード欠損による削除統計を表示する。"""
     try:
         from pathlib import Path
         
@@ -1094,10 +1129,7 @@ def display_deletion_statistics():
         logger.warning(f"⚠️ 削除統計表示エラー: {str(e)}")
 
 def summarize_processing_log():
-    """
-    実務レベル欠損値処理ログのサマリー生成
-    冗長なログをまとめて統計情報を作成
-    """
+    """欠損値処理ログのサマリーを生成する。"""
     log_file = Path('export/missing_value_processing_log.txt')
     backup_file = Path('export/missing_value_processing_log_original.txt')
     summary_file = Path('export/missing_value_processing_summary.txt')
@@ -1146,7 +1178,7 @@ def summarize_processing_log():
         logger.warning(f"⚠️ ログサマリー生成エラー: {str(e)}")
 
 def _parse_processing_log(log_file: Path) -> Dict[str, Any]:
-    """ログファイルを解析して処理統計を作成"""
+    """ログファイルを解析して処理統計を作成する。"""
     
     # 統計情報格納用
     stats = {
@@ -1232,7 +1264,7 @@ def _parse_processing_log(log_file: Path) -> Dict[str, Any]:
     return stats
 
 def _generate_summary_report(stats: Dict[str, Any], output_file: Path):
-    """統計情報からサマリーレポートを生成"""
+    """統計情報からサマリーレポートを生成する。"""
     
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write("=" * 80 + "\n")
@@ -1310,15 +1342,18 @@ def _generate_summary_report(stats: Dict[str, Any], output_file: Path):
 
 def process_race_data(exclude_turf=False, turf_only=False, 
                      enable_missing_value_handling=True, enable_quality_check=True):
-    """
-    競馬レースデータの実務レベル処理（標準版）
-    計画書Phase 0: データ整備の実装
-    
+    """競馬レースデータの実務レベル処理（標準版）。
+
+    計画書 Phase 0: データ整備の実装。
+
     Args:
-        exclude_turf (bool): 芝コースを除外するかどうか
-        turf_only (bool): 芝コースのみを処理するかどうか
-        enable_missing_value_handling (bool): 戦略的欠損値処理を実行するかどうか
-        enable_quality_check (bool): データ品質チェックを実行するかどうか
+        exclude_turf (bool): 芝コースを除外するかどうか。
+        turf_only (bool): 芝コースのみを処理するかどうか。
+        enable_missing_value_handling (bool): 戦略的欠損値処理を実行するかどうか。
+        enable_quality_check (bool): データ品質チェックを実行するかどうか。
+
+    Returns:
+        bool: 成功時 ``True``、失敗時 ``False``。
     """
     logger.info("🏇 ■ 競馬レースデータの実務レベル処理を開始します ■")
     
