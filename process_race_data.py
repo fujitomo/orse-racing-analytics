@@ -43,6 +43,7 @@ class ColumnNames:
     HORSE_COUNT = '頭数'
     POSITION = '着順'
     HORSE_NAME = '馬名'
+    HORSE_AGE = '馬齢'
     IDM = 'IDM'
     GRADE = 'グレード'
     GRADE_Y = 'グレード_y'
@@ -95,7 +96,11 @@ class GradeThresholds:
             })
     
     def to_thresholds_list(self) -> List[Tuple[int, int]]:
-        """しきい値リストに変換（降順）"""
+        """賞金しきい値を降順リストに変換します。
+
+        Returns:
+            List[Tuple[int, int]]: 最低賞金と対応するグレード値のタプルのリスト。
+        """
         return [
             (self.G1_MIN, 1),
             (self.G2_MIN, 2),
@@ -151,11 +156,12 @@ class GradeEstimator:
     def __init__(self, thresholds: Optional[GradeThresholds] = None, 
                  patterns: Optional[RacePatterns] = None,
                  columns: Optional[ColumnNames] = None):
-        """
+        """推定に必要な依存オブジェクトを初期化します。
+
         Args:
-            thresholds: 賞金閾値設定
-            patterns: レース名パターン設定
-            columns: 列名設定
+            thresholds (GradeThresholds, optional): 賞金に基づく閾値設定。
+            patterns (RacePatterns, optional): レース名パターン設定。
+            columns (ColumnNames, optional): 列名設定。
         """
         self.thresholds = thresholds or GradeThresholds()
         self.patterns = patterns or RacePatterns()
@@ -163,14 +169,14 @@ class GradeEstimator:
         self.logger = logging.getLogger(__name__)
     
     def estimate_grade(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """グレード推定のメインメソッド
-        
+        """グレード推定を実行します。
+
         Args:
-            df: 処理対象DataFrame
-            grade_column: グレード列名
-            
+            df (pd.DataFrame): 処理対象の DataFrame。
+            grade_column (str): 推定対象となるグレード列名。
+
         Returns:
-            グレード推定済みDataFrame（元のDataFrameは変更されない）
+            pd.DataFrame: グレード推定結果を反映した DataFrame（コピー）。
         """
         # DataFrameのコピーを作成（不変性を保証）
         df_result = df.copy()
@@ -223,15 +229,15 @@ class GradeEstimator:
         return df_result
     
     def _estimate_from_prize(self, df: pd.DataFrame, grade_column: str, prize_col: str) -> pd.DataFrame:
-        """賞金からグレード推定（共通処理）
-        
+        """賞金情報からグレードを推定します。
+
         Args:
-            df: 処理対象DataFrame
-            grade_column: グレード列名
-            prize_col: 賞金列名
-            
+            df (pd.DataFrame): 処理対象の DataFrame。
+            grade_column (str): グレードを格納する列名。
+            prize_col (str): 参照する賞金列名。
+
         Returns:
-            推定結果が反映されたDataFrame（コピー）
+            pd.DataFrame: 推定結果を反映した DataFrame（コピー）。
         """
         if prize_col not in df.columns:
             return df
@@ -251,14 +257,14 @@ class GradeEstimator:
         return df_result
     
     def _estimate_from_race_name(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """レース名からグレード推定
-        
+        """レース名のパターンからグレードを推定します。
+
         Args:
-            df: 処理対象DataFrame
-            grade_column: グレード列名
-            
+            df (pd.DataFrame): 処理対象の DataFrame。
+            grade_column (str): グレードを格納する列名。
+
         Returns:
-            推定結果が反映されたDataFrame（コピー）
+            pd.DataFrame: 推定結果を反映した DataFrame（コピー）。
         """
         if self.columns.RACE_NAME not in df.columns:
             return df
@@ -282,14 +288,14 @@ class GradeEstimator:
         return df_result
     
     def _estimate_from_features(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """距離・出走頭数からグレード推定
-        
+        """距離や頭数などの特徴量からグレードを推定します。
+
         Args:
-            df: 処理対象DataFrame
-            grade_column: グレード列名
-            
+            df (pd.DataFrame): 処理対象の DataFrame。
+            grade_column (str): グレードを格納する列名。
+
         Returns:
-            推定結果が反映されたDataFrame（コピー）
+            pd.DataFrame: 推定結果を反映した DataFrame（コピー）。
         """
         # DataFrameのコピーを作成
         df_result = df.copy()
@@ -317,14 +323,14 @@ class GradeEstimator:
         return df_result
     
     def _add_grade_name_column(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """数値グレードから「グレード名」列を作成
-        
+        """数値グレードをグレード名に変換します。
+
         Args:
-            df: 処理対象DataFrame
-            grade_column: グレード列名
-            
+            df (pd.DataFrame): 処理対象の DataFrame。
+            grade_column (str): 数値グレードが格納された列名。
+
         Returns:
-            グレード名列が追加されたDataFrame（コピー）
+            pd.DataFrame: グレード名列を付与した DataFrame（コピー）。
         """
         # DataFrameのコピーを作成
         df_result = df.copy()
@@ -359,13 +365,13 @@ class HorseAgeCalculator:
         self.logger = logging.getLogger(__name__)
     
     def calculate_horse_age(self, df: pd.DataFrame) -> pd.DataFrame:
-        """血統登録番号と年月日から馬齢を計算
-        
+        """血統登録番号と年月日から馬齢を算出します。
+
         Args:
-            df: 処理対象DataFrame
-            
+            df (pd.DataFrame): 処理対象の DataFrame。
+
         Returns:
-            馬齢列が追加されたDataFrame（コピー）
+            pd.DataFrame: 馬齢列を追加した DataFrame（コピー）。
         """
         try:
             # DataFrameのコピーを作成（不変性を保証）
@@ -376,48 +382,52 @@ class HorseAgeCalculator:
                 self.logger.warning("⚠️ 血統登録番号または年月日列が見つかりません")
                 return df_result
             
+            # レース日で安定ソートし、初出走レースを確実に取得
+            if self.columns.RACE_DATE in df_result.columns:
+                df_result = df_result.sort_values(by=self.columns.RACE_DATE, kind='stable')
+
             # 馬齢列を初期化
             df_result[self.columns.HORSE_AGE] = None
             
             # 馬ごとに最初のレース情報を取得
-            horse_first_race = df_result.groupby(self.columns.HORSE_NAME).first()
+            horse_first_race = df_result.groupby(self.columns.HORSE_NAME, sort=False).first()
             
             horse_age_map = {}
             
             for horse_name, row in horse_first_race.iterrows():
                 try:
-                    registration_number = str(row[self.columns.REGISTRATION_NUMBER])
-                    race_date_str = str(row[self.columns.RACE_DATE])
-                    
-                    # 血統登録番号の最初の2桁が生年（西暦）
-                    if len(registration_number) >= 2:
-                        birth_year = int(registration_number[:2])
-                        
-                        # 2桁年を4桁年に変換
-                        if birth_year <= 30:
-                            birth_year += 2000
-                        else:
-                            birth_year += 1900
-                        
-                        # レース日付を解析
-                        if len(race_date_str) == 8:  # YYYYMMDD形式
-                            race_year = int(race_date_str[:4])
-                            
-                            # 馬齢計算（日本競馬では1月1日に全馬が加齢）
-                            # レース年と生年の差がそのまま馬齢となる
-                            age = race_year - birth_year
-                            
-                            # 年齢の妥当性チェック
-                            if self.VALID_AGE_RANGE[0] <= age <= self.VALID_AGE_RANGE[1]:
-                                horse_age_map[horse_name] = age
-                            else:
-                                self.logger.debug(f"⚠️ 異常な年齢: {horse_name} (計算年齢:{age})")
-                                horse_age_map[horse_name] = self.DEFAULT_HORSE_AGE
-                        else:
-                            self.logger.debug(f"⚠️ 日付形式エラー: {horse_name}")
-                            horse_age_map[horse_name] = self.DEFAULT_HORSE_AGE
-                    else:
+                    registration_raw = row[self.columns.REGISTRATION_NUMBER]
+                    race_date_raw = row[self.columns.RACE_DATE]
+
+                    registration_number = re.sub(r'\D', '', str(registration_raw))
+                    if len(registration_number) < 2:
                         self.logger.debug(f"⚠️ 血統登録番号形式エラー: {horse_name}")
+                        horse_age_map[horse_name] = self.DEFAULT_HORSE_AGE
+                        continue
+
+                    birth_year = int(registration_number[:2])
+                    birth_year = birth_year + 2000 if birth_year <= 30 else birth_year + 1900
+
+                    if pd.isna(race_date_raw):
+                        self.logger.debug(f"⚠️ 日付欠損: {horse_name}")
+                        horse_age_map[horse_name] = self.DEFAULT_HORSE_AGE
+                        continue
+
+                    race_date_digits = re.sub(r'\D', '', str(race_date_raw))
+                    if len(race_date_digits) != 8:
+                        self.logger.debug(f"⚠️ 日付形式エラー: {horse_name}")
+                        horse_age_map[horse_name] = self.DEFAULT_HORSE_AGE
+                        continue
+
+                    race_year = int(race_date_digits[:4])
+
+                    # 馬齢計算（日本競馬では1月1日に全馬が加齢）
+                    age = race_year - birth_year
+
+                    if self.VALID_AGE_RANGE[0] <= age <= self.VALID_AGE_RANGE[1]:
+                        horse_age_map[horse_name] = age
+                    else:
+                        self.logger.debug(f"⚠️ 異常な年齢: {horse_name} (計算年齢:{age})")
                         horse_age_map[horse_name] = self.DEFAULT_HORSE_AGE
                         
                 except (ValueError, TypeError) as e:
@@ -446,11 +456,8 @@ def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None) -> No
     """実務レベルのログ設定を初期化する。
 
     Args:
-        log_level: ログレベル（例: ``INFO``, ``DEBUG``）。
-        log_file: ログ出力ファイルパス。``None`` の場合はコンソールのみ。
-
-    Returns:
-        None
+        log_level (str): ログレベル（例: ``INFO``, ``DEBUG``）。
+        log_file (str, optional): ログ出力ファイルパス。``None`` の場合はコンソールのみ。
     """
     # シンプルな設定
     if log_file:
@@ -480,14 +487,14 @@ class DataQualityChecker:
         self.logger = logging.getLogger(__name__)
         
     def check_data_quality(self, df: pd.DataFrame, stage_name: str) -> Dict[str, Any]:
-        """包括的なデータ品質チェックを実行する。
+        """包括的なデータ品質チェックを実行します。
 
         Args:
             df (pd.DataFrame): チェック対象の DataFrame。
             stage_name (str): 処理段階名（例: ``BAC処理後``）。
 
         Returns:
-            Dict[str, Any]: 品質レポートの辞書。
+            Dict[str, Any]: 品質レポートを格納した辞書。
         """
         self.logger.info(f"📊 {stage_name} - データ品質チェック開始")
         start_time = time.time()
@@ -656,9 +663,6 @@ class DataQualityChecker:
 
         Args:
             report (Dict[str, Any]): 品質レポート辞書。
-
-        Returns:
-            None
         """
         self.logger.info(f"📊 【{report['stage']}】品質サマリー:")
         self.logger.info(f"   📏 データ規模: {report['total_rows']:,}行 x {report['total_columns']}列")
@@ -678,10 +682,10 @@ class MissingValueHandler:
     """
     
     def __init__(self, columns: Optional[ColumnNames] = None):
-        """インスタンスを初期化する。
-        
+        """欠損値処理で利用する依存を初期化します。
+
         Args:
-            columns: 列名設定
+            columns (ColumnNames, optional): 列名設定。
         """
         self.columns = columns or ColumnNames()
         self.processing_log = []
@@ -693,11 +697,11 @@ class MissingValueHandler:
         """戦略的欠損値処理を実行する。
 
         Args:
-            df: 処理対象 DataFrame。
-            strategy_config: 処理戦略設定。
+            df (pd.DataFrame): 処理対象の DataFrame。
+            strategy_config (Dict[str, Any], optional): 欠損値処理戦略。
 
         Returns:
-            欠損値処理済み DataFrame。
+            pd.DataFrame: 欠損値処理を施した DataFrame。
         """
         self.logger.info("🔧 戦略的欠損値処理開始")
         start_time = time.time()
@@ -743,7 +747,11 @@ class MissingValueHandler:
         return df_processed
     
     def _get_default_strategy(self) -> Dict[str, Any]:
-        """デフォルトの欠損値処理戦略を返す。"""
+        """デフォルトの欠損値処理戦略を返します。
+
+        Returns:
+            Dict[str, Any]: 欠損値処理戦略の設定辞書。
+        """
         return {
             'critical_columns': {
                 self.columns.POSITION: 'drop',  # 着順が欠損の行は削除
@@ -772,7 +780,15 @@ class MissingValueHandler:
         }
     
     def _handle_critical_columns(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
-        """重要列の欠損値処理を実施する。"""
+        """重要列に対する欠損値処理を実施します。
+
+        Args:
+            df (pd.DataFrame): 処理対象の DataFrame。
+            config (Dict[str, Any]): 欠損値処理戦略。
+
+        Returns:
+            pd.DataFrame: 処理後の DataFrame。
+        """
         self.logger.info("   🎯 重要列の欠損値処理中...")
         
         critical_config = config.get('critical_columns', {})
@@ -790,7 +806,15 @@ class MissingValueHandler:
         return df
     
     def _handle_numeric_columns(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
-        """数値列の欠損値処理を実施する。"""
+        """数値列の欠損値処理を実施します。
+
+        Args:
+            df (pd.DataFrame): 処理対象の DataFrame。
+            config (Dict[str, Any]): 欠損値処理戦略。
+
+        Returns:
+            pd.DataFrame: 処理後の DataFrame。
+        """
         self.logger.info("   🔢 数値列の欠損値処理中...")
         
         numeric_config = config.get('numeric_columns', {})
@@ -848,7 +872,15 @@ class MissingValueHandler:
         return df
     
     def _handle_categorical_columns(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
-        """カテゴリ列の欠損値処理を実施する。"""
+        """カテゴリ列の欠損値処理を実施します。
+
+        Args:
+            df (pd.DataFrame): 処理対象の DataFrame。
+            config (Dict[str, Any]): 欠損値処理戦略。
+
+        Returns:
+            pd.DataFrame: 処理後の DataFrame。
+        """
         self.logger.info("   🏷️ カテゴリ列の欠損値処理中...")
         
         categorical_config = config.get('categorical_columns', {})
@@ -895,7 +927,15 @@ class MissingValueHandler:
         return df
     
     def _handle_remaining_missing(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
-        """残存欠損値の最終処理を行う。"""
+        """残存する欠損値の最終処理を行います。
+
+        Args:
+            df (pd.DataFrame): 処理対象の DataFrame。
+            config (Dict[str, Any]): 欠損値処理戦略。
+
+        Returns:
+            pd.DataFrame: 残存欠損値を処理した DataFrame。
+        """
         remaining_missing = df.isnull().sum().sum()
         
         if remaining_missing > 0:
@@ -926,7 +966,11 @@ class MissingValueHandler:
     
     
     def _save_processing_log(self, df: pd.DataFrame):
-        """処理ログを追記モードで保存する。"""
+        """処理ログを追記モードで保存します。
+
+        Args:
+            df (pd.DataFrame): 最終的な処理結果の DataFrame。
+        """
         log_path = Path('export/missing_value_processing_log.txt')
         
         try:
@@ -950,6 +994,8 @@ class MissingValueHandler:
             
         except Exception as e:
             self.logger.warning(f"⚠️ 処理ログ保存エラー: {str(e)}")
+        finally:
+            self.processing_log.clear()
 
 class SystemMonitor:
     """システム監視クラス（簡略版）"""
@@ -959,7 +1005,11 @@ class SystemMonitor:
         self.logger = logging.getLogger(__name__)
     
     def log_system_status(self, stage_name: str):
-        """システム状態のログ出力（簡略版）"""
+        """システム状態をログに出力します。
+
+        Args:
+            stage_name (str): 出力対象の処理段階名。
+        """
         current_time = time.time()
         elapsed_time = current_time - self.start_time
         
@@ -994,7 +1044,11 @@ def ensure_export_dirs():
         logger.info("📁 すべてのディレクトリが既に存在します")
 
 def save_quality_report(quality_checker: DataQualityChecker):
-    """データ品質レポートを JSON として保存する。"""
+    """データ品質レポートを JSON として保存します。
+
+    Args:
+        quality_checker (DataQualityChecker): 品質レポートを保持するオブジェクト。
+    """
     import json
     
     logger = logging.getLogger(__name__)
@@ -1014,6 +1068,25 @@ def display_deletion_statistics():
     logger = logging.getLogger(__name__)
     
     try:
+        def _count_csv_rows(file_path: Path) -> int:
+            buffer_size = 1024 * 1024
+            newline_count = 0
+            last_char = b'\n'
+
+            with file_path.open('rb') as f:
+                while True:
+                    chunk = f.read(buffer_size)
+                    if not chunk:
+                        break
+                    newline_count += chunk.count(b'\n')
+                    last_char = chunk[-1:]
+
+            line_count = newline_count
+            if last_char not in (b'\n', b''):
+                line_count += 1
+
+            return max(line_count - 1, 0)
+
         # ディレクトリパス
         sed_dir = Path('export/SED/formatted')
         bias_dir = Path('export/dataset')
@@ -1047,11 +1120,8 @@ def display_deletion_statistics():
                 
                 try:
                     # レコード数を数える（ヘッダー除く）
-                    with open(sed_file, 'r', encoding='utf-8') as f:
-                        sed_count = sum(1 for line in f) - 1
-                    
-                    with open(bias_file, 'r', encoding='utf-8') as f:
-                        bias_count = sum(1 for line in f) - 1
+                    sed_count = _count_csv_rows(sed_file)
+                    bias_count = _count_csv_rows(bias_file)
                     
                     deleted = sed_count - bias_count
                     total_sed += sed_count
@@ -1141,7 +1211,14 @@ def summarize_processing_log():
         logger.warning(f"⚠️ ログサマリー生成エラー: {str(e)}")
 
 def _parse_processing_log(log_file: Path) -> Optional[Dict[str, Any]]:
-    """ログファイルを解析して処理統計を作成する。"""
+    """欠損値処理ログを解析して統計を生成します。
+
+    Args:
+        log_file (Path): 解析対象のログファイルパス。
+
+    Returns:
+        Optional[Dict[str, Any]]: ログ解析結果の統計情報。
+    """
     logger = logging.getLogger(__name__)
     
     # 統計情報格納用
@@ -1228,7 +1305,12 @@ def _parse_processing_log(log_file: Path) -> Optional[Dict[str, Any]]:
     return stats
 
 def _generate_summary_report(stats: Dict[str, Any], output_file: Path):
-    """統計情報からサマリーレポートを生成する。"""
+    """統計情報からサマリーレポートを生成します。
+
+    Args:
+        stats (Dict[str, Any]): ログ解析によって得られた統計情報。
+        output_file (Path): 出力先のファイルパス。
+    """
     
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write("=" * 80 + "\n")
@@ -1314,13 +1396,13 @@ def process_race_data(exclude_turf: bool = False, turf_only: bool = False,
     後方互換性のために残されています。
 
     Args:
-        exclude_turf: 芝コースを除外するかどうか。
-        turf_only: 芝コースのみを処理するかどうか。
-        enable_missing_value_handling: 戦略的欠損値処理を実行するかどうか。
-        enable_quality_check: データ品質チェックを実行するかどうか。
+        exclude_turf (bool): 芝コースを除外するかどうか。
+        turf_only (bool): 芝コースのみを処理するかどうか。
+        enable_missing_value_handling (bool): 戦略的欠損値処理を実行するかどうか。
+        enable_quality_check (bool): データ品質チェックを実行するかどうか。
 
     Returns:
-        成功時 ``True``、失敗時 ``False``。
+        bool: 成功時 ``True``、失敗時 ``False``。
     """
     logger.info("🏇 ■ 競馬レースデータの実務レベル処理を開始します ■")
     
@@ -1330,7 +1412,7 @@ def process_race_data(exclude_turf: bool = False, turf_only: bool = False,
     # 処理オプションの確認
     if exclude_turf and turf_only:
         logger.error("❌ 芝コースを除外するオプションと芝コースのみを処理するオプションは同時に指定できません")
-        return
+        return False
     
     # 通常の処理設定のログ出力
     logger.info("📋 処理設定:")

@@ -6,10 +6,11 @@ from .processors.bac_processor import process_all_bac_files
 from .processors.sed_processor import process_all_sed_files
 
 def process_race_data():
-    """
-    レースデータを以下の順序で処理します：
-    1. BACデータ（レース基本情報）
-    2. SEDデータ（競走成績）
+    """レースデータの処理フローを実行します。
+
+    Steps:
+        1. BAC データ（レース基本情報）の処理。
+        2. SED データ（競走成績）の処理。
     """
     print("レースデータの処理を開始します。")
     
