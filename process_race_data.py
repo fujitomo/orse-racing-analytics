@@ -23,137 +23,48 @@ from typing import Dict, Any, Tuple, List, Optional
 import numpy as np
 import re
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
+# モジュール共通ロガー
+logger = logging.getLogger(__name__)
 
 # =====================================
-# カスタム例外クラス
+# 列名の定義（既存コードとの互換用）
 # =====================================
 
-class RaceDataProcessingError(Exception):
-    """競馬データ処理の基底例外クラス"""
-    pass
-
-class DataMergeError(RaceDataProcessingError):
-    """データ統合エラー"""
-    pass
-
-class QualityCheckError(RaceDataProcessingError):
-    """品質チェックエラー"""
-    pass
-
-class MissingValueHandlingError(RaceDataProcessingError):
-    """欠損値処理エラー"""
-    pass
-
-class ConfigurationError(RaceDataProcessingError):
-    """設定エラー"""
-    pass
-
-# =====================================
-# 列名管理クラス（一元管理）
-# =====================================
-
-@dataclass
 class ColumnNames:
-    """データフレーム列名の一元管理クラス"""
-    # グレード関連
-    GRADE: str = 'グレード'
-    GRADE_NAME: str = 'グレード名'
-    GRADE_Y: str = 'グレード_y'
-    
+    """データ列名の集中定義とユーティリティ。
+
+    既存の日本語列名を対象に、推定ロジックが参照する列名を提供する。
+    """
+    # 基本列
+    RACE_NAME = 'レース名'
+    DISTANCE = '距離'
+    HORSE_COUNT = '頭数'
+    POSITION = '着順'
+    HORSE_NAME = '馬名'
+    IDM = 'IDM'
+    GRADE = 'グレード'
+    GRADE_Y = 'グレード_y'
+    GRADE_NAME = 'グレード名'
+
+    # 日付・識別
+    REGISTRATION_NUMBER = '血統登録番号'
+    RACE_DATE = '年月日'
+
     # 賞金関連
-    PRIZE_1ST_WITH_BONUS: str = '1着賞金(1着算入賞金込み)'
-    PRIZE_2ND_WITH_BONUS: str = '2着賞金(2着算入賞金込み)'
-    PRIZE_MAIN: str = '本賞金'
-    PRIZE_2ND: str = '2着賞金'
-    PRIZE_3RD: str = '3着賞金'
-    PRIZE_4TH: str = '4着賞金'
-    PRIZE_5TH: str = '5着賞金'
-    PRIZE_1ST_BONUS: str = '1着算入賞金'
-    PRIZE_2ND_BONUS: str = '2着算入賞金'
-    PRIZE_AVERAGE: str = '平均賞金'
-    
-    # レース情報
-    RACE_NAME: str = 'レース名'
-    RACE_NAME_SHORT: str = 'レース名略称'
-    DISTANCE: str = '距離'
-    HORSE_COUNT: str = '頭数'
-    POSITION: str = '着順'
-    TIME: str = 'タイム'
-    
-    # 馬情報
-    HORSE_NAME: str = '馬名'
-    HORSE_AGE: str = '馬齢'
-    REGISTRATION_NUMBER: str = '血統登録番号'
-    RACE_DATE: str = '年月日'
-    HORSE_WEIGHT_CHANGE: str = '馬体重増減'
-    
-    # IDM関連
-    IDM: str = 'IDM'
-    
-    @classmethod
-    def get_grade_columns(cls) -> List[str]:
-        """グレード関連列名リストを取得"""
-        return [cls.GRADE, 'grade', 'レースグレード']
-    
-    @classmethod
-    def get_prize_columns(cls) -> List[str]:
-        """賞金関連列名リストを取得（欠損値処理対象外）"""
-        return [
-            cls.PRIZE_2ND, cls.PRIZE_3RD, cls.PRIZE_4TH, cls.PRIZE_5TH,
-            cls.PRIZE_1ST_BONUS, cls.PRIZE_2ND_BONUS,
-            cls.PRIZE_1ST_WITH_BONUS, cls.PRIZE_2ND_WITH_BONUS, cls.PRIZE_AVERAGE
-        ]
+    PRIZE_1ST_WITH_BONUS = '1着賞金(1着算入賞金込み)'
+    PRIZE_MAIN = '本賞金'
 
-# =====================================
-# 処理設定クラス（一元管理）
-# =====================================
+    def get_grade_columns(self):
+        return [self.GRADE, 'grade', 'レースグレード']
 
-@dataclass
-class ProcessingConfig:
-    """データ処理の設定を一元管理するクラス"""
-    # トラック条件
-    exclude_turf: bool = False
-    turf_only: bool = False
-    
-    # 処理オプション
-    enable_missing_value_handling: bool = True
-    enable_quality_check: bool = True
-    
-    # ログ設定
-    log_level: str = 'INFO'
-    log_file: Optional[str] = None
-    
-    # ディレクトリ設定
-    export_dir: Path = field(default_factory=lambda: Path('export'))
-    dataset_dir: Path = field(default_factory=lambda: Path('export/dataset'))
-    quality_reports_dir: Path = field(default_factory=lambda: Path('export/quality_reports'))
-    logs_dir: Path = field(default_factory=lambda: Path('export/logs'))
-    
-    def __post_init__(self):
-        """初期化後の検証"""
-        if self.exclude_turf and self.turf_only:
-            raise ConfigurationError("exclude_turfとturf_onlyは同時に指定できません")
-        
-        # ディレクトリパスをPathオブジェクトに変換
-        if isinstance(self.export_dir, str):
-            self.export_dir = Path(self.export_dir)
-        if isinstance(self.dataset_dir, str):
-            self.dataset_dir = Path(self.dataset_dir)
-        if isinstance(self.quality_reports_dir, str):
-            self.quality_reports_dir = Path(self.quality_reports_dir)
-        if isinstance(self.logs_dir, str):
-            self.logs_dir = Path(self.logs_dir)
-    
-    def get_all_directories(self) -> List[Path]:
-        """すべての出力ディレクトリを取得"""
+    def get_prize_columns(self):
         return [
-            self.export_dir / 'BAC',
-            self.export_dir / 'SRB',
-            self.export_dir / 'SED',
-            self.dataset_dir,
-            self.quality_reports_dir,
-            self.logs_dir
+            '2着賞金', '3着賞金', '4着賞金', '5着賞金',
+            '1着算入賞金', '2着算入賞金',
+            self.PRIZE_1ST_WITH_BONUS, '2着賞金(2着算入賞金込み)', '平均賞金',
+            self.PRIZE_MAIN
         ]
 
 # =====================================
@@ -1052,210 +963,8 @@ class SystemMonitor:
         current_time = time.time()
         elapsed_time = current_time - self.start_time
         
-        self.logger.info(f"💻 [{stage_name}] システム状態:")
-        self.logger.info(f"   ⏱️ 経過時間: {elapsed_time:.1f}秒")
-
-# =====================================
-# RaceDataProcessor クラス（Facadeパターン）
-# =====================================
-
-class RaceDataProcessor:
-    """競馬データ処理のFacadeクラス
-    
-    長大なprocess_race_data関数を責任別に分割し、
-    各処理フェーズを管理する。
-    """
-    
-    def __init__(self, config: ProcessingConfig):
-        """
-        Args:
-            config: 処理設定
-        """
-        self.config = config
-        self.logger = logging.getLogger(__name__)
-        self.monitor = SystemMonitor()
-        self.quality_checker = DataQualityChecker() if config.enable_quality_check else None
-    
-    def process(self) -> bool:
-        """メイン処理を実行
-        
-        Returns:
-            成功時True、失敗時False
-        """
-        try:
-            self._log_start()
-            self._setup_directories()
-            self._process_bac_phase()
-            self._process_srb_phase()
-            self._process_sed_phase()
-            self._merge_data_phase()
-            self._quality_check_phase()
-            self._generate_reports()
-            self._log_completion()
-            return True
-        except Exception as e:
-            self.logger.error(f"❌ データ処理中に予期せぬエラーが発生しました: {str(e)}")
-            self.logger.error("🔧 スタックトレース:", exc_info=True)
-            return False
-    
-    def _log_start(self):
-        """処理開始ログを出力"""
-        self.logger.info("🏇 ■ 競馬レースデータの実務レベル処理を開始します ■")
-        self.logger.info("📋 処理設定:")
-        self.logger.info(f"   🌱 芝コース除外: {'はい' if self.config.exclude_turf else 'いいえ'}")
-        self.logger.info(f"   🌱 芝コースのみ: {'はい' if self.config.turf_only else 'いいえ'}")
-        self.logger.info(f"   🔧 欠損値処理: {'有効' if self.config.enable_missing_value_handling else '無効'}")
-        self.logger.info(f"   📈 品質チェック: {'有効' if self.config.enable_quality_check else '無効'}")
-    
-    def _setup_directories(self):
-        """出力ディレクトリをセットアップ"""
-        dirs = self.config.get_all_directories()
-        created_dirs = []
-        
-        for dir_path in dirs:
-            if not dir_path.exists():
-                dir_path.mkdir(parents=True, exist_ok=True)
-                created_dirs.append(str(dir_path))
-                self.logger.info(f"📁 ディレクトリ作成: {dir_path}")
-        
-        if created_dirs:
-            self.logger.info(f"✅ {len(created_dirs)}個のディレクトリを作成しました")
-        else:
-            self.logger.info("📁 すべてのディレクトリが既に存在します")
-        
-        self.monitor.log_system_status("初期化完了")
-    
-    def _process_bac_phase(self):
-        """BACデータ処理フェーズ"""
-        self.logger.info("\n" + "="*60)
-        self.logger.info("📂 Phase 0-1: BACデータ（レース基本情報）の処理")
-        self.logger.info("="*60)
-        
-        process_all_bac_files(
-            exclude_turf=self.config.exclude_turf,
-            turf_only=self.config.turf_only
-        )
-        self.monitor.log_system_status("BAC処理完了")
-    
-    def _process_srb_phase(self):
-        """SRBデータ処理フェーズ"""
-        self.logger.info("\n" + "="*60)
-        self.logger.info("📂 Phase 0-2: SRBデータ（レース詳細情報）の処理")
-        self.logger.info("="*60)
-        
-        process_all_srb_files(
-            exclude_turf=self.config.exclude_turf,
-            turf_only=self.config.turf_only
-        )
-        self.monitor.log_system_status("SRB処理完了")
-    
-    def _process_sed_phase(self):
-        """SEDデータ処理フェーズ"""
-        self.logger.info("\n" + "="*60)
-        self.logger.info("📂 Phase 0-3: SEDデータ（競走成績）の処理と紐づけ")
-        self.logger.info("="*60)
-        
-        process_all_sed_files(
-            exclude_turf=self.config.exclude_turf,
-            turf_only=self.config.turf_only
-        )
-    
-    def _merge_data_phase(self):
-        """データ統合フェーズ"""
-        self.logger.info("\n" + "="*60)
-        self.logger.info("📂 Phase 0-4: SEDデータとSRBデータの統合")
-        self.logger.info("="*60)
-        self.logger.info("📋 バイアス情報完備データのみを保持します")
-        
-        merge_result = merge_srb_with_sed(
-            separate_output=True,
-            exclude_turf=self.config.exclude_turf,
-            turf_only=self.config.turf_only
-        )
-        
-        if not merge_result:
-            raise DataMergeError("SEDデータとSRBデータの紐づけに失敗しました")
-        
-        self.logger.info("✅ データ統合完了:")
-        self.logger.info("   📁 SEDデータ: export/SED/")
-        self.logger.info("   📁 SRBデータ: export/SRB/")
-        self.logger.info("   📁 統合データ: export/dataset/")
-        
-        self.monitor.log_system_status("データ統合完了")
-    
-    def _quality_check_phase(self):
-        """品質チェックフェーズ"""
-        if not self.config.enable_quality_check or not self.quality_checker:
-            return
-        
-        self.logger.info("\n" + "="*60)
-        self.logger.info("📊 Phase 0-5: データ品質チェック")
-        self.logger.info("="*60)
-        
-        # サンプルファイルで品質チェック実行
-        sample_files = list(self.config.dataset_dir.glob('*.csv'))
-        if sample_files:
-            sample_file = sample_files[0]
-            self.logger.info(f"📄 サンプルファイルで品質チェック: {sample_file.name}")
-            
-            try:
-                sample_df = pd.read_csv(sample_file, encoding='utf-8')
-                self.quality_checker.check_data_quality(sample_df, "統合後データ")
-            except Exception as e:
-                self.logger.warning(f"⚠️ 品質チェックエラー: {str(e)}")
-    
-    def _generate_reports(self):
-        """レポート生成フェーズ"""
-        # 品質レポートの保存
-        if self.config.enable_quality_check and self.quality_checker:
-            self._save_quality_report()
-        
-        # 欠損値処理ログのサマリー生成
-        if self.config.enable_missing_value_handling:
-            self.logger.info("\n" + "="*60)
-            self.logger.info("📝 Phase 0-7: 欠損値処理ログの自動整理")
-            self.logger.info("="*60)
-            summarize_processing_log()
-        
-        # グレード欠損削除統計の表示
-        if self.config.enable_missing_value_handling:
-            self.logger.info("\n" + "="*60)
-            self.logger.info("📊 Phase 0-8: グレード欠損削除統計")
-            self.logger.info("="*60)
-            display_deletion_statistics()
-    
-    def _save_quality_report(self):
-        """品質レポートを保存"""
-        report_path = self.config.quality_reports_dir / 'data_quality_report.json'
-        
-        try:
-            import json
-            with open(report_path, 'w', encoding='utf-8') as f:
-                json.dump(self.quality_checker.quality_report, f, ensure_ascii=False, indent=2)
-            
-            self.logger.info(f"📊 品質レポート保存: {report_path}")
-        except Exception as e:
-            self.logger.warning(f"⚠️ 品質レポート保存エラー: {str(e)}")
-    
-    def _log_completion(self):
-        """処理完了ログを出力"""
-        self.logger.info("\n" + "="*60)
-        self.logger.info("🎉 Phase 0: データ整備 完了")
-        self.logger.info("="*60)
-        
-        total_time = time.time() - self.monitor.start_time
-        self.logger.info(f"⏱️ 総処理時間: {total_time:.1f}秒 ({total_time/60:.1f}分)")
-        self.monitor.log_system_status("全処理完了")
-        
-        self.logger.info("\n📁 生成されたデータ:")
-        if self.config.dataset_dir.exists():
-            bias_files = list(self.config.dataset_dir.glob('*.csv'))
-            self.logger.info(f"   🔗 統合データ: {len(bias_files)}ファイル")
-        
-        if self.config.enable_quality_check and self.config.quality_reports_dir.exists():
-            self.logger.info(f"   📈 品質レポート: {self.config.quality_reports_dir}/")
-        
-        self.logger.info("\n🎓 実務レベルのデータ整備が完了しました！")
+        logger.info(f"💻 [{stage_name}] システム状態:")
+        logger.info(f"   ⏱️ 経過時間: {elapsed_time:.1f}秒")
 
 def ensure_export_dirs():
     """出力用ディレクトリの存在確認と作成を行う。"""
@@ -1613,26 +1322,136 @@ def process_race_data(exclude_turf: bool = False, turf_only: bool = False,
     Returns:
         成功時 ``True``、失敗時 ``False``。
     """
+    logger.info("🏇 ■ 競馬レースデータの実務レベル処理を開始します ■")
+    
+    # システム監視開始
+    monitor = SystemMonitor()
+    
+    # 処理オプションの確認
+    if exclude_turf and turf_only:
+        logger.error("❌ 芝コースを除外するオプションと芝コースのみを処理するオプションは同時に指定できません")
+        return
+    
+    # 通常の処理設定のログ出力
+    logger.info("📋 処理設定:")
+    logger.info(f"   🌱 芝コース除外: {'はい' if exclude_turf else 'いいえ'}")
+    logger.info(f"   🌱 芝コースのみ: {'はい' if turf_only else 'いいえ'}")
+    logger.info(f"   🔧 欠損値処理: {'有効' if enable_missing_value_handling else '無効'}")
+    logger.info(f"   📈 品質チェック: {'有効' if enable_quality_check else '無効'}")
+    
+    # システムコンポーネントの初期化
+    quality_checker = DataQualityChecker() if enable_quality_check else None
+    
+    # 出力用ディレクトリの確認
+    ensure_export_dirs()
+    monitor.log_system_status("初期化完了")
+    
     try:
-        # ProcessingConfigを作成
-        config = ProcessingConfig(
-            exclude_turf=exclude_turf,
-            turf_only=turf_only,
-            enable_missing_value_handling=enable_missing_value_handling,
-            enable_quality_check=enable_quality_check
+        # 1. BACデータの処理
+        logger.info("\n" + "="*60)
+        logger.info("📂 Phase 0-1: BACデータ（レース基本情報）の処理")
+        logger.info("="*60)
+        
+        process_all_bac_files(exclude_turf=exclude_turf, turf_only=turf_only)
+        monitor.log_system_status("BAC処理完了")
+    
+        # 2. SRBデータの処理
+        logger.info("\n" + "="*60)
+        logger.info("📂 Phase 0-2: SRBデータ（レース詳細情報）の処理")
+        logger.info("="*60)
+        
+        process_all_srb_files(exclude_turf=exclude_turf, turf_only=turf_only)
+        monitor.log_system_status("SRB処理完了")
+    
+        # 3. SEDデータの処理とSRB・BACデータとの紐づけ
+        logger.info("\n" + "="*60)
+        logger.info("📂 Phase 0-3: SEDデータ（競走成績）の処理と紐づけ")
+        logger.info("="*60)
+        
+        process_all_sed_files(exclude_turf=exclude_turf, turf_only=turf_only)
+    
+        # 4. SEDデータとSRBデータの紐づけ
+        logger.info("\n" + "="*60)
+        logger.info("📂 Phase 0-4: SEDデータとSRBデータの統合")
+        logger.info("="*60)
+        logger.info("📋 バイアス情報完備データのみを保持します")
+        
+        merge_result = merge_srb_with_sed(
+            separate_output=True, 
+            exclude_turf=exclude_turf, 
+            turf_only=turf_only
         )
         
-        # RaceDataProcessorで処理を実行
-        processor = RaceDataProcessor(config)
-        return processor.process()
+        if not merge_result:
+            logger.error("❌ SEDデータとSRBデータの紐づけに失敗しました")
+            return False
         
-    except ConfigurationError as e:
-        logger = logging.getLogger(__name__)
-        logger.error(f"❌ 設定エラー: {str(e)}")
-        return False
+        logger.info("✅ データ統合完了:")
+        logger.info("   📁 SEDデータ: export/SED/")
+        logger.info("   📁 SRBデータ: export/SRB/")
+        logger.info("   📁 統合データ: export/dataset/")
+        
+        monitor.log_system_status("データ統合完了")
+        
+        # 5. データ品質チェック（統合後）
+        if enable_quality_check:
+            logger.info("\n" + "="*60)
+            logger.info("📊 Phase 0-5: データ品質チェック")
+            logger.info("="*60)
+            
+            # サンプルファイルで品質チェック実行
+            sample_files = list(Path('export/dataset').glob('*.csv'))
+            if sample_files:
+                sample_file = sample_files[0]
+                logger.info(f"📄 サンプルファイルで品質チェック: {sample_file.name}")
+                
+                try:
+                    sample_df = pd.read_csv(sample_file, encoding='utf-8')
+                    quality_checker.check_data_quality(sample_df, "統合後データ")
+                except Exception as e:
+                    logger.warning(f"⚠️ 品質チェックエラー: {str(e)}")
+        
+        # 7. 品質レポートの保存
+        if enable_quality_check and quality_checker:
+            save_quality_report(quality_checker)
+        
+        # 8. 欠損値処理ログのサマリー生成（実務レベル）
+        if enable_missing_value_handling:
+            logger.info("\n" + "="*60)
+            logger.info("📝 Phase 0-7: 欠損値処理ログの自動整理")
+            logger.info("="*60)
+            summarize_processing_log()
+        
+        # 9. グレード欠損削除統計の表示
+        if enable_missing_value_handling:
+            logger.info("\n" + "="*60)
+            logger.info("📊 Phase 0-8: グレード欠損削除統計")
+            logger.info("="*60)
+            display_deletion_statistics()
+        
+        # 10. 処理完了サマリー
+        logger.info("\n" + "="*60)
+        logger.info("🎉 Phase 0: データ整備 完了")
+        logger.info("="*60)
+        
+        total_time = time.time() - monitor.start_time
+        logger.info(f"⏱️ 総処理時間: {total_time:.1f}秒 ({total_time/60:.1f}分)")
+        monitor.log_system_status("全処理完了")
+        
+        logger.info("\n📁 生成されたデータ:")
+        if Path('export/dataset').exists():
+            bias_files = list(Path('export/dataset').glob('*.csv'))
+            logger.info(f"   🔗 統合データ: {len(bias_files)}ファイル")
+        
+        if enable_quality_check and Path('export/quality_reports').exists():
+            logger.info("   📈 品質レポート: export/quality_reports/")
+        
+        logger.info("\n🎓 実務レベルのデータ整備が完了しました！")
+        
+        return True
+        
     except Exception as e:
-        logger = logging.getLogger(__name__)
-        logger.error(f"❌ 予期せぬエラー: {str(e)}")
+        logger.error(f"❌ データ処理中に予期せぬエラーが発生しました: {str(e)}")
         logger.error("🔧 スタックトレース:", exc_info=True)
         return False
 
@@ -1704,36 +1523,25 @@ if __name__ == "__main__":
     main_logger.info(f"🖥️ ログレベル: {args.log_level}")
     if log_file:
         main_logger.info(f"📝 ログファイル: {log_file}")
-    
+
     try:
-        # ProcessingConfigを作成
-        config = ProcessingConfig(
+        success = process_race_data(
             exclude_turf=args.exclude_turf,
             turf_only=args.turf_only,
             enable_missing_value_handling=not args.no_missing_handling,
             enable_quality_check=not args.no_quality_check,
-            log_level=args.log_level,
-            log_file=log_file
         )
-        
-        # RaceDataProcessorで処理を実行
-        processor = RaceDataProcessor(config)
-        success = processor.process()
-        
-    except ConfigurationError as e:
-        main_logger.error(f"❌ 設定エラー: {str(e)}")
-        success = False
     except Exception as e:
         main_logger.error(f"❌ 予期せぬエラー: {str(e)}")
         main_logger.error("🔧 スタックトレース:", exc_info=True)
         success = False
-    
+
     if success:
         main_logger.info("🎉 実務レベルデータ処理が正常に完了しました")
         exit_code = 0
     else:
         main_logger.error("❌ データ処理が失敗しました")
         exit_code = 1
-    
+
     main_logger.info(f"🏁 プロセス終了 (終了コード: {exit_code})")
-    exit(exit_code) 
+    exit(exit_code)
