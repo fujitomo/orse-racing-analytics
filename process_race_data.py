@@ -19,11 +19,67 @@ import pandas as pd
 from pathlib import Path
 from datetime import datetime
 
-from typing import Dict, Any, Tuple, List
+from typing import Dict, Any, Tuple, List, Optional
 import numpy as np
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+# =====================================
+# 列名管理クラス（一元管理）
+# =====================================
+
+@dataclass
+class ColumnNames:
+    """データフレーム列名の一元管理クラス"""
+    # グレード関連
+    GRADE: str = 'グレード'
+    GRADE_NAME: str = 'グレード名'
+    GRADE_Y: str = 'グレード_y'
+    
+    # 賞金関連
+    PRIZE_1ST_WITH_BONUS: str = '1着賞金(1着算入賞金込み)'
+    PRIZE_2ND_WITH_BONUS: str = '2着賞金(2着算入賞金込み)'
+    PRIZE_MAIN: str = '本賞金'
+    PRIZE_2ND: str = '2着賞金'
+    PRIZE_3RD: str = '3着賞金'
+    PRIZE_4TH: str = '4着賞金'
+    PRIZE_5TH: str = '5着賞金'
+    PRIZE_1ST_BONUS: str = '1着算入賞金'
+    PRIZE_2ND_BONUS: str = '2着算入賞金'
+    PRIZE_AVERAGE: str = '平均賞金'
+    
+    # レース情報
+    RACE_NAME: str = 'レース名'
+    RACE_NAME_SHORT: str = 'レース名略称'
+    DISTANCE: str = '距離'
+    HORSE_COUNT: str = '頭数'
+    POSITION: str = '着順'
+    TIME: str = 'タイム'
+    
+    # 馬情報
+    HORSE_NAME: str = '馬名'
+    HORSE_AGE: str = '馬齢'
+    REGISTRATION_NUMBER: str = '血統登録番号'
+    RACE_DATE: str = '年月日'
+    HORSE_WEIGHT_CHANGE: str = '馬体重増減'
+    
+    # IDM関連
+    IDM: str = 'IDM'
+    
+    @classmethod
+    def get_grade_columns(cls) -> List[str]:
+        """グレード関連列名リストを取得"""
+        return [cls.GRADE, 'grade', 'レースグレード']
+    
+    @classmethod
+    def get_prize_columns(cls) -> List[str]:
+        """賞金関連列名リストを取得（欠損値処理対象外）"""
+        return [
+            cls.PRIZE_2ND, cls.PRIZE_3RD, cls.PRIZE_4TH, cls.PRIZE_5TH,
+            cls.PRIZE_1ST_BONUS, cls.PRIZE_2ND_BONUS,
+            cls.PRIZE_1ST_WITH_BONUS, cls.PRIZE_2ND_WITH_BONUS, cls.PRIZE_AVERAGE
+        ]
 
 # =====================================
 # グレード推定用の設定クラス（マジックナンバー解消）
@@ -37,6 +93,20 @@ class GradeThresholds:
     G3_MIN: int = 1438    # G3: 1,438万円以上（G3レース平均）
     LISTED_MIN: int = 903  # L（リステッド）: 903万円以上（Lレース平均）
     SPECIAL_MIN: int = 552 # 特別/OP: 552万円以上（特別レース平均）
+    
+    # グレード名マッピング
+    GRADE_NAME_MAPPING: Dict[int, str] = None
+    
+    def __post_init__(self):
+        if self.GRADE_NAME_MAPPING is None:
+            object.__setattr__(self, 'GRADE_NAME_MAPPING', {
+                1: 'Ｇ１',
+                2: 'Ｇ２', 
+                3: 'Ｇ３',
+                4: '重賞',
+                5: '特別',
+                6: 'Ｌ（リステッド）'
+            })
     
     def to_thresholds_list(self) -> List[Tuple[int, int]]:
         """しきい値リストに変換（降順）"""
@@ -92,14 +162,18 @@ class RacePatterns:
 class GradeEstimator:
     """グレード推定専用クラス（単一責任原則を遵守）"""
     
-    def __init__(self, thresholds: GradeThresholds = None, patterns: RacePatterns = None):
+    def __init__(self, thresholds: Optional[GradeThresholds] = None, 
+                 patterns: Optional[RacePatterns] = None,
+                 columns: Optional[ColumnNames] = None):
         """
         Args:
             thresholds: 賞金閾値設定
             patterns: レース名パターン設定
+            columns: 列名設定
         """
         self.thresholds = thresholds or GradeThresholds()
         self.patterns = patterns or RacePatterns()
+        self.columns = columns or ColumnNames()
         self.logger = logging.getLogger(__name__)
     
     def estimate_grade(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
@@ -110,32 +184,35 @@ class GradeEstimator:
             grade_column: グレード列名
             
         Returns:
-            グレード推定済みDataFrame
+            グレード推定済みDataFrame（元のDataFrameは変更されない）
         """
-        initial_rows = len(df)
-        grade_missing_mask = df[grade_column].isnull()
+        # DataFrameのコピーを作成（不変性を保証）
+        df_result = df.copy()
+        
+        initial_rows = len(df_result)
+        grade_missing_mask = df_result[grade_column].isnull()
         initial_missing_count = grade_missing_mask.sum()
         
         if not grade_missing_mask.any():
             # 既存の数値グレードからグレード名列を作成
-            df = self._add_grade_name_column(df, grade_column)
-            return df
+            df_result = self._add_grade_name_column(df_result, grade_column)
+            return df_result
         
         self.logger.info(f"📊 グレード欠損値: {initial_missing_count:,}件 ({initial_missing_count/initial_rows*100:.1f}%)")
         
         # 推定対象データ
-        estimation_df = df[grade_missing_mask].copy()
+        estimation_df = df_result[grade_missing_mask].copy()
         
         # 1. 賞金ベースの推定
-        if '1着賞金(1着算入賞金込み)' in df.columns:
-            estimation_df = self._estimate_from_prize(estimation_df, grade_column, '1着賞金(1着算入賞金込み)')
+        if self.columns.PRIZE_1ST_WITH_BONUS in df_result.columns:
+            estimation_df = self._estimate_from_prize(estimation_df, grade_column, self.columns.PRIZE_1ST_WITH_BONUS)
         
         # 2. 本賞金からの推定（フォールバック）
-        if '本賞金' in df.columns:
-            estimation_df = self._estimate_from_prize(estimation_df, grade_column, '本賞金')
+        if self.columns.PRIZE_MAIN in df_result.columns:
+            estimation_df = self._estimate_from_prize(estimation_df, grade_column, self.columns.PRIZE_MAIN)
         
         # 3. レース名からの推定
-        if 'レース名' in df.columns:
+        if self.columns.RACE_NAME in df_result.columns:
             estimation_df = self._estimate_from_race_name(estimation_df, grade_column)
         
         # 4. 特徴量からの推定（距離・出走頭数）
@@ -148,37 +225,60 @@ class GradeEstimator:
             estimation_df.loc[estimation_df[grade_column].isnull(), grade_column] = 5
         
         # 推定結果を元のDataFrameに反映
-        df.loc[grade_missing_mask, grade_column] = estimation_df[grade_column]
+        df_result.loc[grade_missing_mask, grade_column] = estimation_df[grade_column]
         
         # グレード名列を追加
-        df = self._add_grade_name_column(df, grade_column)
+        df_result = self._add_grade_name_column(df_result, grade_column)
         
-        estimated_count = initial_missing_count - df[grade_column].isnull().sum()
+        estimated_count = initial_missing_count - df_result[grade_column].isnull().sum()
         if estimated_count > 0:
             self.logger.info(f"      ✅ グレード推定成功: {estimated_count:,}件")
         
-        return df
+        return df_result
     
     def _estimate_from_prize(self, df: pd.DataFrame, grade_column: str, prize_col: str) -> pd.DataFrame:
-        """賞金からグレード推定（共通処理）"""
+        """賞金からグレード推定（共通処理）
+        
+        Args:
+            df: 処理対象DataFrame
+            grade_column: グレード列名
+            prize_col: 賞金列名
+            
+        Returns:
+            推定結果が反映されたDataFrame（コピー）
+        """
         if prize_col not in df.columns:
             return df
         
+        # DataFrameのコピーを作成
+        df_result = df.copy()
+        
         # 数値化
-        df[prize_col] = pd.to_numeric(df[prize_col], errors='coerce')
+        df_result[prize_col] = pd.to_numeric(df_result[prize_col], errors='coerce')
         
         # しきい値を適用
         thresholds_list = self.thresholds.to_thresholds_list()
         for min_prize, grade_value in thresholds_list:
-            mask = (df[prize_col] >= min_prize) & df[grade_column].isnull()
-            df.loc[mask, grade_column] = grade_value
+            mask = (df_result[prize_col] >= min_prize) & df_result[grade_column].isnull()
+            df_result.loc[mask, grade_column] = grade_value
         
-        return df
+        return df_result
     
     def _estimate_from_race_name(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """レース名からグレード推定"""
-        if 'レース名' not in df.columns:
+        """レース名からグレード推定
+        
+        Args:
+            df: 処理対象DataFrame
+            grade_column: グレード列名
+            
+        Returns:
+            推定結果が反映されたDataFrame（コピー）
+        """
+        if self.columns.RACE_NAME not in df.columns:
             return df
+        
+        # DataFrameのコピーを作成
+        df_result = df.copy()
         
         race_patterns = {
             1: self.patterns.G1_PATTERNS,
@@ -190,56 +290,69 @@ class GradeEstimator:
         
         for grade, patterns in race_patterns.items():
             for pattern in patterns:
-                mask = (df['レース名'].str.contains(pattern, case=False, na=False)) & df[grade_column].isnull()
-                df.loc[mask, grade_column] = grade
+                mask = (df_result[self.columns.RACE_NAME].str.contains(pattern, case=False, na=False)) & df_result[grade_column].isnull()
+                df_result.loc[mask, grade_column] = grade
         
-        return df
+        return df_result
     
     def _estimate_from_features(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """距離・出走頭数からグレード推定"""
+        """距離・出走頭数からグレード推定
+        
+        Args:
+            df: 処理対象DataFrame
+            grade_column: グレード列名
+            
+        Returns:
+            推定結果が反映されたDataFrame（コピー）
+        """
+        # DataFrameのコピーを作成
+        df_result = df.copy()
+        
         # 距離による推定
-        if '距離' in df.columns:
-            df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
+        if self.columns.DISTANCE in df_result.columns:
+            df_result[self.columns.DISTANCE] = pd.to_numeric(df_result[self.columns.DISTANCE], errors='coerce')
             
-            long_distance_mask = (df['距離'] >= 3000) & df[grade_column].isnull()
-            df.loc[long_distance_mask, grade_column] = 4  # 重賞
+            long_distance_mask = (df_result[self.columns.DISTANCE] >= 3000) & df_result[grade_column].isnull()
+            df_result.loc[long_distance_mask, grade_column] = 4  # 重賞
             
-            short_distance_mask = (df['距離'] < 1000) & df[grade_column].isnull()
-            df.loc[short_distance_mask, grade_column] = 5  # 特別
+            short_distance_mask = (df_result[self.columns.DISTANCE] < 1000) & df_result[grade_column].isnull()
+            df_result.loc[short_distance_mask, grade_column] = 5  # 特別
         
         # 出走頭数による推定
-        if '頭数' in df.columns:
-            df['頭数'] = pd.to_numeric(df['頭数'], errors='coerce')
+        if self.columns.HORSE_COUNT in df_result.columns:
+            df_result[self.columns.HORSE_COUNT] = pd.to_numeric(df_result[self.columns.HORSE_COUNT], errors='coerce')
             
-            large_field_mask = (df['頭数'] >= 16) & df[grade_column].isnull()
-            df.loc[large_field_mask, grade_column] = 4  # 重賞
+            large_field_mask = (df_result[self.columns.HORSE_COUNT] >= 16) & df_result[grade_column].isnull()
+            df_result.loc[large_field_mask, grade_column] = 4  # 重賞
             
-            small_field_mask = (df['頭数'] < 8) & df[grade_column].isnull()
-            df.loc[small_field_mask, grade_column] = 5  # 条件戦
+            small_field_mask = (df_result[self.columns.HORSE_COUNT] < 8) & df_result[grade_column].isnull()
+            df_result.loc[small_field_mask, grade_column] = 5  # 条件戦
         
-        return df
+        return df_result
     
     def _add_grade_name_column(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """数値グレードから「グレード名」列を作成"""
-        grade_mapping = {
-            1: 'Ｇ１',
-            2: 'Ｇ２', 
-            3: 'Ｇ３',
-            4: '重賞',
-            5: '特別',
-            6: 'Ｌ（リステッド）'
-        }
+        """数値グレードから「グレード名」列を作成
         
-        df[grade_column] = pd.to_numeric(df[grade_column], errors='coerce')
-        grade_names = df[grade_column].map(grade_mapping)
+        Args:
+            df: 処理対象DataFrame
+            grade_column: グレード列名
+            
+        Returns:
+            グレード名列が追加されたDataFrame（コピー）
+        """
+        # DataFrameのコピーを作成
+        df_result = df.copy()
         
-        if 'グレード名' in df.columns:
-            df['グレード名'] = grade_names
+        df_result[grade_column] = pd.to_numeric(df_result[grade_column], errors='coerce')
+        grade_names = df_result[grade_column].map(self.thresholds.GRADE_NAME_MAPPING)
+        
+        if self.columns.GRADE_NAME in df_result.columns:
+            df_result[self.columns.GRADE_NAME] = grade_names
         else:
-            grade_col_index = df.columns.get_loc(grade_column)
-            df.insert(grade_col_index + 1, 'グレード名', grade_names)
+            grade_col_index = df_result.columns.get_loc(grade_column)
+            df_result.insert(grade_col_index + 1, self.columns.GRADE_NAME, grade_names)
         
-        return df
+        return df_result
 
 # =====================================
 # 馬齢計算専用クラス（SRP遵守）
@@ -251,7 +364,12 @@ class HorseAgeCalculator:
     DEFAULT_HORSE_AGE = 3  # 日本競馬の一般的なデビュー年齢
     VALID_AGE_RANGE = (2, 20)  # 競走馬の妥当な年齢範囲
     
-    def __init__(self):
+    def __init__(self, columns: Optional[ColumnNames] = None):
+        """
+        Args:
+            columns: 列名設定
+        """
+        self.columns = columns or ColumnNames()
         self.logger = logging.getLogger(__name__)
     
     def calculate_horse_age(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -261,26 +379,29 @@ class HorseAgeCalculator:
             df: 処理対象DataFrame
             
         Returns:
-            馬齢列が追加されたDataFrame
+            馬齢列が追加されたDataFrame（コピー）
         """
         try:
+            # DataFrameのコピーを作成（不変性を保証）
+            df_result = df.copy()
+            
             # 必要な列の確認
-            if '血統登録番号' not in df.columns or '年月日' not in df.columns:
+            if self.columns.REGISTRATION_NUMBER not in df_result.columns or self.columns.RACE_DATE not in df_result.columns:
                 self.logger.warning("⚠️ 血統登録番号または年月日列が見つかりません")
-                return df
+                return df_result
             
             # 馬齢列を初期化
-            df['馬齢'] = None
+            df_result[self.columns.HORSE_AGE] = None
             
             # 馬ごとに最初のレース情報を取得
-            horse_first_race = df.groupby('馬名').first()
+            horse_first_race = df_result.groupby(self.columns.HORSE_NAME).first()
             
             horse_age_map = {}
             
             for horse_name, row in horse_first_race.iterrows():
                 try:
-                    registration_number = str(row['血統登録番号'])
-                    race_date_str = str(row['年月日'])
+                    registration_number = str(row[self.columns.REGISTRATION_NUMBER])
+                    race_date_str = str(row[self.columns.RACE_DATE])
                     
                     # 血統登録番号の最初の2桁が生年（西暦）
                     if len(registration_number) >= 2:
@@ -295,13 +416,10 @@ class HorseAgeCalculator:
                         # レース日付を解析
                         if len(race_date_str) == 8:  # YYYYMMDD形式
                             race_year = int(race_date_str[:4])
-                            race_month = int(race_date_str[4:6])
                             
-                            # 馬齢計算（競馬では1月1日を基準とする）
-                            if race_month >= 1:
-                                age = race_year - birth_year
-                            else:
-                                age = race_year - birth_year - 1
+                            # 馬齢計算（日本競馬では1月1日に全馬が加齢）
+                            # レース年と生年の差がそのまま馬齢となる
+                            age = race_year - birth_year
                             
                             # 年齢の妥当性チェック
                             if self.VALID_AGE_RANGE[0] <= age <= self.VALID_AGE_RANGE[1]:
@@ -321,7 +439,7 @@ class HorseAgeCalculator:
                     horse_age_map[horse_name] = self.DEFAULT_HORSE_AGE
             
             # 馬齢列に値を設定
-            df['馬齢'] = df['馬名'].map(horse_age_map)
+            df_result[self.columns.HORSE_AGE] = df_result[self.columns.HORSE_NAME].map(horse_age_map)
             
             # 統計情報をログ出力
             age_counts = {}
@@ -331,25 +449,23 @@ class HorseAgeCalculator:
             self.logger.info(f"✅ 馬齢計算完了: {len(horse_age_map)}頭")
             self.logger.info(f"📊 年齢分布: {dict(sorted(age_counts.items()))}")
             
-            return df
+            return df_result
             
         except Exception as e:
             self.logger.error(f"❌ 馬齢計算エラー: {str(e)}")
             return df
 
 # 実務レベルのログ設定
-def setup_logging(log_level='INFO', log_file=None):
+def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None) -> None:
     """実務レベルのログ設定を初期化する。
 
     Args:
-        log_level (str): ログレベル（例: ``INFO``, ``DEBUG``）。
-        log_file (str | None): ログ出力ファイルパス。``None`` の場合はコンソールのみ。
+        log_level: ログレベル（例: ``INFO``, ``DEBUG``）。
+        log_file: ログ出力ファイルパス。``None`` の場合はコンソールのみ。
 
     Returns:
         None
     """
-    import logging
-    
     # シンプルな設定
     if log_file:
         logging.basicConfig(
@@ -366,9 +482,6 @@ def setup_logging(log_level='INFO', log_file=None):
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
 
-# メインロガー
-logger = logging.getLogger(__name__)
-
 class DataQualityChecker:
     """データ品質チェッククラス。
 
@@ -378,6 +491,7 @@ class DataQualityChecker:
     def __init__(self):
         """インスタンスを初期化する。"""
         self.quality_report = {}  # 各処理段階のデータ品質レポートを格納する辞書
+        self.logger = logging.getLogger(__name__)
         
     def check_data_quality(self, df: pd.DataFrame, stage_name: str) -> Dict[str, Any]:
         """包括的なデータ品質チェックを実行する。
@@ -389,7 +503,7 @@ class DataQualityChecker:
         Returns:
             Dict[str, Any]: 品質レポートの辞書。
         """
-        logger.info(f"📊 {stage_name} - データ品質チェック開始")
+        self.logger.info(f"📊 {stage_name} - データ品質チェック開始")
         start_time = time.time()
         
         report = {
@@ -408,24 +522,24 @@ class DataQualityChecker:
         
         try:
             # 1. 欠損値分析
-            logger.info("   🔍 欠損値分析中...")
+            self.logger.info("   🔍 欠損値分析中...")
             missing_analysis = self._analyze_missing_values(df)
             report['missing_values'] = missing_analysis
             
             # 2. データ型チェック
-            logger.info("   🏷️ データ型チェック中...")
+            self.logger.info("   🏷️ データ型チェック中...")
             report['data_types'] = self._check_data_types(df)
             
             # 3. 重複チェック
-            logger.info("   🔄 重複チェック中...")
+            self.logger.info("   🔄 重複チェック中...")
             report['duplicates'] = int(df.duplicated().sum())
             
             # 4. 外れ値検出（数値列のみ）
-            logger.info("   📈 外れ値検出中...")
+            self.logger.info("   📈 外れ値検出中...")
             report['outliers'] = self._detect_outliers(df)
             
             # 5. ビジネスルール検証
-            logger.info("   📋 ビジネスルール検証中...")
+            self.logger.info("   📋 ビジネスルール検証中...")
             warnings, recommendations = self._validate_business_rules(df)
             report['warnings'] = warnings
             report['recommendations'] = recommendations
@@ -433,13 +547,13 @@ class DataQualityChecker:
             execution_time = time.time() - start_time
             report['execution_time_seconds'] = execution_time
             
-            logger.info(f"✅ {stage_name} - データ品質チェック完了 ({execution_time:.2f}秒)")
+            self.logger.info(f"✅ {stage_name} - データ品質チェック完了 ({execution_time:.2f}秒)")
             
             # レポート要約をログ出力
             self._log_quality_summary(report)
             
         except Exception as e:
-            logger.error(f"❌ データ品質チェックでエラー: {str(e)}")
+            self.logger.error(f"❌ データ品質チェックでエラー: {str(e)}")
             report['error'] = str(e)
         
         self.quality_report[stage_name] = report
@@ -560,16 +674,16 @@ class DataQualityChecker:
         Returns:
             None
         """
-        logger.info(f"📊 【{report['stage']}】品質サマリー:")
-        logger.info(f"   📏 データ規模: {report['total_rows']:,}行 x {report['total_columns']}列")
-        logger.info(f"   💾 メモリ使用量: {report['memory_usage_mb']:.1f}MB")
-        logger.info(f"   ❓ 欠損セル数: {report['missing_values']['total_missing_cells']:,}")
-        logger.info(f"   🔄 重複行数: {report['duplicates']:,}")
+        self.logger.info(f"📊 【{report['stage']}】品質サマリー:")
+        self.logger.info(f"   📏 データ規模: {report['total_rows']:,}行 x {report['total_columns']}列")
+        self.logger.info(f"   💾 メモリ使用量: {report['memory_usage_mb']:.1f}MB")
+        self.logger.info(f"   ❓ 欠損セル数: {report['missing_values']['total_missing_cells']:,}")
+        self.logger.info(f"   🔄 重複行数: {report['duplicates']:,}")
         
         if report['warnings']:
-            logger.warning(f"   ⚠️ 警告: {len(report['warnings'])}件")
+            self.logger.warning(f"   ⚠️ 警告: {len(report['warnings'])}件")
             for warning in report['warnings']:
-                logger.warning(f"      • {warning}")
+                self.logger.warning(f"      • {warning}")
 
 class MissingValueHandler:
     """戦略的欠損値処理クラス。
@@ -577,23 +691,29 @@ class MissingValueHandler:
     計画書 Phase 0 の要件に基づく実務レベルの欠損値処理を提供する。
     """
     
-    def __init__(self):
-        """インスタンスを初期化する。"""
-        self.processing_log = []
-        self.grade_estimator = GradeEstimator()  # グレード推定専用クラスを使用
-        self.age_calculator = HorseAgeCalculator()  # 馬齢計算専用クラスを使用
+    def __init__(self, columns: Optional[ColumnNames] = None):
+        """インスタンスを初期化する。
         
-    def handle_missing_values(self, df: pd.DataFrame, strategy_config: Dict[str, Any] = None) -> pd.DataFrame:
+        Args:
+            columns: 列名設定
+        """
+        self.columns = columns or ColumnNames()
+        self.processing_log = []
+        self.grade_estimator = GradeEstimator(columns=self.columns)  # グレード推定専用クラスを使用
+        self.age_calculator = HorseAgeCalculator(columns=self.columns)  # 馬齢計算専用クラスを使用
+        self.logger = logging.getLogger(__name__)
+        
+    def handle_missing_values(self, df: pd.DataFrame, strategy_config: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
         """戦略的欠損値処理を実行する。
 
         Args:
-            df (pd.DataFrame): 処理対象 DataFrame。
-            strategy_config (Dict[str, Any] | None): 処理戦略設定。
+            df: 処理対象 DataFrame。
+            strategy_config: 処理戦略設定。
 
         Returns:
-            pd.DataFrame: 欠損値処理済み DataFrame。
+            欠損値処理済み DataFrame。
         """
-        logger.info("🔧 戦略的欠損値処理開始")
+        self.logger.info("🔧 戦略的欠損値処理開始")
         start_time = time.time()
         
         # デフォルト戦略設定
@@ -622,16 +742,16 @@ class MissingValueHandler:
             execution_time = time.time() - start_time
             final_rows = len(df_processed)
             
-            logger.info(f"✅ 欠損値処理完了 ({execution_time:.2f}秒)")
-            logger.info(f"   📊 処理前: {original_rows:,}行")
-            logger.info(f"   📊 処理後: {final_rows:,}行")
-            logger.info(f"   📉 除去行数: {original_rows - final_rows:,}行 ({((original_rows - final_rows) / original_rows) * 100:.1f}%)")
+            self.logger.info(f"✅ 欠損値処理完了 ({execution_time:.2f}秒)")
+            self.logger.info(f"   📊 処理前: {original_rows:,}行")
+            self.logger.info(f"   📊 処理後: {final_rows:,}行")
+            self.logger.info(f"   📉 除去行数: {original_rows - final_rows:,}行 ({((original_rows - final_rows) / original_rows) * 100:.1f}%)")
             
             # 処理ログの保存
             self._save_processing_log(df_processed)
             
         except Exception as e:
-            logger.error(f"❌ 欠損値処理でエラー: {str(e)}")
+            self.logger.error(f"❌ 欠損値処理でエラー: {str(e)}")
             raise
         
         return df_processed
@@ -640,28 +760,34 @@ class MissingValueHandler:
         """デフォルトの欠損値処理戦略を返す。"""
         return {
             'critical_columns': {
-                '着順': 'drop',  # 着順が欠損の行は削除
-                '距離': 'drop',   # 距離が欠損の行は削除
-                '馬名': 'drop',   # 馬名が欠損の行は削除
-                'IDM': 'drop'     # IDMが欠損の行は削除
+                self.columns.POSITION: 'drop',  # 着順が欠損の行は削除
+                self.columns.DISTANCE: 'drop',  # 距離が欠損の行は削除
+                self.columns.HORSE_NAME: 'drop',  # 馬名が欠損の行は削除
+                self.columns.IDM: 'drop'  # IDMが欠損の行は削除
             },
             'numeric_columns': {
                 'method': 'median',  # 中央値で補完
                 'max_missing_rate': 0.5  # 50%以上欠損の列は削除
             },
             'categorical_columns': {
-                'method': 'mode',    # 最頻値で補完
+                'method': 'mode',  # 最頻値で補完
                 'unknown_label': '不明',
                 'max_missing_rate': 0.8  # 80%以上欠損の列は削除
             },
             # 残存欠損値は重要列サブセットでのみ行削除（実務レポート方針）
             'remaining_strategy': 'drop_subset',
-            'remaining_subset': ['着順', '距離', '馬名', 'IDM', 'グレード']
+            'remaining_subset': [
+                self.columns.POSITION, 
+                self.columns.DISTANCE, 
+                self.columns.HORSE_NAME, 
+                self.columns.IDM, 
+                self.columns.GRADE
+            ]
         }
     
     def _handle_critical_columns(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
         """重要列の欠損値処理を実施する。"""
-        logger.info("   🎯 重要列の欠損値処理中...")
+        self.logger.info("   🎯 重要列の欠損値処理中...")
         
         critical_config = config.get('critical_columns', {})
         
@@ -669,7 +795,7 @@ class MissingValueHandler:
             if column in df.columns:
                 missing_count = df[column].isnull().sum()
                 if missing_count > 0:
-                    logger.info(f"      • {column}: {missing_count:,}件の欠損値を{strategy}処理")
+                    self.logger.info(f"      • {column}: {missing_count:,}件の欠損値を{strategy}処理")
                     
                     if strategy == 'drop':
                         df = df.dropna(subset=[column])
@@ -679,25 +805,22 @@ class MissingValueHandler:
     
     def _handle_numeric_columns(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
         """数値列の欠損値処理を実施する。"""
-        logger.info("   🔢 数値列の欠損値処理中...")
+        self.logger.info("   🔢 数値列の欠損値処理中...")
         
         numeric_config = config.get('numeric_columns', {})
         method = numeric_config.get('method', 'median')
         max_missing_rate = numeric_config.get('max_missing_rate', 0.5)
         
         # グレード列が文字列でも推定ロジックが動くように数値化を試みる
-        for grade_col in ['グレード', 'grade', 'レースグレード']:
+        grade_columns = self.columns.get_grade_columns()
+        for grade_col in grade_columns:
             if grade_col in df.columns:
                 df[grade_col] = pd.to_numeric(df[grade_col], errors='coerce')
 
         numeric_columns = df.select_dtypes(include=[np.number]).columns
         
         # 賞金関連の列を欠損値処理の対象から除外（欠損が多くて削除されるのを防ぐ）
-        prize_columns = [
-            '2着賞金', '3着賞金', '4着賞金', '5着賞金',
-            '1着算入賞金', '2着算入賞金',
-            '1着賞金(1着算入賞金込み)', '2着賞金(2着算入賞金込み)', '平均賞金'
-        ]
+        prize_columns = self.columns.get_prize_columns()
         columns_to_process = [
             col for col in numeric_columns 
             if col not in prize_columns
@@ -709,8 +832,8 @@ class MissingValueHandler:
             
             if missing_count > 0:
                 # グレード列の特別処理（実務レベル）- 専用クラスを使用
-                if column in ['グレード', 'grade', 'レースグレード']:
-                    logger.info(f"      • {column}: 実務レベルグレード推定処理を実行")
+                if column in grade_columns:
+                    self.logger.info(f"      • {column}: 実務レベルグレード推定処理を実行")
                     df = self.grade_estimator.estimate_grade(df, column)
                     
                     # 推定後の欠損数をチェック
@@ -721,7 +844,7 @@ class MissingValueHandler:
                         self.processing_log.append(f"{column}: 賞金・レース名から{estimated_count}件推定→グレード名列追加")
                 
                 elif missing_rate > max_missing_rate:
-                    logger.warning(f"      • {column}: 欠損率{missing_rate:.1%} > {max_missing_rate:.1%} → 列削除")
+                    self.logger.warning(f"      • {column}: 欠損率{missing_rate:.1%} > {max_missing_rate:.1%} → 列削除")
                     df = df.drop(columns=[column])
                     self.processing_log.append(f"{column}: 高欠損率により列削除")
                 else:
@@ -733,14 +856,14 @@ class MissingValueHandler:
                         fill_value = 0
                     
                     df[column] = df[column].fillna(fill_value)
-                    logger.info(f"      • {column}: {missing_count:,}件を{method}({fill_value})で補完")
+                    self.logger.info(f"      • {column}: {missing_count:,}件を{method}({fill_value})で補完")
                     self.processing_log.append(f"{column}: {method}で{missing_count}件補完")
         
         return df
     
     def _handle_categorical_columns(self, df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
         """カテゴリ列の欠損値処理を実施する。"""
-        logger.info("   🏷️ カテゴリ列の欠損値処理中...")
+        self.logger.info("   🏷️ カテゴリ列の欠損値処理中...")
         
         categorical_config = config.get('categorical_columns', {})
         method = categorical_config.get('method', 'mode')
@@ -748,17 +871,18 @@ class MissingValueHandler:
         max_missing_rate = categorical_config.get('max_missing_rate', 0.8)
         
         categorical_columns = df.select_dtypes(include=['object', 'category']).columns
+        grade_columns = self.columns.get_grade_columns() + [self.columns.GRADE_NAME]
         
         for column in categorical_columns:
             # グレードはモード補完の対象から除外（推定ロジックに委ねる）
-            if column in ['グレード', 'grade', 'レースグレード', 'グレード名']:
+            if column in grade_columns:
                 continue
             
             # グレード_yの特別処理（予測マーク付き）
-            if column == 'グレード_y':
+            if column == self.columns.GRADE_Y:
                 missing_count = df[column].isnull().sum()
                 if missing_count > 0:
-                    logger.info(f"      • {column}: {missing_count:,}件をmode(特別)で補完（予測マーク付き）")
+                    self.logger.info(f"      • {column}: {missing_count:,}件をmode(特別)で補完（予測マーク付き）")
                     df[column] = df[column].fillna('特別（予測）')
                     self.processing_log.append(f"{column}: {missing_count}件をmode(特別)で補完（予測マーク付き）")
                 continue
@@ -768,7 +892,7 @@ class MissingValueHandler:
             
             if missing_count > 0:
                 if missing_rate > max_missing_rate:
-                    logger.warning(f"      • {column}: 欠損率{missing_rate:.1%} > {max_missing_rate:.1%} → 列削除")
+                    self.logger.warning(f"      • {column}: 欠損率{missing_rate:.1%} > {max_missing_rate:.1%} → 列削除")
                     df = df.drop(columns=[column])
                     self.processing_log.append(f"{column}: 高欠損率により列削除")
                 else:
@@ -779,7 +903,7 @@ class MissingValueHandler:
                         fill_value = unknown_label
                     
                     df[column] = df[column].fillna(fill_value)
-                    logger.info(f"      • {column}: {missing_count:,}件を{method}({fill_value})で補完")
+                    self.logger.info(f"      • {column}: {missing_count:,}件を{method}({fill_value})で補完")
                     self.processing_log.append(f"{column}: {method}で{missing_count}件補完")
         
         return df
@@ -789,7 +913,7 @@ class MissingValueHandler:
         remaining_missing = df.isnull().sum().sum()
         
         if remaining_missing > 0:
-            logger.info(f"   🔧 残存欠損値処理中: {remaining_missing:,}件")
+            self.logger.info(f"   🔧 残存欠損値処理中: {remaining_missing:,}件")
             
             strategy = config.get('remaining_strategy', 'drop')
             
@@ -799,7 +923,7 @@ class MissingValueHandler:
                 dropped_rows = initial_rows - len(df)
                 
                 if dropped_rows > 0:
-                    logger.info(f"      • 残存欠損値のある{dropped_rows:,}行を削除")
+                    self.logger.info(f"      • 残存欠損値のある{dropped_rows:,}行を削除")
                     self.processing_log.append(f"残存欠損値: {dropped_rows}行削除")
             elif strategy == 'drop_subset':
                 subset = config.get('remaining_subset', [])
@@ -809,7 +933,7 @@ class MissingValueHandler:
                     df = df.dropna(subset=subset)
                     dropped_rows = initial_rows - len(df)
                     if dropped_rows > 0:
-                        logger.info(f"      • 重要列({', '.join(subset)})の残存欠損{dropped_rows:,}行を削除")
+                        self.logger.info(f"      • 重要列({', '.join(subset)})の残存欠損{dropped_rows:,}行を削除")
                         self.processing_log.append(f"残存欠損(重要列): {dropped_rows}行削除")
         
         return df
@@ -836,27 +960,30 @@ class MissingValueHandler:
                 f.write(f"最終データ形状: {df.shape}\n")
                 f.write(f"残存欠損値: {df.isnull().sum().sum()}件\n\n")
             
-            logger.info(f"   📝 処理ログ保存: {log_path}")
+            self.logger.info(f"   📝 処理ログ保存: {log_path}")
             
         except Exception as e:
-            logger.warning(f"⚠️ 処理ログ保存エラー: {str(e)}")
+            self.logger.warning(f"⚠️ 処理ログ保存エラー: {str(e)}")
 
 class SystemMonitor:
     """システム監視クラス（簡略版）"""
     
     def __init__(self):
         self.start_time = time.time()
+        self.logger = logging.getLogger(__name__)
     
     def log_system_status(self, stage_name: str):
         """システム状態のログ出力（簡略版）"""
         current_time = time.time()
         elapsed_time = current_time - self.start_time
         
-        logger.info(f"💻 [{stage_name}] システム状態:")
-        logger.info(f"   ⏱️ 経過時間: {elapsed_time:.1f}秒")
+        self.logger.info(f"💻 [{stage_name}] システム状態:")
+        self.logger.info(f"   ⏱️ 経過時間: {elapsed_time:.1f}秒")
 
 def ensure_export_dirs():
     """出力用ディレクトリの存在確認と作成を行う。"""
+    logger = logging.getLogger(__name__)
+    
     dirs = [
         'export/BAC', 
         'export/SRB', 
@@ -882,10 +1009,12 @@ def ensure_export_dirs():
 
 def save_quality_report(quality_checker: DataQualityChecker):
     """データ品質レポートを JSON として保存する。"""
+    import json
+    
+    logger = logging.getLogger(__name__)
     report_path = Path('export/quality_reports/data_quality_report.json')
     
     try:
-        import json
         with open(report_path, 'w', encoding='utf-8') as f:
             json.dump(quality_checker.quality_report, f, ensure_ascii=False, indent=2)
         
@@ -896,9 +1025,9 @@ def save_quality_report(quality_checker: DataQualityChecker):
 
 def display_deletion_statistics():
     """グレード欠損による削除統計を表示する。"""
+    logger = logging.getLogger(__name__)
+    
     try:
-        from pathlib import Path
-        
         # ディレクトリパス
         sed_dir = Path('export/SED/formatted')
         bias_dir = Path('export/dataset')
@@ -976,6 +1105,8 @@ def display_deletion_statistics():
 
 def summarize_processing_log():
     """欠損値処理ログのサマリーを生成する。"""
+    logger = logging.getLogger(__name__)
+    
     log_file = Path('export/missing_value_processing_log.txt')
     backup_file = Path('export/missing_value_processing_log_original.txt')
     summary_file = Path('export/missing_value_processing_summary.txt')
@@ -1023,8 +1154,9 @@ def summarize_processing_log():
     except Exception as e:
         logger.warning(f"⚠️ ログサマリー生成エラー: {str(e)}")
 
-def _parse_processing_log(log_file: Path) -> Dict[str, Any]:
+def _parse_processing_log(log_file: Path) -> Optional[Dict[str, Any]]:
     """ログファイルを解析して処理統計を作成する。"""
+    logger = logging.getLogger(__name__)
     
     # 統計情報格納用
     stats = {
@@ -1043,7 +1175,7 @@ def _parse_processing_log(log_file: Path) -> Dict[str, Any]:
             content = f.read()
     except Exception as e:
         logger.error(f"ログファイル読み込みエラー: {e}")
-        return None
+        return {}
     
     lines = content.split('\n')
     
@@ -1186,21 +1318,22 @@ def _generate_summary_report(stats: Dict[str, Any], output_file: Path):
         f.write("🎉 実務レベル欠損値処理 完了サマリー\n")
         f.write("=" * 80 + "\n")
 
-def process_race_data(exclude_turf=False, turf_only=False, 
-                     enable_missing_value_handling=True, enable_quality_check=True):
+def process_race_data(exclude_turf: bool = False, turf_only: bool = False, 
+                     enable_missing_value_handling: bool = True, enable_quality_check: bool = True) -> bool:
     """競馬レースデータの実務レベル処理（標準版）。
 
     計画書 Phase 0: データ整備の実装。
 
     Args:
-        exclude_turf (bool): 芝コースを除外するかどうか。
-        turf_only (bool): 芝コースのみを処理するかどうか。
-        enable_missing_value_handling (bool): 戦略的欠損値処理を実行するかどうか。
-        enable_quality_check (bool): データ品質チェックを実行するかどうか。
+        exclude_turf: 芝コースを除外するかどうか。
+        turf_only: 芝コースのみを処理するかどうか。
+        enable_missing_value_handling: 戦略的欠損値処理を実行するかどうか。
+        enable_quality_check: データ品質チェックを実行するかどうか。
 
     Returns:
-        bool: 成功時 ``True``、失敗時 ``False``。
+        成功時 ``True``、失敗時 ``False``。
     """
+    logger = logging.getLogger(__name__)
     logger.info("🏇 ■ 競馬レースデータの実務レベル処理を開始します ■")
     
     # システム監視開始
@@ -1209,7 +1342,7 @@ def process_race_data(exclude_turf=False, turf_only=False,
     # 処理オプションの確認
     if exclude_turf and turf_only:
         logger.error("❌ 芝コースを除外するオプションと芝コースのみを処理するオプションは同時に指定できません")
-        return
+        return False
     
     # 通常の処理設定のログ出力
     logger.info("📋 処理設定:")
@@ -1396,11 +1529,12 @@ if __name__ == "__main__":
     setup_logging(log_level=args.log_level, log_file=log_file)
     
     # メインロガーでの開始メッセージ
-    logger.info("🚀 競馬レースデータ実務レベル処理を開始します")
-    logger.info(f"📅 実行日時: {datetime.now()}")
-    logger.info(f"🖥️ ログレベル: {args.log_level}")
+    main_logger = logging.getLogger(__name__)
+    main_logger.info("🚀 競馬レースデータ実務レベル処理を開始します")
+    main_logger.info(f"📅 実行日時: {datetime.now()}")
+    main_logger.info(f"🖥️ ログレベル: {args.log_level}")
     if log_file:
-        logger.info(f"📝 ログファイル: {log_file}")
+        main_logger.info(f"📝 ログファイル: {log_file}")
     
     # レースデータ処理の実行
     success = process_race_data(
@@ -1411,11 +1545,11 @@ if __name__ == "__main__":
     )
     
     if success:
-        logger.info("🎉 実務レベルデータ処理が正常に完了しました")
+        main_logger.info("🎉 実務レベルデータ処理が正常に完了しました")
         exit_code = 0
     else:
-        logger.error("❌ データ処理が失敗しました")
+        main_logger.error("❌ データ処理が失敗しました")
         exit_code = 1
     
-    logger.info(f"🏁 プロセス終了 (終了コード: {exit_code})")
+    main_logger.info(f"🏁 プロセス終了 (終了コード: {exit_code})")
     exit(exit_code) 
