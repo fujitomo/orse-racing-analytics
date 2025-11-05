@@ -23,6 +23,319 @@ from typing import Dict, Any, Tuple, List
 import numpy as np
 import re
 from collections import defaultdict
+from dataclasses import dataclass
+
+# =====================================
+# グレード推定用の設定クラス（マジックナンバー解消）
+# =====================================
+
+@dataclass
+class GradeThresholds:
+    """グレード推定用の賞金閾値設定（formattedデータ分析結果に基づく実証的基準）"""
+    G1_MIN: int = 3407    # G1: 3,407万円以上（G1レース平均）
+    G2_MIN: int = 2177    # G2: 2,177万円以上（G2レース平均）
+    G3_MIN: int = 1438    # G3: 1,438万円以上（G3レース平均）
+    LISTED_MIN: int = 903  # L（リステッド）: 903万円以上（Lレース平均）
+    SPECIAL_MIN: int = 552 # 特別/OP: 552万円以上（特別レース平均）
+    
+    def to_thresholds_list(self) -> List[Tuple[int, int]]:
+        """しきい値リストに変換（降順）"""
+        return [
+            (self.G1_MIN, 1),
+            (self.G2_MIN, 2),
+            (self.G3_MIN, 3),
+            (self.LISTED_MIN, 6),
+            (self.SPECIAL_MIN, 5)
+        ]
+
+@dataclass
+class RacePatterns:
+    """レース名パターン定義"""
+    G1_PATTERNS: List[str] = None
+    G2_PATTERNS: List[str] = None
+    G3_PATTERNS: List[str] = None
+    STAKES_PATTERNS: List[str] = None
+    CONDITIONS_PATTERNS: List[str] = None
+    
+    def __post_init__(self):
+        if self.G1_PATTERNS is None:
+            self.G1_PATTERNS = [
+                'ジャパンカップ', '有馬記念', '大阪杯', '東京優駿',
+                '天皇賞', '宝塚記念', '皐月賞', '菊花賞',
+                '安田記念', 'マイルチャンピオンシップ',
+                '高松宮記念', 'スプリンターズステークス',
+                '優駿牝馬', '桜花賞', 'ヴィクトリアマイル',
+                'エリザベス女王杯', 'ジャパンカップダート',
+                'ＮＨＫマイルカップ', 'チャンピオンズカップ',
+                'フェブラリーステークス', '秋華賞', 'ＪＢＣクラシック',
+                '中山グランドジャンプ', '中山大障害',
+                '朝日杯フューチュリティステークス', 'ＪＢＣスプリント',
+                'ダービー', 'オークス', 'マイル', 'フューチュリティ'
+            ]
+        
+        if self.G2_PATTERNS is None:
+            self.G2_PATTERNS = ['札幌記念', '阪神カップ', '記念', '大賞典']
+        
+        if self.G3_PATTERNS is None:
+            self.G3_PATTERNS = ['賞', '特別']
+        
+        if self.STAKES_PATTERNS is None:
+            self.STAKES_PATTERNS = ['重賞', 'リステッド', 'L']
+        
+        if self.CONDITIONS_PATTERNS is None:
+            self.CONDITIONS_PATTERNS = ['条件', '新馬', '未勝利', '1勝クラス', '2勝クラス', '3勝クラス']
+
+# =====================================
+# グレード推定専用クラス（SRP遵守）
+# =====================================
+
+class GradeEstimator:
+    """グレード推定専用クラス（単一責任原則を遵守）"""
+    
+    def __init__(self, thresholds: GradeThresholds = None, patterns: RacePatterns = None):
+        """
+        Args:
+            thresholds: 賞金閾値設定
+            patterns: レース名パターン設定
+        """
+        self.thresholds = thresholds or GradeThresholds()
+        self.patterns = patterns or RacePatterns()
+        self.logger = logging.getLogger(__name__)
+    
+    def estimate_grade(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
+        """グレード推定のメインメソッド
+        
+        Args:
+            df: 処理対象DataFrame
+            grade_column: グレード列名
+            
+        Returns:
+            グレード推定済みDataFrame
+        """
+        initial_rows = len(df)
+        grade_missing_mask = df[grade_column].isnull()
+        initial_missing_count = grade_missing_mask.sum()
+        
+        if not grade_missing_mask.any():
+            # 既存の数値グレードからグレード名列を作成
+            df = self._add_grade_name_column(df, grade_column)
+            return df
+        
+        self.logger.info(f"📊 グレード欠損値: {initial_missing_count:,}件 ({initial_missing_count/initial_rows*100:.1f}%)")
+        
+        # 推定対象データ
+        estimation_df = df[grade_missing_mask].copy()
+        
+        # 1. 賞金ベースの推定
+        if '1着賞金(1着算入賞金込み)' in df.columns:
+            estimation_df = self._estimate_from_prize(estimation_df, grade_column, '1着賞金(1着算入賞金込み)')
+        
+        # 2. 本賞金からの推定（フォールバック）
+        if '本賞金' in df.columns:
+            estimation_df = self._estimate_from_prize(estimation_df, grade_column, '本賞金')
+        
+        # 3. レース名からの推定
+        if 'レース名' in df.columns:
+            estimation_df = self._estimate_from_race_name(estimation_df, grade_column)
+        
+        # 4. 特徴量からの推定（距離・出走頭数）
+        estimation_df = self._estimate_from_features(estimation_df, grade_column)
+        
+        # 5. 最終的に推定できない場合は条件戦（5）として設定
+        final_missing = estimation_df[grade_column].isnull().sum()
+        if final_missing > 0:
+            self.logger.info(f"      🎯 最終推定失敗{final_missing:,}件を条件戦（5）として設定")
+            estimation_df.loc[estimation_df[grade_column].isnull(), grade_column] = 5
+        
+        # 推定結果を元のDataFrameに反映
+        df.loc[grade_missing_mask, grade_column] = estimation_df[grade_column]
+        
+        # グレード名列を追加
+        df = self._add_grade_name_column(df, grade_column)
+        
+        estimated_count = initial_missing_count - df[grade_column].isnull().sum()
+        if estimated_count > 0:
+            self.logger.info(f"      ✅ グレード推定成功: {estimated_count:,}件")
+        
+        return df
+    
+    def _estimate_from_prize(self, df: pd.DataFrame, grade_column: str, prize_col: str) -> pd.DataFrame:
+        """賞金からグレード推定（共通処理）"""
+        if prize_col not in df.columns:
+            return df
+        
+        # 数値化
+        df[prize_col] = pd.to_numeric(df[prize_col], errors='coerce')
+        
+        # しきい値を適用
+        thresholds_list = self.thresholds.to_thresholds_list()
+        for min_prize, grade_value in thresholds_list:
+            mask = (df[prize_col] >= min_prize) & df[grade_column].isnull()
+            df.loc[mask, grade_column] = grade_value
+        
+        return df
+    
+    def _estimate_from_race_name(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
+        """レース名からグレード推定"""
+        if 'レース名' not in df.columns:
+            return df
+        
+        race_patterns = {
+            1: self.patterns.G1_PATTERNS,
+            2: self.patterns.G2_PATTERNS,
+            3: self.patterns.G3_PATTERNS,
+            4: self.patterns.STAKES_PATTERNS,
+            5: self.patterns.CONDITIONS_PATTERNS
+        }
+        
+        for grade, patterns in race_patterns.items():
+            for pattern in patterns:
+                mask = (df['レース名'].str.contains(pattern, case=False, na=False)) & df[grade_column].isnull()
+                df.loc[mask, grade_column] = grade
+        
+        return df
+    
+    def _estimate_from_features(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
+        """距離・出走頭数からグレード推定"""
+        # 距離による推定
+        if '距離' in df.columns:
+            df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
+            
+            long_distance_mask = (df['距離'] >= 3000) & df[grade_column].isnull()
+            df.loc[long_distance_mask, grade_column] = 4  # 重賞
+            
+            short_distance_mask = (df['距離'] < 1000) & df[grade_column].isnull()
+            df.loc[short_distance_mask, grade_column] = 5  # 特別
+        
+        # 出走頭数による推定
+        if '頭数' in df.columns:
+            df['頭数'] = pd.to_numeric(df['頭数'], errors='coerce')
+            
+            large_field_mask = (df['頭数'] >= 16) & df[grade_column].isnull()
+            df.loc[large_field_mask, grade_column] = 4  # 重賞
+            
+            small_field_mask = (df['頭数'] < 8) & df[grade_column].isnull()
+            df.loc[small_field_mask, grade_column] = 5  # 条件戦
+        
+        return df
+    
+    def _add_grade_name_column(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
+        """数値グレードから「グレード名」列を作成"""
+        grade_mapping = {
+            1: 'Ｇ１',
+            2: 'Ｇ２', 
+            3: 'Ｇ３',
+            4: '重賞',
+            5: '特別',
+            6: 'Ｌ（リステッド）'
+        }
+        
+        df[grade_column] = pd.to_numeric(df[grade_column], errors='coerce')
+        grade_names = df[grade_column].map(grade_mapping)
+        
+        if 'グレード名' in df.columns:
+            df['グレード名'] = grade_names
+        else:
+            grade_col_index = df.columns.get_loc(grade_column)
+            df.insert(grade_col_index + 1, 'グレード名', grade_names)
+        
+        return df
+
+# =====================================
+# 馬齢計算専用クラス（SRP遵守）
+# =====================================
+
+class HorseAgeCalculator:
+    """馬齢計算専用クラス"""
+    
+    DEFAULT_HORSE_AGE = 3  # 日本競馬の一般的なデビュー年齢
+    VALID_AGE_RANGE = (2, 20)  # 競走馬の妥当な年齢範囲
+    
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+    
+    def calculate_horse_age(self, df: pd.DataFrame) -> pd.DataFrame:
+        """血統登録番号と年月日から馬齢を計算
+        
+        Args:
+            df: 処理対象DataFrame
+            
+        Returns:
+            馬齢列が追加されたDataFrame
+        """
+        try:
+            # 必要な列の確認
+            if '血統登録番号' not in df.columns or '年月日' not in df.columns:
+                self.logger.warning("⚠️ 血統登録番号または年月日列が見つかりません")
+                return df
+            
+            # 馬齢列を初期化
+            df['馬齢'] = None
+            
+            # 馬ごとに最初のレース情報を取得
+            horse_first_race = df.groupby('馬名').first()
+            
+            horse_age_map = {}
+            
+            for horse_name, row in horse_first_race.iterrows():
+                try:
+                    registration_number = str(row['血統登録番号'])
+                    race_date_str = str(row['年月日'])
+                    
+                    # 血統登録番号の最初の2桁が生年（西暦）
+                    if len(registration_number) >= 2:
+                        birth_year = int(registration_number[:2])
+                        
+                        # 2桁年を4桁年に変換
+                        if birth_year <= 30:
+                            birth_year += 2000
+                        else:
+                            birth_year += 1900
+                        
+                        # レース日付を解析
+                        if len(race_date_str) == 8:  # YYYYMMDD形式
+                            race_year = int(race_date_str[:4])
+                            race_month = int(race_date_str[4:6])
+                            
+                            # 馬齢計算（競馬では1月1日を基準とする）
+                            if race_month >= 1:
+                                age = race_year - birth_year
+                            else:
+                                age = race_year - birth_year - 1
+                            
+                            # 年齢の妥当性チェック
+                            if self.VALID_AGE_RANGE[0] <= age <= self.VALID_AGE_RANGE[1]:
+                                horse_age_map[horse_name] = age
+                            else:
+                                self.logger.debug(f"⚠️ 異常な年齢: {horse_name} (計算年齢:{age})")
+                                horse_age_map[horse_name] = self.DEFAULT_HORSE_AGE
+                        else:
+                            self.logger.debug(f"⚠️ 日付形式エラー: {horse_name}")
+                            horse_age_map[horse_name] = self.DEFAULT_HORSE_AGE
+                    else:
+                        self.logger.debug(f"⚠️ 血統登録番号形式エラー: {horse_name}")
+                        horse_age_map[horse_name] = self.DEFAULT_HORSE_AGE
+                        
+                except (ValueError, TypeError) as e:
+                    self.logger.debug(f"⚠️ 年齢計算エラー: {horse_name} - {str(e)}")
+                    horse_age_map[horse_name] = self.DEFAULT_HORSE_AGE
+            
+            # 馬齢列に値を設定
+            df['馬齢'] = df['馬名'].map(horse_age_map)
+            
+            # 統計情報をログ出力
+            age_counts = {}
+            for age in horse_age_map.values():
+                age_counts[age] = age_counts.get(age, 0) + 1
+            
+            self.logger.info(f"✅ 馬齢計算完了: {len(horse_age_map)}頭")
+            self.logger.info(f"📊 年齢分布: {dict(sorted(age_counts.items()))}")
+            
+            return df
+            
+        except Exception as e:
+            self.logger.error(f"❌ 馬齢計算エラー: {str(e)}")
+            return df
 
 # 実務レベルのログ設定
 def setup_logging(log_level='INFO', log_file=None):
@@ -267,6 +580,8 @@ class MissingValueHandler:
     def __init__(self):
         """インスタンスを初期化する。"""
         self.processing_log = []
+        self.grade_estimator = GradeEstimator()  # グレード推定専用クラスを使用
+        self.age_calculator = HorseAgeCalculator()  # 馬齢計算専用クラスを使用
         
     def handle_missing_values(self, df: pd.DataFrame, strategy_config: Dict[str, Any] = None) -> pd.DataFrame:
         """戦略的欠損値処理を実行する。
@@ -301,8 +616,8 @@ class MissingValueHandler:
             # 4. 残存欠損値の最終処理
             df_processed = self._handle_remaining_missing(df_processed, strategy_config)
             
-            # 5. 馬齢計算（血統登録番号と年月日から）
-            df_processed = self._calculate_horse_age_from_registration(df_processed)
+            # 5. 馬齢計算（血統登録番号と年月日から）- 専用クラスを使用
+            df_processed = self.age_calculator.calculate_horse_age(df_processed)
             
             execution_time = time.time() - start_time
             final_rows = len(df_processed)
@@ -393,23 +708,17 @@ class MissingValueHandler:
             missing_rate = missing_count / len(df) if len(df) > 0 else 0
             
             if missing_count > 0:
-                # グレード列の特別処理（実務レベル）
+                # グレード列の特別処理（実務レベル）- 専用クラスを使用
                 if column in ['グレード', 'grade', 'レースグレード']:
                     logger.info(f"      • {column}: 実務レベルグレード推定処理を実行")
-                    df = self._estimate_grade_from_features(df, column)
+                    df = self.grade_estimator.estimate_grade(df, column)
                     
                     # 推定後の欠損数をチェック
                     remaining_missing = df[column].isnull().sum()
                     estimated_count = missing_count - remaining_missing
                     
                     if estimated_count > 0:
-                        logger.info(f"      • {column}: {estimated_count:,}件を賞金・レース名から推定補完")
                         self.processing_log.append(f"{column}: 賞金・レース名から{estimated_count}件推定→グレード名列追加")
-                    
-                    # 推定できなかった分はNaNのまま残す（残存欠損値処理で行削除される）
-                    if remaining_missing > 0:
-                        logger.info(f"      • {column}: 推定不可能な{remaining_missing:,}件はNaNのまま保持（後続処理で行削除）")
-                        self.processing_log.append(f"{column}: 推定不可能{remaining_missing}件→NaN保持→行削除対象")
                 
                 elif missing_rate > max_missing_rate:
                     logger.warning(f"      • {column}: 欠損率{missing_rate:.1%} > {max_missing_rate:.1%} → 列削除")
@@ -505,469 +814,6 @@ class MissingValueHandler:
         
         return df
     
-    def _estimate_grade_from_features(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """実務レベルのグレード推定処理を行う。
-
-        賞金・レース名・出走頭数等からグレードを推定し、推定できないレコードを削除する。
-
-        Args:
-            df (pd.DataFrame): 処理対象 DataFrame。
-            grade_column (str): グレード列名。
-
-        Returns:
-            pd.DataFrame: グレード推定済み DataFrame（推定失敗レコードは削除済み）。
-        """
-        initial_rows = len(df)
-        grade_missing_mask = df[grade_column].isnull()
-        initial_missing_count = grade_missing_mask.sum()
-        
-        if not grade_missing_mask.any():
-            # 既存の数値グレードからグレード名列を作成
-            df = self._add_grade_name_column(df, grade_column)
-            return df
-        
-        logger.info(f"📊 グレード欠損値: {initial_missing_count:,}件 ({initial_missing_count/initial_rows*100:.1f}%)")
-        
-        # 推定対象データ
-        estimation_df = df[grade_missing_mask].copy()
-        
-        # 1. 1着賞金(1着算入賞金込み)からグレード推定
-        if '1着賞金(1着算入賞金込み)' in df.columns:
-            estimation_df = self._estimate_grade_from_prize(estimation_df, grade_column)
-        
-        # 2. 本賞金からグレード推定（フォールバック）
-        if '本賞金' in df.columns:
-            estimation_df = self._estimate_grade_from_base_prize(estimation_df, grade_column)
-        
-        # 3. レース名からグレード推定（フォールバック）
-        if 'レース名' in df.columns:
-            estimation_df = self._estimate_grade_from_race_name_fallback(estimation_df, grade_column)
-        
-        # 4. 出走頭数による補正（コメントアウト - 欠損値対応を厳密化）
-        # if '頭数' in df.columns:
-        #     estimation_df = self._adjust_grade_by_field_size(estimation_df, grade_column)
-        
-        # 5. 距離による補正（コメントアウト - 欠損値対応を厳密化）
-        # if '距離' in df.columns:
-        #     estimation_df = self._adjust_grade_by_distance(estimation_df, grade_column)
-        
-        # 推定結果を元のDataFrameに反映
-        df.loc[grade_missing_mask, grade_column] = estimation_df[grade_column]
-        
-        # 推定後の残存欠損値をチェック
-        remaining_missing_mask = df[grade_column].isnull()
-        remaining_missing_count = remaining_missing_mask.sum()
-        estimated_count = initial_missing_count - remaining_missing_count
-        
-        if estimated_count > 0:
-            logger.info(f"      ✅ グレード推定成功: {estimated_count:,}件")
-            self.processing_log.append(f"{grade_column}: 賞金・レース名から{estimated_count}件推定")
-        
-        # 残存欠損値（推定失敗）のレコードを削除
-        if remaining_missing_count > 0:
-            logger.info(f"      ❌ グレード推定失敗→削除: {remaining_missing_count:,}件 ({remaining_missing_count/initial_rows*100:.1f}%)")
-            df = df[~remaining_missing_mask]
-            self.processing_log.append(f"{grade_column}: 推定失敗により{remaining_missing_count}行削除")
-        
-        # 数値グレードを保持しつつ「グレード名」列を作成
-        df = self._add_grade_name_column(df, grade_column)
-        
-        final_rows = len(df)
-        deleted_rows = initial_rows - final_rows
-        
-        if deleted_rows > 0:
-            logger.info(f"      📉 削除レコード統計: {deleted_rows:,}行削除 (削除率: {deleted_rows/initial_rows*100:.1f}%)")
-            logger.info(f"      📊 残存レコード: {final_rows:,}行 (残存率: {final_rows/initial_rows*100:.1f}%)")
-        
-        return df
-    
-    def _estimate_grade_from_prize(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """賞金からグレード推定（実務レポートに基づく基準）。
-
-        1着賞金(1着算入賞金込み)のみを使用し、しきい値は万円スケールを想定。
-        """
-        # 1着賞金(1着算入賞金込み)のみを使用
-        prize_col = '1着賞金(1着算入賞金込み)'
-        if prize_col not in df.columns:
-            return df
-
-        # 数値化
-        df[prize_col] = pd.to_numeric(df[prize_col], errors='coerce')
-
-        # しきい値（万円）: formattedデータ分析結果に基づく実証的基準
-        # 分析結果: G1平均3,407万円、G2平均2,177万円、G3平均1,438万円
-        thresholds = [
-            (3407, 1),   # G1: 3,407万円以上（G1レース平均）
-            (2177, 2),   # G2: 2,177万円以上（G2レース平均）
-            (1438, 3),   # G3: 1,438万円以上（G3レース平均）
-            (903, 6),    # L（リステッド）: 903万円以上（Lレース平均）
-            (552, 5)     # 特別/OP: 552万円以上（特別レース平均）
-        ]
-
-        for min_prize, grade_value in thresholds:
-            mask = (df[prize_col] >= min_prize) & df[grade_column].isnull()
-            df.loc[mask, grade_column] = grade_value
-
-        # 【追加】残存欠損値の最終処理
-        remaining_missing = df[grade_column].isnull().sum()
-        if remaining_missing > 0:
-            logger.info(f"      🔧 残存欠損値{remaining_missing:,}件の最終処理を実行中...")
-            
-            # 1. 本賞金から推定（フォールバック）
-            if '本賞金' in df.columns:
-                df = self._estimate_grade_from_base_prize(df, grade_column)
-            
-            # 2. レース名から推定（フォールバック）
-            if 'レース名' in df.columns:
-                df = self._estimate_grade_from_race_name_fallback(df, grade_column)
-            
-            # 3. 距離・出走頭数から推定（フォールバック）
-            df = self._estimate_grade_from_features_fallback(df, grade_column)
-            
-            # 4. 最終的に推定できない場合は条件戦（5）として設定
-            final_missing = df[grade_column].isnull().sum()
-            if final_missing > 0:
-                logger.info(f"      🎯 最終推定失敗{final_missing:,}件を条件戦（5）として設定")
-                df.loc[df[grade_column].isnull(), grade_column] = 5
-                self.processing_log.append(f"{grade_column}: 最終推定失敗{final_missing}件→条件戦(5)設定")
-
-        return df
-    
-    def _estimate_grade_from_base_prize(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """本賞金からグレード推定（フォールバック処理）。"""
-        if '本賞金' not in df.columns:
-            return df
-        
-        df['本賞金'] = pd.to_numeric(df['本賞金'], errors='coerce')
-        
-        # 本賞金ベースのしきい値（formattedデータ分析結果に基づく実証的基準）
-        base_thresholds = [
-            (3407, 1),   # G1: 3,407万円以上（G1レース平均）
-            (2177, 2),   # G2: 2,177万円以上（G2レース平均）
-            (1438, 3),   # G3: 1,438万円以上（G3レース平均）
-            (903, 6),    # L: 903万円以上（Lレース平均）
-            (552, 5)     # 特別: 552万円以上（特別レース平均）
-        ]
-        
-        for min_prize, grade_value in base_thresholds:
-            mask = (df['本賞金'] >= min_prize) & df[grade_column].isnull()
-            df.loc[mask, grade_column] = grade_value
-        
-        # 本賞金で推定できなかったデータのみレース名から推定
-        remaining_missing = df[grade_column].isnull().sum()
-        if remaining_missing > 0 and 'レース名' in df.columns:
-            logger.info(f"      🔧 本賞金で推定できなかった{remaining_missing:,}件をレース名から推定中...")
-            df = self._estimate_grade_from_race_name_fallback(df, grade_column)
-        
-        return df
-    
-    def _calculate_horse_age_from_registration(self, df: pd.DataFrame) -> pd.DataFrame:
-        """血統登録番号と年月日から馬齢を計算して列を追加する。"""
-        try:
-            from datetime import datetime
-            
-            # 必要な列の確認
-            if '血統登録番号' not in df.columns or '年月日' not in df.columns:
-                logger.warning("⚠️ 血統登録番号または年月日列が見つかりません")
-                return df
-            
-            # 馬齢列を初期化
-            df['馬齢'] = None
-            
-            # 馬ごとに最初のレース情報を取得
-            horse_first_race = df.groupby('馬名').first()
-            
-            horse_age_map = {}
-            
-            for horse_name, row in horse_first_race.iterrows():
-                try:
-                    # 血統登録番号から生年月日を推定
-                    registration_number = str(row['血統登録番号'])
-                    race_date_str = str(row['年月日'])
-                    
-                    # 血統登録番号の最初の2桁が生年（西暦）
-                    if len(registration_number) >= 2:
-                        birth_year = int(registration_number[:2])
-                        
-                        # 2桁年を4桁年に変換（00-30は2000年代、31-99は1900年代）
-                        if birth_year <= 30:
-                            birth_year += 2000
-                        else:
-                            birth_year += 1900
-                        
-                        # レース日付を解析
-                        if len(race_date_str) == 8:  # YYYYMMDD形式
-                            race_year = int(race_date_str[:4])
-                            race_month = int(race_date_str[4:6])
-                            race_day = int(race_date_str[6:8])
-                            
-                            # 馬齢計算（競馬では1月1日を基準とする）
-                            if race_month >= 1:
-                                age = race_year - birth_year
-                            else:
-                                age = race_year - birth_year - 1
-                            
-                            # 年齢の妥当性チェック（2-20歳の範囲）
-                            if 2 <= age <= 20:
-                                horse_age_map[horse_name] = age
-                            else:
-                                logger.debug(f"⚠️ 異常な年齢: {horse_name} (生年:{birth_year}, レース年:{race_year}, 計算年齢:{age})")
-                                horse_age_map[horse_name] = 3  # デフォルト値
-                        else:
-                            logger.debug(f"⚠️ 日付形式エラー: {horse_name} - {race_date_str}")
-                            horse_age_map[horse_name] = 3  # デフォルト値
-                    else:
-                        logger.debug(f"⚠️ 血統登録番号形式エラー: {horse_name} - {registration_number}")
-                        horse_age_map[horse_name] = 3  # デフォルト値
-                        
-                except (ValueError, TypeError) as e:
-                    logger.debug(f"⚠️ 年齢計算エラー: {horse_name} - {str(e)}")
-                    horse_age_map[horse_name] = 3  # デフォルト値
-            
-            # 馬齢列に値を設定
-            df['馬齢'] = df['馬名'].map(horse_age_map)
-            
-            # 統計情報をログ出力
-            age_counts = {}
-            for age in horse_age_map.values():
-                age_counts[age] = age_counts.get(age, 0) + 1
-            
-            logger.info(f"✅ 馬齢計算完了: {len(horse_age_map)}頭")
-            logger.info(f"📊 年齢分布: {dict(sorted(age_counts.items()))}")
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"❌ 馬齢計算エラー: {str(e)}")
-            return df
-    
-    def _estimate_grade_from_race_name_fallback(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """レース名からグレード推定（フォールバック処理）。"""
-        if 'レース名' not in df.columns:
-            return df
-        
-        # formattedデータ分析結果に基づく包括的なレース名パターン
-        # 分析結果から判明した実際のG1レース名を網羅的に追加
-        race_patterns = {
-            1: [
-                # 分析結果で確認されたG1レース（50,000万円以上）
-                'ジャパンカップ', '有馬記念',
-                # 分析結果で確認されたG1レース（30,000万円以上）
-                '大阪杯', '東京優駿',
-                # 分析結果で確認されたG1レース（22,000万円以上）
-                '天皇賞', '宝塚記念',
-                # 分析結果で確認されたG1レース（20,000万円以上）
-                '皐月賞', '菊花賞',
-                # 分析結果で確認されたG1レース（18,000万円以上）
-                '安田記念', 'マイルチャンピオンシップ',
-                # 分析結果で確認されたG1レース（17,000万円以上）
-                '高松宮記念', 'スプリンターズステークス',
-                # 分析結果で確認されたG1レース（15,000万円以上）
-                '優駿牝馬',
-                # 分析結果で確認されたG1レース（14,000万円以上）
-                '桜花賞',
-                # 分析結果で確認されたG1レース（13,000万円以上）
-                'ヴィクトリアマイル', 'エリザベス女王杯', 'ジャパンカップダート', 'ＮＨＫマイルカップ',
-                # 分析結果で確認されたG1レース（12,000万円以上）
-                'チャンピオンズカップ', 'フェブラリーステークス',
-                # 分析結果で確認されたG1レース（11,000万円以上）
-                '秋華賞',
-                # 分析結果で確認されたG1レース（9,000万円以上）
-                'ＪＢＣクラシック',
-                # 分析結果で確認されたG1レース（7,500万円以上）
-                '中山グランドジャンプ', '中山大障害',
-                # 分析結果で確認されたG1レース（7,000万円以上）
-                '朝日杯フューチュリティステークス', 'ＪＢＣスプリント',
-                # その他のG1レース名パターン（予測）
-                'ダービー', 'オークス', 'マイル', 'フューチュリティ', 'フューチュリティステークス',
-                # 予測されるG1レース名パターン
-                'クラシック', 'クラシック三冠', '牝馬三冠', '牝馬クラシック',
-                'マイル王座', 'スプリント王座', '長距離王座', '中距離王座',
-                '国際', 'ワールド', 'グローバル', 'チャンピオン', 'チャンピオンシップ',
-                'グランプリ', 'グランド', 'メモリアル', 'カップ', 'ステークス',
-                # 予測される障害G1レース
-                'グランドジャンプ', '大障害', '障害', 'ハードル',
-                # 予測される地方G1レース
-                '地方', 'ダート', 'ダート王座', 'ダートチャンピオン',
-                # 予測される年齢別G1レース
-                '2歳', '3歳', '4歳', '古馬', '牝馬限定', '牡馬限定',
-                # 予測される距離別G1レース
-                '短距離', 'マイル', '中距離', '長距離', '超長距離'
-            ],
-            2: [
-                # 分析結果で確認されたG2レース
-                '札幌記念', '阪神カップ',
-                # 予測されるG2レース名パターン
-                '記念', '大賞典', '王冠', 'ステークス', 'カップ',
-                '準重賞', '準G1', 'G2', '重賞', 'オープン特別',
-                # 予測される地方G2レース
-                '地方重賞', '地方記念', '地方カップ',
-                # 予測される障害G2レース
-                '障害重賞', '障害記念', '障害カップ'
-            ],
-            3: ['賞', '特別'],
-            4: ['重賞', 'リステッド', 'L'],
-            5: ['条件', '新馬', '未勝利', '1勝クラス', '2勝クラス', '3勝クラス']
-        }
-        
-        for grade, patterns in race_patterns.items():
-            for pattern in patterns:
-                mask = (df['レース名'].str.contains(pattern, case=False, na=False)) & df[grade_column].isnull()
-                df.loc[mask, grade_column] = grade
-        
-        return df
-    
-    def _estimate_grade_from_features_fallback(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """距離・出走頭数からグレード推定（フォールバック処理）。"""
-        # 距離による推定
-        if '距離' in df.columns:
-            df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
-            
-            # 長距離レース（3000m以上）は重賞の可能性が高い
-            long_distance_mask = (df['距離'] >= 3000) & df[grade_column].isnull()
-            df.loc[long_distance_mask, grade_column] = 4  # 重賞
-            
-            # 極端な短距離（1000m未満）は特別レース
-            short_distance_mask = (df['距離'] < 1000) & df[grade_column].isnull()
-            df.loc[short_distance_mask, grade_column] = 5  # 特別
-        
-        # 出走頭数による推定
-        if '頭数' in df.columns:
-            df['頭数'] = pd.to_numeric(df['頭数'], errors='coerce')
-            
-            # 出走頭数が多い（16頭以上）は重賞の可能性
-            large_field_mask = (df['頭数'] >= 16) & df[grade_column].isnull()
-            df.loc[large_field_mask, grade_column] = 4  # 重賞
-            
-            # 出走頭数が少ない（8頭未満）は条件戦
-            small_field_mask = (df['頭数'] < 8) & df[grade_column].isnull()
-            df.loc[small_field_mask, grade_column] = 5  # 条件戦
-        
-        return df
-    
-    def _estimate_grade_from_race_name(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """レース名からグレード推定（実務レベルパターンマッチング）。"""
-        if 'レース名' not in df.columns:
-            return df
-        
-        # レース名のグレード判定パターン（実務レベル）
-        race_patterns = {
-            1: [  # G1パターン
-                'ダービー', 'オークス', '菊花賞', '皐月賞', '桜花賞', 'マイル', 
-                '有馬記念', '宝塚記念', '天皇賞', 'ジャパンカップ', 'スプリンターズ',
-                'エリザベス女王杯', 'フェブラリーステークス', 'チャンピオンズカップ',
-                '高松宮記念', '安田記念', 'ヴィクトリア', '秋華賞'
-            ],
-            2: [  # G2パターン  
-                '京都記念', '阪神大賞典', '目黒記念', '毎日王冠', '京都大賞典',
-                'アルゼンチン共和国杯', '中山記念', '金鯱賞', '京王杯', '府中牝馬',
-                'セントウルステークス', 'スワンステークス', '小倉記念'
-            ],
-            3: [  # G3パターン
-                '函館記念', '中京記念', '新潟記念', '七夕賞', '福島記念', 
-                'きさらぎ賞', '弥生賞', 'スプリング', 'セントライト', 'アルテミス',
-                '朝日杯', 'ホープフル', 'ラジオ', 'クイーン', 'オープン'
-            ],
-            4: [  # 重賞（リステッド）パターン
-                '重賞', 'ステークス', 'カップ', '賞', '記念', '特別',
-                'オープン', 'リステッド', 'L'
-            ]
-        }
-        
-        for grade, patterns in race_patterns.items():
-            for pattern in patterns:
-                mask = (df['レース名'].str.contains(pattern, case=False, na=False)) & df[grade_column].isnull()
-                df.loc[mask, grade_column] = grade
-        
-        # デフォルト値補完は行わない（推定失敗の場合は後でレコード削除）
-        
-        return df
-    
-    def _adjust_grade_by_field_size(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """出走頭数によるグレード補正（実務レベル調整）。"""
-        if '頭数' not in df.columns:
-            return df
-        
-        df['頭数'] = pd.to_numeric(df['頭数'], errors='coerce')
-        
-        # 出走頭数による補正ロジック
-        # 大きなレースほど出走頭数が多い傾向
-        for idx, row in df.iterrows():
-            if pd.notnull(row[grade_column]) and pd.notnull(row['頭数']):
-                current_grade = row[grade_column]
-                field_size = row['頭数']
-                
-                # 出走頭数が異常に少ない場合はグレードを下げる
-                if field_size < 8 and current_grade <= 3:  # G3以上で8頭未満は怪しい
-                    df.loc[idx, grade_column] = min(current_grade + 1, 6)
-                # 出走頭数が多い場合はグレード維持または向上
-                elif field_size >= 16 and current_grade >= 5:  # 16頭以上で条件戦は重賞の可能性
-                    df.loc[idx, grade_column] = max(current_grade - 1, 4)
-        
-        return df
-    
-    def _adjust_grade_by_distance(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """距離によるグレード補正（実務レベル調整）。"""
-        if '距離' not in df.columns:
-            return df
-        
-        df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
-        
-        # 距離による補正ロジック
-        # 特殊距離（3000m以上）は重賞の可能性が高い
-        for idx, row in df.iterrows():
-            if pd.notnull(row[grade_column]) and pd.notnull(row['距離']):
-                current_grade = row[grade_column]
-                distance = row['距離']
-                
-                # 長距離レース（3000m以上）の場合
-                if distance >= 3000 and current_grade >= 5:
-                    df.loc[idx, grade_column] = min(current_grade - 1, 4)  # 重賞以上に格上げ
-                
-                # 極端な短距離（1000m未満）や長距離（3600m超）は特別レース
-                if (distance < 1000 or distance > 3600) and current_grade >= 4:
-                    df.loc[idx, grade_column] = min(current_grade - 1, 3)  # G3以上に格上げ
-        
-        return df
-    
-    def _add_grade_name_column(self, df: pd.DataFrame, grade_column: str) -> pd.DataFrame:
-        """数値グレードから「グレード名」列を作成する。
-
-        Args:
-            df (pd.DataFrame): 処理対象 DataFrame。
-            grade_column (str): グレード列名。
-
-        Returns:
-            pd.DataFrame: グレード名列が追加された DataFrame。
-        """
-        # グレード変換マッピング（レポート仕様準拠）
-        grade_mapping = {
-            1: 'Ｇ１',
-            2: 'Ｇ２', 
-            3: 'Ｇ３',
-            4: '重賞',
-            5: '特別',
-            6: 'Ｌ（リステッド）'
-        }
-        
-        # グレード列を数値型として保持（元の列はそのまま）
-        df[grade_column] = pd.to_numeric(df[grade_column], errors='coerce')
-        
-        # NaN値のデフォルト補完は行わない
-        
-        # グレード名データを作成（NaN値はそのまま保持）
-        grade_names = df[grade_column].map(grade_mapping)
-        
-        # グレード名列が既に存在するかチェック
-        if 'グレード名' in df.columns:
-            # 既存の列を更新
-            df['グレード名'] = grade_names
-        else:
-            # グレード列の直後に「グレード名」列を挿入
-            grade_col_index = df.columns.get_loc(grade_column)
-            df.insert(grade_col_index + 1, 'グレード名', grade_names)
-        
-        return df
     
     def _save_processing_log(self, df: pd.DataFrame):
         """処理ログを追記モードで保存する。"""
