@@ -346,168 +346,7 @@ def initialize_global_weights(args) -> bool:
         logger.error("詳細:", exc_info=True)
         return False
 
-def _calculate_individual_weights(df: pd.DataFrame) -> Dict[str, float]:
-    """
-    個別データから動的重みを計算するヘルパー関数
-    verify_weight_calculation.py の検証済みロジックを適用
-    
-    Args:
-        df: データフレーム
-        
-    Returns:
-        重み辞書
-    """
-    try:
-        import logging
-        logger = logging.getLogger(__name__)
-        
-        logger.info("🔍 verify_weight_calculation.py準拠の個別重み計算を開始...")
-        
-        # 必要カラムの確認
-        required_cols = ['馬名', '着順', 'grade_level', 'venue_level', 'distance_level']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            logger.error(f"❌ 必要なカラムが不足: {missing_cols}")
-            # return _get_fallback_weights()
-            return {}
-                
-        # Phase 1: 馬統計データ作成（レポート5.1.3節準拠）
-        logger.info("📊 Phase 1: 馬統計データを作成中...")
-        
-        # 勝利/複勝フラグを作成（重み学習は勝率ベースに切替）
-        if '着順' in df.columns:
-            df_temp = df.copy()
-            s = pd.to_numeric(df_temp['着順'], errors='coerce')
-            df_temp['is_win'] = (s == 1).astype(int)
-            df_temp['is_placed'] = (s <= 3).astype(int)
-            logger.info("📊 着順列から勝利/複勝フラグを作成（win: 着順==1, place: 着順<=3）")
-        elif '複勝' in df.columns:
-            df_temp = df.copy()
-            df_temp['is_placed'] = pd.to_numeric(df_temp['複勝'], errors='coerce').fillna(0).astype(int)
-            # 勝利情報がない場合は0で代替（勝率学習にはサンプルが不足する可能性あり）
-            df_temp['is_win'] = 0
-            logger.info("📊 複勝列から複勝フラグを作成（勝利フラグは0で代替）")
-        
-        # 馬ごとの統計を計算（最低出走数6戦以上）
-        horse_stats = df_temp.groupby('馬名').agg({
-            'is_win': 'mean',     # 勝率（学習ターゲット）
-            'is_placed': 'mean',  # 複勝率（参考）
-            'grade_level': 'count'  # 出走回数
-        }).reset_index()
-        
-        # 列名を標準化
-        horse_stats.columns = ['馬名', 'win_rate', 'place_rate', 'race_count']
-        
-        # 最低出走数6戦以上でフィルタ（レポート仕様準拠）
-        horse_stats = horse_stats[horse_stats['race_count'] >= 6].copy()
-        logger.info(f"📊 最低出走数6戦以上でフィルタ: {len(horse_stats):,}頭")
-        
-        # if len(horse_stats) < 100:
-        #    logger.error(f"❌ サンプル数が不足: {len(horse_stats)}頭（最低100頭必要）")
-        #    return _get_fallback_weights()
-        
-        # 特徴量レベルの平均を計算
-        feature_cols = ['grade_level', 'venue_level', 'distance_level']
-        for col in feature_cols:
-            avg_feature = df.groupby('馬名')[col].mean().reset_index()
-            avg_feature.columns = ['馬名', f'avg_{col}']
-            horse_stats = horse_stats.merge(avg_feature, on='馬名', how='left')
-        
-        logger.info(f"📊 馬統計データ作成完了: {len(horse_stats):,}頭")
-        
-        # Phase 2: 相関計算（馬統計データベース）
-        logger.info("📈 Phase 2: 馬統計データで相関を計算中...")
-        
-        # 必要な列の確認
-        # 重み学習ターゲットを勝率(win_rate)に変更
-        required_corr_cols = ['win_rate', 'avg_grade_level', 'avg_venue_level', 'avg_distance_level']
-        # if missing_corr_cols:
-        #    logger.error(f"❌ 必要な相関列が不足: {missing_corr_cols}")
-        #    logger.info(f"📊 利用可能な列: {list(horse_stats.columns)}")
-        #    return _get_fallback_weights()
-        
-        # 欠損値を除去
-        clean_data = horse_stats[required_corr_cols].dropna()
-        logger.info(f"📊 相関計算用データ: {len(clean_data):,}頭")
-        
-        # if len(clean_data) < 100:
-        #    logger.error(f"❌ 相関計算用サンプル数が不足: {len(clean_data)}頭（最低100頭必要）")
-        #    return _get_fallback_weights()
-        
-        # 相関計算
-        from scipy.stats import pearsonr
-        correlations = {}
-        target = clean_data['win_rate']
-        
-        # レポート5.1.3節準拠の相関計算
-        feature_mapping = {
-            'avg_grade_level': 'grade',
-            'avg_venue_level': 'venue', 
-            'avg_distance_level': 'distance'
-        }
-        
-        for feature_col, feature_name in feature_mapping.items():
-            if feature_col in clean_data.columns:
-                corr, p_value = pearsonr(clean_data[feature_col], target)
-                correlations[feature_name] = {
-                    'correlation': corr,
-                    'p_value': p_value,
-                    'squared': corr ** 2
-                }
-                logger.info(f"   📈 {feature_name}_level: r = {corr:.3f}, r² = {corr**2:.3f}, p = {p_value:.3f}")
-        
-        # Phase 3: 重み計算（レポート5.1.3節準拠）
-        logger.info("⚖️ Phase 3: 重みを計算中（勝率ターゲット）...")
-        logger.info("📋 計算式: w_i = r_i² / (r_grade² + r_venue² + r_distance²) [target=win_rate]")
-        
-        # 相関の二乗を計算
-        squared_correlations = {}
-        total_squared = 0
-        
-        for feature, stats in correlations.items():
-            squared = stats['squared']
-            squared_correlations[feature] = squared
-            total_squared += squared
-            logger.info(f"   📊 {feature}: r² = {squared:.3f}")
-        
-        logger.info(f"📊 総寄与度: {total_squared:.3f}")
-        
-        # if total_squared == 0:
-        #    logger.warning("⚠️ 総寄与度が0です。フォールバック重みを使用します。")
-        #    return _get_fallback_weights()
-        
-        # 重みを正規化
-        weights = {}
-        for feature, squared in squared_correlations.items():
-            weight = squared / total_squared
-            weights[feature] = weight
-            logger.info(f"   ⚖️ {feature}: w = {weight:.3f} ({weight*100:.1f}%)")
-        
-        # レポート形式で変換
-        result = {
-            'grade_weight': weights.get('grade', 0.636),
-            'venue_weight': weights.get('venue', 0.323),
-            'distance_weight': weights.get('distance', 0.041)
-        }
-        
-        print("\n📊 verify_weight_calculation.py準拠の重み計算結果:")
-        print(f"  🔍 グレード重み: {result['grade_weight']:.3f} ({result['grade_weight']*100:.1f}%)")
-        print(f"  🔍 場所重み: {result['venue_weight']:.3f} ({result['venue_weight']*100:.1f}%)")
-        print(f"  🔍 距離重み: {result['distance_weight']:.3f} ({result['distance_weight']*100:.1f}%)")
-        
-        return result
-        
-    except Exception as e:
-        logger.error(f"❌ verify_weight_calculation.py準拠の重み計算エラー: {str(e)}")
-        return _get_fallback_weights()
 
-def _get_fallback_weights() -> Dict[str, float]:
-    """レポート5.1.3節の固定重み"""
-    return {
-        'grade_weight': 0.636,   # 63.6%
-        'venue_weight': 0.323,   # 32.3%
-        'distance_weight': 0.041  # 4.1%
-    }
 
 def validate_date(date_str: str) -> datetime:
     """``YYYYMMDD`` 形式の日付文字列を検証して変換する。
@@ -1045,215 +884,7 @@ def generate_stratified_report(results: Dict[str, Any], analysis_df: pd.DataFram
     generator = ReportGenerator()
     return generator.generate_stratified_report(results, analysis_df, output_dir)
 
-def calculate_reqi_with_dynamic_weights(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    【重要】レポート記載の動的重み計算によるREQI計算
-    race_level_analysis_report.md 5.1.3節記載の計算方法を適用
-    """
-    logger.info("🎯 レポート記載の動的重み計算によるREQI計算中...")
-    
-    df_copy = df.copy()
-    
-    # 📊 グローバル重みの取得
-    if WeightManager.is_initialized():
-        weights = get_global_weights()
-        calculation_details = WeightManager.get_calculation_details()
-        
-        print("\n" + "="*80)
-        print("📋 REQI計算: グローバル重み使用（race_level_analysis_report.md 5.1.3節準拠）")
-        print("="*80)
-        print("✅ 事前算出されたグローバル重みを使用:")
-        print(f"   グレード: {weights['grade_weight']:.3f} ({weights['grade_weight']*100:.1f}%)")
-        print(f"   場所: {weights['venue_weight']:.3f} ({weights['venue_weight']*100:.1f}%)")
-        print(f"   距離: {weights['distance_weight']:.3f} ({weights['distance_weight']*100:.1f}%)")
-        if calculation_details:
-            print(f"📊 算出基準: {calculation_details.get('training_period', 'N/A')} ({calculation_details.get('sample_size', 'N/A'):,}行)")
-        print("="*80)
-        
-        # 📝 ログにも重み使用情報を出力
-        logger.info("📊 ========== REQI計算でグローバル重み使用 ==========")
-        logger.info("✅ グローバル重みシステムを使用してREQI計算を実行:")
-        logger.info(f"   📊 グレード重み: {weights['grade_weight']:.4f} ({weights['grade_weight']*100:.2f}%)")
-        logger.info(f"   📊 場所重み: {weights['venue_weight']:.4f} ({weights['venue_weight']*100:.2f}%)")
-        logger.info(f"   📊 距離重み: {weights['distance_weight']:.4f} ({weights['distance_weight']*100:.2f}%)")
-        if calculation_details:
-            logger.info(f"   📊 算出基準: {calculation_details.get('training_period', 'N/A')} ({calculation_details.get('sample_size', 'N/A'):,}行)")
-            logger.info(f"   📊 目標変数: {calculation_details.get('target_column', 'N/A')}")
-        logger.info("=" * 60)
-        
-        grade_weight = weights['grade_weight']
-        venue_weight = weights['venue_weight']
-        distance_weight = weights['distance_weight']
-    else:
-        # フォールバック: 個別計算
-        print("\n" + "="*80)
-        print("📋 REQI計算: 個別動的重み計算（グローバル重み未初期化のため）")
-        print("="*80)
-        print("⚠️ グローバル重みが初期化されていません。個別計算を実行します。")
-        print("# 重み算出方法（レポート5.1.3節記載）")
-        print("# w_i = r_i² / (r_grade² + r_venue² + r_distance²)")
-        print("="*80)
-        
-        # 従来の個別計算ロジック（省略せずに保持）
-        weights = _calculate_individual_weights(df_copy)
-        grade_weight = weights['grade_weight']
-        venue_weight = weights['venue_weight'] 
-        distance_weight = weights['distance_weight']
-        
-        # 📝 個別計算の結果もログに出力
-        logger.info("📊 ========== REQI計算で個別重み計算使用 ==========")
-        logger.info("⚠️ グローバル重み未初期化のため個別計算を実行:")
-        logger.info(f"   📊 グレード重み: {grade_weight:.4f} ({grade_weight*100:.2f}%)")
-        logger.info(f"   📊 場所重み: {venue_weight:.4f} ({venue_weight*100:.2f}%)")
-        logger.info(f"   📊 距離重み: {distance_weight:.4f} ({distance_weight*100:.2f}%)")
-        logger.info("=" * 60)
-    
-    # 1. グレードレベルの計算
-    def calculate_grade_level(row):
-        """グレードレベルを計算
-        
-        【重要】データのグレード数値は「小さいほど高グレード」という関係
-        - 1 = G1（最高グレード） → 9.0（最高レベル）
-        - 2 = G2 → 4.0
-        - 3 = G3 → 3.0
-        - 4 = 重賞 → 2.0
-        - 5 = 特別（低グレード） → 1.0（低レベル）
-        - 6 = リステッド → 1.5
-        """
-        # グレード情報から数値化
-        for grade_col in ['グレード_x', 'グレード_y', 'グレード']:
-            if grade_col in df_copy.columns and pd.notna(row.get(grade_col)):
-                try:
-                    grade = int(row[grade_col])
-                    if grade == 1: 
-                        return 9.0    # G1（最高グレード → 最高レベル）
-                    elif grade == 2: 
-                        return 4.0    # G2
-                    elif grade == 3: 
-                        return 3.0    # G3
-                    elif grade == 4: 
-                        return 2.0    # 重賞
-                    elif grade == 5: 
-                        return 1.0    # 特別（低グレード → 低レベル）
-                    elif grade == 6: 
-                        return 1.5    # リステッド
-                except (ValueError, TypeError):
-                    pass
-        
-        # 賞金からフォールバック（レポート仕様に基づく正しいしきい値）
-        for prize_col in ['1着賞金(1着算入賞金込み)', '1着賞金', '本賞金']:
-            if prize_col in df_copy.columns and pd.notna(row.get(prize_col)):
-                try:
-                    prize = float(row[prize_col])
-                    if prize >= 1650:  # G1: 1,650万円以上
-                        return 9.0
-                    elif prize >= 855:  # G2: 855万円以上
-                        return 4.0
-                    elif prize >= 570:  # G3: 570万円以上
-                        return 3.0
-                    elif prize >= 300:  # リステッド: 300万円以上
-                        return 2.0
-                    elif prize >= 120:  # 特別: 120万円以上
-                        return 1.0
-                    else:
-                        return 0.0
-                except (ValueError, TypeError):
-                    pass
-        
-        return 0.0  # デフォルト
-    
-    # 2. 場所レベルの計算
-    def calculate_venue_level(row):
-        # 場名から判定（書籍引用「東京、中山、阪神、京都、札幌 > 中京、函館、新潟 > 福島、小倉」準拠）
-        if '場名' in df_copy.columns and pd.notna(row.get('場名')):
-            venue_name = str(row['場名'])
-            if venue_name in ['東京', '中山', '阪神', '京都', '札幌']:
-                return 9.0  # 第1グループ
-            elif venue_name in ['中京', '函館', '新潟']:
-                return 7.0  # 第2グループ
-            elif venue_name in ['福島', '小倉']:
-                return 4.0  # 第3グループ
-        
-        # 場コードからフォールバック
-        if '場コード' in df_copy.columns and pd.notna(row.get('場コード')):
-            venue_code = str(row['場コード']).zfill(2)
-            venue_mapping = {
-                '01': 9.0, '02': 9.0, '06': 9.0, '05': 9.0, '08': 9.0,  # 東京、中山、阪神、京都、札幌（第1グループ）
-                '03': 7.0, '07': 7.0, '04': 7.0,  # 中京、函館、新潟（第2グループ）
-                '09': 4.0, '10': 4.0   # 福島、小倉（第3グループ）
-            }
-            return venue_mapping.get(venue_code, 0.0)
-        
-        return 0.0  # デフォルト
-    
-    # 3. 距離レベルの計算
-    def calculate_distance_level(row):
-        if '距離' in df_copy.columns and pd.notna(row.get('距離')):
-            try:
-                distance = int(row['距離'])
-                if distance <= 1400:
-                    return 0.85      # スプリント
-                elif distance <= 1800:
-                    return 1.0       # マイル（基準）
-                elif distance <= 2000:
-                    return 1.35      # 中距離
-                elif distance <= 2400:
-                    return 1.45      # 中長距離
-                else:
-                    return 1.25      # 長距離
-            except (ValueError, TypeError):
-                pass
-        
-        return 1.0  # マイル相当をデフォルト
-    
-    # 各レベルを計算
-    logger.info("📊 グレードレベル計算中...")
-    df_copy['grade_level'] = df_copy.apply(calculate_grade_level, axis=1)
-    
-    logger.info("📊 場所レベル計算中...")
-    df_copy['venue_level'] = df_copy.apply(calculate_venue_level, axis=1)
-    
-    logger.info("📊 距離レベル計算中...")
-    df_copy['distance_level'] = df_copy.apply(calculate_distance_level, axis=1)
-    
-    # 重み取得完了後の処理
-    logger.info("📊 REQI計算式適用中...")
-    
-    # 動的重みによるREQI計算
-    logger.info("📊 REQI（動的重み法）計算中...")
-    df_copy['race_level'] = (
-        grade_weight * df_copy['grade_level'] +
-        venue_weight * df_copy['venue_level'] +
-        distance_weight * df_copy['distance_level']
-    )
-    
-    print("\n📊 REQI計算式:")
-    print(f"race_level = {grade_weight:.3f} * grade_level + {venue_weight:.3f} * venue_level + {distance_weight:.3f} * distance_level")
-    
-    # 統計情報をログ出力
-    grade_stats = df_copy['grade_level'].value_counts().sort_index()
-    venue_stats = df_copy['venue_level'].value_counts().sort_index()
-    distance_stats = df_copy['distance_level'].value_counts().sort_index()
-    
-    # 📊 計算結果の表示（毎回出力）
-    print("\n📊 REQI計算結果:")
-    print(f"  📊 グレードレベル分布: {grade_stats.to_dict()}")
-    print(f"  📊 場所レベル分布: {venue_stats.to_dict()}")
-    print(f"  📊 距離レベル分布: {distance_stats.to_dict()}")
-    print(f"  📊 REQI平均値: {df_copy['race_level'].mean():.3f}")
-    print(f"  📊 REQI範囲: {df_copy['race_level'].min():.3f} - {df_copy['race_level'].max():.3f}")
-    print(f"  📊 適用データ数: {len(df_copy):,}レコード")
-    print("=" * 80 + "\n")
-    
-    logger.info("✅ レポート記載の動的重み法REQI計算完了:")
-    logger.info(f"  📊 算出された重み - グレード: {grade_weight:.3f}, 場所: {venue_weight:.3f}, 距離: {distance_weight:.3f}")
-    logger.info(f"  📊 グレードレベル分布: {grade_stats.to_dict()}")
-    logger.info(f"  📊 場所レベル分布: {venue_stats.to_dict()}")
-    logger.info(f"  📊 距離レベル分布: {distance_stats.to_dict()}")
-    logger.info(f"  📊 REQI平均値: {df_copy['race_level'].mean():.3f}")
-    logger.info(f"  📊 REQI範囲: {df_copy['race_level'].min():.3f} - {df_copy['race_level'].max():.3f}")
-    
-    return df_copy
+
 
 def calculate_accurate_feature_levels(df: pd.DataFrame) -> pd.DataFrame:
     """実際のCSVデータから特徴量を正確に計算します（リファクタリング後）。
@@ -2402,8 +2033,8 @@ def generate_simple_report(results: Dict[str, Any], output_dir: Path, combined_d
     
     logger.info(f"簡易レポートを生成: {report_path}")
 
-def main():
-    """メイン処理"""
+def _create_argument_parser() -> argparse.ArgumentParser:
+    """コマンドライン引数パーサを構築する。"""
     parser = argparse.ArgumentParser(
         description='競走経験質指数（REQI）とオッズ比較分析を実行します（統合版）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -2432,115 +2063,250 @@ def main():
     parser.add_argument('--encoding', default='utf-8', help='入力ファイルのエンコーディング')
     parser.add_argument('--start-date', help='分析開始日（YYYYMMDD形式）')
     parser.add_argument('--end-date', help='分析終了日（YYYYMMDD形式）')
-    
+
     # 新機能のオプション
     parser.add_argument('--odds-analysis', action='store_true', help='競走経験質指数（REQI）とオッズの比較分析を実行')
     parser.add_argument('--sample-size', type=int, default=None, help='オッズ分析でのサンプルファイル数（指定しない場合は全ファイル）')
-    
+
     # 従来のオプション（継続）
     parser.add_argument('--three-year-periods', action='store_true',
-                       help='3年間隔での期間別分析を実行（デフォルトは全期間分析）')
+                        help='3年間隔での期間別分析を実行（デフォルトは全期間分析）')
     parser.add_argument('--enable-stratified-analysis', action='store_true', default=True,
-                       help='層別分析を実行（年齢層別、経験数別、距離カテゴリ別）- デフォルトで有効')
+                        help='層別分析を実行（年齢層別、経験数別、距離カテゴリ別）- デフォルトで有効')
     parser.add_argument('--disable-stratified-analysis', action='store_true',
-                       help='層別分析を無効化（処理時間短縮用）')
+                        help='層別分析を無効化（処理時間短縮用）')
     parser.add_argument('--stratified-only', action='store_true',
-                       help='層別分析のみを実行（export/datasetから直接読み込み）')
-    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'], 
-                       default='INFO', help='ログレベルの設定')
+                        help='層別分析のみを実行（export/datasetから直接読み込み）')
+    parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                        default='INFO', help='ログレベルの設定')
     parser.add_argument('--log-file', help='ログファイルのパス（指定しない場合は自動生成）')
-    
-    # ログファイル変数の初期化
-    log_file = None
-    
+    return parser
+
+
+def _prepare_logging(args: argparse.Namespace) -> str:
+    """ログ設定を初期化し、ログファイルパスを返す。"""
+    log_file = args.log_file
+    if log_file is None:
+        out_dir = Path(getattr(args, 'output_dir', 'results'))
+        log_dir = out_dir / 'logs'
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = str(log_dir / f'analyze_horse_REQI_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+
+    setup_logging(log_level=args.log_level, log_file=log_file)
+    return log_file
+
+
+def _resolve_stratified_flag(args: argparse.Namespace) -> bool:
+    """層別分析を有効化するか判定する。"""
+    return args.enable_stratified_analysis and not args.disable_stratified_analysis
+
+
+def _resolve_dataset_dir(args: argparse.Namespace) -> str:
+    """層別分析用データセットのディレクトリを決定する。"""
+    return args.input_path or 'export/dataset'
+
+
+def _create_unified_analyzer_if_needed(args: argparse.Namespace, enable_stratified: bool):
+    """CLIオプションに応じた統一分析器を生成する。"""
+    if args.odds_analysis:
+        return create_unified_analyzer('odds', args.min_races, enable_stratified)
+    if args.three_year_periods:
+        return create_unified_analyzer('period', args.min_races, enable_stratified)
+    return None
+
+
+def _load_and_preprocess_data(args: argparse.Namespace, analyzer, dataset_dir: str) -> pd.DataFrame:
+    """入力データを読み込み、日付フィルタと基本前処理を適用する。"""
+    target_path = args.input_path or dataset_dir
+
+    if analyzer is not None:
+        df = analyzer.load_data_unified(target_path, args.encoding)
+        df = _filter_dataframe_by_date_range(df, getattr(args, 'start_date', None), getattr(args, 'end_date', None))
+        df = analyzer.preprocess_data_unified(df)
+    else:
+        if target_path is None:
+            raise ValueError("入力パスが指定されていません。")
+        df = load_all_data_once(target_path, args.encoding)
+        df = _filter_dataframe_by_date_range(df, getattr(args, 'start_date', None), getattr(args, 'end_date', None))
+        if '着順' in df.columns:
+            df['着順'] = pd.to_numeric(df['着順'], errors='coerce')
+
+    log_dataframe_info(df, "入力データ")
+    logger.info(f"📊 読み込んだデータ件数: {len(df):,}件")
+    return df
+
+
+def _run_odds_analysis(args: argparse.Namespace, output_dir: Path, dataset_dir: str) -> int:
+    """オッズ比較分析と付随レポート生成を実行する。"""
+    logger.info("🎯 競走経験質指数（REQI）とオッズの比較分析を実行します...")
+    try:
+        comp_results = perform_comprehensive_odds_analysis(
+            data_dir=args.input_path or dataset_dir,
+            output_dir=str(output_dir),
+            sample_size=args.sample_size,
+            min_races=args.min_races,
+            start_date=args.start_date,
+            end_date=args.end_date
+        )
+        logger.info("✅ 包括版オッズ比較分析が完了しました。")
+        logger.info(
+            "📊 分析対象: %sレコード, %s頭",
+            f"{comp_results.get('data_summary', {}).get('total_records', 0):,}",
+            f"{comp_results.get('data_summary', {}).get('horse_count', 0):,}",
+        )
+        logger.info(f"📁 結果保存先: {output_dir}")
+
+        if 'regression' in comp_results and 'h2_verification' in comp_results['regression']:
+            h2 = comp_results['regression']['h2_verification']
+            result_text = "サポート" if h2.get('hypothesis_supported', False) or h2.get('h2_hypothesis_supported', False) else "非サポート"
+            logger.info(f"🎯 H2仮説「REQIがオッズベースラインを上回る」: {result_text}")
+            improvement = h2.get('r2_improvement', h2.get('improvement', 0))
+            logger.info(f"   性能改善: {improvement:+.4f}")
+
+        logger.info("ℹ️ 包括版が完了したため、簡易版の強制生成はスキップします。")
+
+        try:
+            logger.info("📋 統合層別分析レポートを生成中...")
+            stratified_dataset = create_stratified_dataset_from_export(dataset_dir, start_date=args.start_date, end_date=args.end_date)
+            stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
+            _ = generate_stratified_report(stratified_results, stratified_dataset, output_dir)
+            logger.info("✅ 統合層別分析レポート生成完了")
+        except Exception as stratified_error:
+            logger.error(f"❌ 統合層別分析レポート生成エラー: {str(stratified_error)}")
+            logger.error("詳細なエラー情報:", exc_info=True)
+
+        return 0
+    except Exception as e:
+        logger.error(f"❌ 包括版オッズ比較分析でエラー: {str(e)}")
+        logger.error("詳細なエラー情報:", exc_info=True)
+        return 0
+
+
+def _run_stratified_only(args: argparse.Namespace, dataset_dir: str, output_dir: Path) -> int:
+    """層別分析のみを実行する。"""
+    logger.info("📊 層別分析のみを実行します...")
+    try:
+        stratified_dataset = create_stratified_dataset_from_export(dataset_dir, start_date=args.start_date, end_date=args.end_date)
+        stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
+        _ = generate_stratified_report(stratified_results, stratified_dataset, output_dir)
+        logger.info("✅ 層別分析のみが完了しました。")
+        logger.info(f"📊 分析対象: {len(stratified_dataset):,}頭")
+        logger.info(f"📁 結果保存先: {output_dir}")
+        return 0
+    except Exception as e:
+        logger.error(f"❌ 層別分析でエラー: {str(e)}")
+        logger.error("詳細なエラー情報:", exc_info=True)
+        return 1
+
+
+def _run_period_analysis(analyzer, df: pd.DataFrame, args: argparse.Namespace, dataset_dir: str, output_dir: Path) -> int:
+    """3年間隔での期間別分析を実行する。"""
+    logger.info("📊 3年間隔での期間別分析を実行します...")
+    try:
+        if '年' not in df.columns or not df['年'].notna().any():
+            logger.warning("⚠️ 年データが見つかりません")
+            return 1
+
+        min_year = int(df['年'].min())
+        max_year = int(df['年'].max())
+        logger.info(f"📊 年データ範囲: {min_year}年 - {max_year}年")
+
+        results = analyzer.analyze(df)
+
+        if not results:
+            logger.warning("⚠️ 有効な期間が見つかりませんでした")
+            return 1
+
+        logger.info(f"📊 期間別分析完了: {len(results)}期間")
+
+        try:
+            logger.info("📋 期間別分析の総合レポートを生成中...")
+            generate_period_summary_report(results, output_dir)
+            logger.info("✅ 期間別分析総合レポート生成完了")
+        except Exception as summary_error:
+            logger.error(f"❌ 総合レポート生成エラー: {str(summary_error)}")
+
+        try:
+            logger.info("📋 統合層別分析レポートを生成中...")
+            stratified_dataset = create_stratified_dataset_from_export(dataset_dir, start_date=args.start_date, end_date=args.end_date)
+            stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
+            _ = generate_stratified_report(stratified_results, stratified_dataset, output_dir)
+            logger.info("✅ 統合層別分析レポート生成完了")
+        except Exception as stratified_error:
+            logger.error(f"❌ 統合層別分析レポート生成エラー: {str(stratified_error)}")
+            logger.error("詳細なエラー情報:", exc_info=True)
+
+        logger.info(f"📁 結果保存先: {output_dir}")
+        logger.info(f"📋 総合レポート: {output_dir}/競走経験質指数（REQI）分析_期間別総合レポート.md")
+        logger.info(f"📋 層別レポート: {output_dir}/stratified_analysis_integrated_report.md")
+        return 0
+    except Exception as e:
+        logger.error(f"❌ 期間別分析でエラー: {str(e)}")
+        logger.error("詳細なエラー情報:", exc_info=True)
+        return 1
+
+
+def main():
+    """メイン処理"""
+    parser = _create_argument_parser()
+
     try:
         args = parser.parse_args()
-        
-        # ログファイルの自動生成（args取得後、validate_args前に実行）
-        # 指定がない場合は {output_dir}/logs/analyze_horse_REQI_YYYYMMDD_HHMMSS.log を作成
-        log_file = args.log_file
-        if log_file is None:
-            # ログディレクトリの作成（output_dir/logs配下に統一）
-            # argsは既に取得済みなので、output_dir配下に出力
-            out_dir = Path(getattr(args, 'output_dir', 'results'))
-            log_dir = out_dir / 'logs'
-            log_dir.mkdir(parents=True, exist_ok=True)
-            log_file = str(log_dir / f'analyze_horse_REQI_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
-        
-        # ログ設定の初期化
-        setup_logging(log_level=args.log_level, log_file=log_file)
-        
-        # 引数検証（ログ設定後に実行、オッズ分析・層別分析のみの場合はスキップ）
-        if not args.odds_analysis and not args.stratified_only:
-            args = validate_args(args)
+        log_file = _prepare_logging(args)
 
-        # 📋 race_level_analysis_report.md準拠の処理開始表示
-        print("\n" + "="*80)
+        print("\n" + "=" * 80)
         print("🏁 競馬データ分析開始: race_level_analysis_report.md準拠")
-        print("="*80)
+        print("=" * 80)
         print("📖 参照レポート: race_level_analysis_report.md")
         print("🎯 REQI計算方式: 動的重み計算法（毎回相関分析で算出）")
         print("📊 重み算出: w_i = r_i² / (r_grade² + r_venue² + r_distance²)")
         print("🔬 統計的根拠: 実測相関係数の2乗値正規化")
         print("⏳ グローバル重み初期化中...")
-        print("="*80 + "\n")
-        
-        
-        # 層別分析設定の処理
-        enable_stratified = args.enable_stratified_analysis and not args.disable_stratified_analysis
+        print("=" * 80 + "\n")
+
+        enable_stratified = _resolve_stratified_flag(args)
+        dataset_dir = _resolve_dataset_dir(args)
+
         if enable_stratified:
             logger.info("📊 層別分析: 有効（年齢層別・経験数別・距離カテゴリ別）")
         else:
             logger.info("📊 層別分析: 無効（--disable-stratified-analysisで無効化）")
-        
-        if args.odds_analysis:
-            logger.info("🎯 競走経験質指数（REQI）とオッズの比較分析を実行します...")
-            analyzer = create_unified_analyzer('odds', args.min_races, enable_stratified)
-        elif args.stratified_only:
-            logger.info("📊 層別分析のみを実行します...")
-        elif args.three_year_periods:
-            logger.info("📊 3年間隔での期間別分析を実行します...")
-            analyzer = create_unified_analyzer('period', args.min_races, enable_stratified)
-        else:
-            logger.info("📊 競走経験質指数（REQI）分析を実行します...")
 
-        # ログ設定完了後に開始メッセージを出力
         logger.info("🏇 競走経験質指数（REQI）分析を開始します...")
         logger.info(f"📅 実行日時: {datetime.now()}")
         logger.info(f"🖥️ ログレベル: {args.log_level}")
         logger.info(f"📝 ログファイル: {log_file}")
-        # 初期システムリソース状況をログ出力
         log_system_resources()
-        
-        # データ読み込み
-        df = analyzer.load_data_unified(args.input_path, args.encoding)
-        # 実行時の開始/終了日指定があればここで反映（例: --end-date 20241231 で 2025年を除外）
-        df = _filter_dataframe_by_date_range(df, getattr(args, 'start_date', None), getattr(args, 'end_date', None))
 
-        # グローバル重み初期化
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        if not output_dir.exists() or not output_dir.is_dir():
+            raise FileNotFoundError(f"出力ディレクトリの作成に失敗しました: {output_dir}")
+
+        if args.stratified_only:
+            return _run_stratified_only(args, dataset_dir, output_dir)
+
+        if not args.odds_analysis:
+            args = validate_args(args)
+
+        analyzer = _create_unified_analyzer_if_needed(args, enable_stratified)
+        if analyzer is None:
+            logger.info("📊 統一分析器を使用せずにデータ読み込みを実施します...")
+        else:
+            logger.info(f"📊 統一分析器: {analyzer.__class__.__name__}")
+
+        df = _load_and_preprocess_data(args, analyzer, dataset_dir)
+
         try:
             weights_initialized = initialize_global_weights(args)
             if weights_initialized:
                 logger.info("✅ グローバル重み初期化完了")
             else:
                 logger.warning("⚠️ グローバル重み初期化に失敗、各モジュールで個別計算")
-        except Exception as e:
-            logger.error(f"❌ グローバル重み初期化エラー: {str(e)}")
+        except Exception as weight_error:
+            logger.error(f"❌ グローバル重み初期化エラー: {str(weight_error)}")
             logger.warning("⚠️ 各モジュールで個別重み計算を実行します")
 
-        # 前処理
-        df = analyzer.preprocess_data_unified(df)
-
-        logger.info(f"📊 読み込んだデータ件数: {len(df):,}件")
-
-        # 出力ディレクトリの作成（親ディレクトリも含めて確実に作成）
-        output_dir = Path(args.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 出力ディレクトリが書き込み可能かチェック
-        if not output_dir.exists() or not output_dir.is_dir():
-            raise FileNotFoundError(f"出力ディレクトリの作成に失敗しました: {output_dir}")
-        
         logger.info(f"📁 出力ディレクトリ確認済み: {output_dir.absolute()}")
         logger.info(f"📁 入力パス: {args.input_path}")
         logger.info(f"📊 出力ディレクトリ: {args.output_dir}")
@@ -2550,121 +2316,15 @@ def main():
         if args.end_date:
             logger.info(f"📅 分析終了日: {args.end_date}")
 
-        # オッズ分析の場合
         if args.odds_analysis:
-            logger.info("🎯 競走経験質指数（REQI）とオッズの比較分析を実行します...")
-            try:
-                # まず包括版を実行
-                logger.info("📋 包括版オッズ比較分析を実行します...")
-                comp_results = perform_comprehensive_odds_analysis(
-                    data_dir=args.input_path,
-                    output_dir=args.output_dir,
-                    sample_size=args.sample_size,
-                    min_races=args.min_races,
-                    start_date=args.start_date,
-                    end_date=args.end_date
-                )
-                logger.info("✅ 包括版オッズ比較分析が完了しました。")
-                logger.info(f"📊 分析対象: {comp_results.get('data_summary', {}).get('total_records', 0):,}レコード, "
-                            f"{comp_results.get('data_summary', {}).get('horse_count', 0):,}頭")
-                logger.info(f"📁 結果保存先: {args.output_dir}")
-
-                # 可能であれば包括版のH2結果をログ
-                if 'regression' in comp_results and 'h2_verification' in comp_results['regression']:
-                    h2 = comp_results['regression']['h2_verification']
-                    result_text = "サポート" if h2.get('hypothesis_supported', False) or h2.get('h2_hypothesis_supported', False) else "非サポート"
-                    logger.info(f"🎯 H2仮説「REQIがオッズベースラインを上回る」: {result_text}")
-                    improvement = h2.get('r2_improvement', h2.get('improvement', 0))
-                    logger.info(f"   性能改善: {improvement:+.4f}")
-
-                # 包括版成功時は簡易版を省略（必要ならフラグで制御可能）
-                logger.info("ℹ️ 包括版が完了したため、簡易版の強制生成はスキップします。")
-
-                # 層別レポートも生成
-                try:
-                    logger.info("📋 統合層別分析レポートを生成中...")
-                    stratified_dataset = create_stratified_dataset_from_export('export/dataset', start_date=args.start_date, end_date=args.end_date)
-                    stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
-                    _ = generate_stratified_report(stratified_results, stratified_dataset, output_dir)
-                    logger.info("✅ 統合層別分析レポート生成完了")
-                except Exception as e:
-                    logger.error(f"❌ 統合層別分析レポート生成エラー: {str(e)}")
-                    logger.error("詳細なエラー情報:", exc_info=True)
-
-                return 0
-            except Exception as e:
-                logger.error(f"❌ 包括版オッズ比較分析でエラー: {str(e)}")
-                logger.error("詳細なエラー情報:", exc_info=True)
-                return 0
-        
-        # 層別分析のみの場合
-        if args.stratified_only:
-            logger.info("📊 層別分析のみを実行します...")
-            try:
-                stratified_dataset = create_stratified_dataset_from_export('export/dataset', start_date=args.start_date, end_date=args.end_date)
-                stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
-                _ = generate_stratified_report(stratified_results, stratified_dataset, output_dir)
-                logger.info("✅ 層別分析のみが完了しました。")
-                logger.info(f"📊 分析対象: {len(stratified_dataset):,}頭")
-                logger.info(f"📁 結果保存先: {output_dir}")
-                return 0
-            except Exception as e:
-                logger.error(f"❌ 層別分析でエラー: {str(e)}")
-                logger.error("詳細なエラー情報:", exc_info=True)
-                return 1
+            return _run_odds_analysis(args, output_dir, dataset_dir)
 
         if args.three_year_periods:
-            logger.info("📊 3年間隔での期間別分析を実行します...")
-            try:
-            # 年データが存在するかチェック
-                if '年' in df.columns and df['年'].notna().any():
-                    min_year = int(df['年'].min())
-                    max_year = int(df['年'].max())
-                    logger.info(f"📊 年データ範囲: {min_year}年 - {max_year}年")
-                
-                    # 期間別分析実行
-                    results = analyzer.analyze(df)
-                    
-                    if results:
-                        logger.info(f"📊 期間別分析完了: {len(results)}期間")
-                        
-                        # 期間別分析の総合レポートを生成
-                        logger.info("📋 期間別分析の総合レポートを生成中...")
-                        try:
-                            generate_period_summary_report(results, Path(args.output_dir))
-                            logger.info("✅ 期間別分析総合レポート生成完了")
-                        except Exception as e:
-                            logger.error(f"❌ 総合レポート生成エラー: {str(e)}")
-                        
-                        # 【追加】統合層別分析レポートも生成
-                        try:
-                            logger.info("📋 統合層別分析レポートを生成中...")
-                            stratified_dataset = create_stratified_dataset_from_export('export/dataset', start_date=args.start_date, end_date=args.end_date)
-                            stratified_results = perform_integrated_stratified_analysis(stratified_dataset)
-                            _ = generate_stratified_report(stratified_results, stratified_dataset, Path(args.output_dir))
-                            logger.info("✅ 統合層別分析レポート生成完了")
-                        except Exception as e:
-                            logger.error(f"❌ 統合層別分析レポート生成エラー: {str(e)}")
-                            logger.error("詳細なエラー情報:", exc_info=True)
-                    
-                        # 結果の保存先を表示
-                        logger.info(f"📁 結果保存先: {args.output_dir}")
-                        logger.info(f"📋 総合レポート: {args.output_dir}/競走経験質指数（REQI）分析_期間別総合レポート.md")
-                        logger.info(f"📋 層別レポート: {args.output_dir}/stratified_analysis_integrated_report.md")
-                        
-                        return 0
-                    else:
-                        logger.warning("⚠️ 有効な期間が見つかりませんでした")
-                        return 1
-                else:
-                    logger.warning("⚠️ 年データが見つかりません")
-                    return 1
-                    
-            except Exception as e:
-                logger.error(f"❌ 期間別分析でエラー: {str(e)}")
-                logger.error("詳細なエラー情報:", exc_info=True)
+            if analyzer is None:
+                logger.error("❌ 期間別分析には統一分析器が必要です")
                 return 1
-        
+            return _run_period_analysis(analyzer, df, args, dataset_dir, output_dir)
+
         return 0
 
     except FileNotFoundError as e:
