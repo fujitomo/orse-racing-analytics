@@ -378,7 +378,7 @@ def merge_srb_with_sed(separate_output=False, exclude_turf=False, turf_only=Fals
             )
             
             # 欠損値処理の実行（グレード推定処理含む）
-            from process_race_data import MissingValueHandler
+            from .missing_value_handler import MissingValueHandler
             missing_handler = MissingValueHandler()
             final_df = missing_handler.handle_missing_values(merged_df)
 

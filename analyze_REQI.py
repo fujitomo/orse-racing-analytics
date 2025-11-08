@@ -2,13 +2,6 @@
 """
 競馬レース分析コマンドラインツール
 馬ごとの競走経験質指数（REQI）の分析を実行します。
-
-リファクタリング済み：
-- データ読み込み: horse_racing.data.data_loader.DataLoader
-- 特徴量計算: horse_racing.analyzers.feature_calculator.FeatureCalculator
-- 層別分析: horse_racing.analyzers.stratified_analyzer.StratifiedAnalyzer
-- レポート生成: horse_racing.output.report_generator.ReportGenerator
-- サービス層: horse_racing.services.*
 """
 
 import argparse
