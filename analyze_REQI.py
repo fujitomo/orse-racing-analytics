@@ -31,6 +31,7 @@ from horse_racing.base.unified_analyzer import create_unified_analyzer
 from horse_racing.services.reqi_initializer import REQIInitializer
 from horse_racing.base.analyzer import AnalysisConfig as _AnalysisConfig
 from horse_racing.analyzers.race_level_analyzer import REQIAnalyzer as _REQIAnalyzer
+from horse_racing.data.utils import filter_by_date_range
 
 def setup_logging(log_level='INFO', log_file=None):
     """ログ設定を初期化する。
@@ -393,69 +394,7 @@ def validate_args(args):
     
     return args
 
-def _filter_dataframe_by_date_range(df: pd.DataFrame, start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
-    """日付範囲で DataFrame をフィルタする（``年月日`` または ``年`` ベース）。
 
-    Args:
-        df (pd.DataFrame): 入力データ。
-        start_date (str | None): ``YYYYMMDD`` 形式の開始日（含む）。
-        end_date (str | None): ``YYYYMMDD`` 形式の終了日（含む）。
-
-    Returns:
-        pd.DataFrame: フィルタ後のデータフレーム。
-    """
-    try:
-        if df is None or len(df) == 0:
-            return df
-        # 日付列がある場合はそれを優先
-        if '年月日' in df.columns:
-            df_copy = df.copy()
-            try:
-                df_copy['__date'] = pd.to_datetime(df_copy['年月日'], format='%Y%m%d', errors='coerce')
-            except Exception:
-                df_copy['__date'] = pd.to_datetime(df_copy['年月日'], errors='coerce')
-            mask = pd.Series(True, index=df_copy.index)
-            if start_date:
-                try:
-                    sd = datetime.strptime(start_date, '%Y%m%d')
-                    mask &= df_copy['__date'] >= sd
-                except Exception:
-                    pass
-            if end_date:
-                try:
-                    ed = datetime.strptime(end_date, '%Y%m%d')
-                    mask &= df_copy['__date'] <= ed
-                except Exception:
-                    pass
-            filtered = df_copy.loc[mask].drop(columns=['__date'])
-            if len(filtered) != len(df):
-                logger.info(f"🧹 日付フィルタ適用(年月日): {len(df):,} → {len(filtered):,}")
-            return filtered
-        # 年列がある場合は年でフィルタ
-        if '年' in df.columns:
-            df_copy = df.copy()
-            mask = pd.Series(True, index=df_copy.index)
-            if start_date and len(start_date) >= 4:
-                try:
-                    start_year = int(start_date[:4])
-                    mask &= pd.to_numeric(df_copy['年'], errors='coerce') >= start_year
-                except Exception:
-                    pass
-            if end_date and len(end_date) >= 4:
-                try:
-                    end_year = int(end_date[:4])
-                    mask &= pd.to_numeric(df_copy['年'], errors='coerce') <= end_year
-                except Exception:
-                    pass
-            filtered = df_copy.loc[mask]
-            if len(filtered) != len(df):
-                logger.info(f"🧹 年フィルタ適用(年): {len(df):,} → {len(filtered):,}")
-            return filtered
-        # フィルタ不可
-        return df
-    except Exception as e:
-        logger.warning(f"⚠️ 日付フィルタ適用中に例外: {str(e)}")
-        return df
 
 @log_performance("データセット作成")
 def create_stratified_dataset_from_export(dataset_dir: str, min_races: int = 6, start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
@@ -520,7 +459,7 @@ def create_stratified_dataset_from_export(dataset_dir: str, min_races: int = 6, 
     concat_start = time.time()
     unified_df = pd.concat(dfs, ignore_index=True)
     # 指定があれば日付範囲でフィルタ
-    unified_df = _filter_dataframe_by_date_range(unified_df, start_date, end_date)
+    unified_df = filter_by_date_range(unified_df, start_date, end_date)
     concat_time = time.time() - concat_start
     
     logger.info(f"✅ 統合完了: {len(unified_df):,}行のデータ (統合時間: {concat_time:.2f}秒)")
@@ -1024,7 +963,7 @@ def perform_comprehensive_odds_analysis(data_dir: str, output_dir: str, sample_s
         # グローバル関数を使用してデータを読み込み
         combined_df = load_all_data_once(data_dir, 'utf-8')
         # 指定があれば日付範囲でフィルタ
-        combined_df = _filter_dataframe_by_date_range(combined_df, start_date, end_date)
+        combined_df = filter_by_date_range(combined_df, start_date, end_date)
         if combined_df.empty:
             raise ValueError("データファイルが見つかりません")
         
@@ -1108,7 +1047,7 @@ def perform_simple_odds_analysis(data_dir: str, output_dir: str, sample_size: in
     # グローバル関数を使用してデータを読み込み
     combined_df = load_all_data_once(data_dir, 'utf-8')
     # 指定があれば日付範囲でフィルタ
-    combined_df = _filter_dataframe_by_date_range(combined_df, start_date, end_date)
+    combined_df = filter_by_date_range(combined_df, start_date, end_date)
     if combined_df.empty:
         raise ValueError("有効なデータが見つかりません")
     
@@ -2114,13 +2053,13 @@ def _load_and_preprocess_data(args: argparse.Namespace, analyzer, dataset_dir: s
 
     if analyzer is not None:
         df = analyzer.load_data_unified(target_path, args.encoding)
-        df = _filter_dataframe_by_date_range(df, getattr(args, 'start_date', None), getattr(args, 'end_date', None))
+        df = filter_by_date_range(df, getattr(args, 'start_date', None), getattr(args, 'end_date', None))
         df = analyzer.preprocess_data_unified(df)
     else:
         if target_path is None:
             raise ValueError("入力パスが指定されていません。")
         df = load_all_data_once(target_path, args.encoding)
-        df = _filter_dataframe_by_date_range(df, getattr(args, 'start_date', None), getattr(args, 'end_date', None))
+        df = filter_by_date_range(df, getattr(args, 'start_date', None), getattr(args, 'end_date', None))
         if '着順' in df.columns:
             df['着順'] = pd.to_numeric(df['着順'], errors='coerce')
 
