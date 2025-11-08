@@ -61,23 +61,18 @@ class UnifiedAnalyzerBase(ABC):
             sys.path.insert(0, current_dir)
         
         try:
-            # まずanalyze_REQIモジュールからグローバル変数を取得
+            # まずanalyze_REQIモジュールからキャッシュを取得
             import analyze_REQI
             
-            # グローバル変数の存在と内容を詳細チェック
-            has_global_data = hasattr(analyze_REQI, '_global_raw_data')
-            global_data_not_none = has_global_data and analyze_REQI._global_raw_data is not None
-            
-            logger.info(f"🔍 analyze_REQIモジュールチェック: has_attr={has_global_data}, not_none={global_data_not_none}")
-            
-            if global_data_not_none:
-                logger.info("💾 analyze_REQIモジュールからグローバル変数を取得中...")
-                df = analyze_REQI._global_raw_data.copy()
-                logger.info(f"✅ グローバルデータ取得完了: {len(df):,}行")
+            # GLOBAL_DATA_CACHEを直接参照
+            if analyze_REQI.GLOBAL_DATA_CACHE.has_raw_data():
+                logger.info("💾 analyze_REQIモジュールのキャッシュから生データを取得中...")
+                df = analyze_REQI.GLOBAL_DATA_CACHE.get_raw_data()
+                logger.info(f"✅ キャッシュデータ取得完了: {len(df):,}行")
                 self.data = df
                 return df
             else:
-                logger.info(f"🔍 analyze_REQIモジュールのグローバル変数: has_attr={has_global_data}, not_none={global_data_not_none}")
+                logger.info("🔍 analyze_REQIモジュールのキャッシュは未設定です")
             
             # __main__ フォールバックは廃止（取得経路を統一）
                 
@@ -147,51 +142,19 @@ class UnifiedAnalyzerBase(ABC):
             return False
         
         try:
-            # グローバル変数から既に計算済みの特徴量を取得
-            # __main__として実行されている場合とimportされる場合の両方に対応
-            import sys
-            if '__main__' in sys.modules and hasattr(sys.modules['__main__'], '_global_data'):
-                main_module = sys.modules['__main__']
-                logger.info("🔍 __main__モジュールからグローバル変数を参照します")
-            else:
-                import analyze_REQI
-                main_module = analyze_REQI
-                logger.info("🔍 analyze_REQIモジュールからグローバル変数を参照します")
-            
-            # グローバル変数の状態を詳細にログ出力
-            has_global_data = hasattr(main_module, '_global_data')
-            has_feature_levels = hasattr(main_module, '_global_feature_levels')
-            data_not_none = has_global_data and main_module._global_data is not None
-            features_not_none = has_feature_levels and main_module._global_feature_levels is not None
-            logger.info(f"🔍 グローバル変数状態: _global_data存在={has_global_data}, 非None={data_not_none}")
-            logger.info(f"🔍 グローバル変数状態: _global_feature_levels存在={has_feature_levels}, 非None={features_not_none}")
-            
-            if features_not_none:
-                logger.info("💾 グローバル変数から計算済み特徴量を取得中...")
-                df_with_features = main_module._global_feature_levels.copy()
+            import analyze_REQI
+
+            # GLOBAL_DATA_CACHEを直接参照
+            if analyze_REQI.GLOBAL_DATA_CACHE.has_feature_levels():
+                logger.info("💾 analyze_REQIのキャッシュから計算済み特徴量を取得中...")
+                df_with_features = analyze_REQI.GLOBAL_DATA_CACHE.get_feature_levels()
                 logger.info(f"✅ グローバル特徴量取得完了: {len(df_with_features):,}行")
             else:
-                # グローバル変数がない場合のみ新規計算
-                logger.info("🧮 特徴量レベル列を計算中...")
-                import importlib.util
-                import os
-                
-                # analyze_REQI.pyのパスを取得
-                current_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-                module_path = os.path.join(current_dir, 'analyze_REQI.py')
-                
-                # モジュールを動的にインポート
-                spec = importlib.util.spec_from_file_location("analyze_REQI", module_path)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                
-                df_with_features = module.calculate_accurate_feature_levels(df)
-                
-                # 【重要】計算済みデータを正しいモジュールのグローバル変数に保存
-                logger.info("💾 計算済みデータをグローバル変数に保存中...")
-                main_module._global_data = df.copy()
-                main_module._global_feature_levels = df_with_features.copy()
-                logger.info(f"✅ グローバル変数保存完了: _global_data={len(df):,}行, _global_feature_levels={len(df_with_features):,}行")
+                logger.info("🧮 特徴量レベル列を再計算します")
+                df_with_features = analyze_REQI.calculate_accurate_feature_levels(df)
+                analyze_REQI.GLOBAL_DATA_CACHE.set_combined_data(df)
+                analyze_REQI.GLOBAL_DATA_CACHE.set_feature_levels(df_with_features)
+                logger.info(f"✅ 特徴量をキャッシュに保存: {len(df_with_features):,}行")
             
             # グローバル重みを初期化
             weights = WeightManager.initialize_from_training_data(df_with_features)
@@ -365,21 +328,19 @@ class PeriodAnalysisUnifiedAnalyzer(UnifiedAnalyzerBase):
             # 一時的な分析器を作成
             self.race_analyzer = REQIAnalyzer(temp_config, self.enable_stratified)
             
-            # グローバル変数を設定（analyze_by_periods_optimizedが使用するため）
+            # グローバルキャッシュを設定（analyze_by_periods_optimizedが使用するため）
             import analyze_REQI
             
-            # 前処理済みデータをグローバル変数に設定（重複処理回避）
-            if hasattr(analyze_REQI, '_global_data') and analyze_REQI._global_data is not None:
+            # GLOBAL_DATA_CACHEを直接参照
+            if analyze_REQI.GLOBAL_DATA_CACHE.has_combined_data():
                 logger.info("💾 既存のグローバルデータを活用中...")
-                analyze_REQI._global_data = analyze_REQI._global_data.copy()
             else:
-                analyze_REQI._global_data = df.copy()
+                analyze_REQI.GLOBAL_DATA_CACHE.set_combined_data(df)
             
-            if hasattr(analyze_REQI, '_global_feature_levels') and analyze_REQI._global_feature_levels is not None:
+            if analyze_REQI.GLOBAL_DATA_CACHE.has_feature_levels():
                 logger.info("💾 既存のグローバル特徴量を活用中...")
-                analyze_REQI._global_feature_levels = analyze_REQI._global_feature_levels.copy()
             else:
-                analyze_REQI._global_feature_levels = df.copy()
+                analyze_REQI.GLOBAL_DATA_CACHE.set_feature_levels(df)
             
             # 期間別分析実行
             all_results = module.analyze_by_periods_optimized(self.race_analyzer, periods, Path("temp"))

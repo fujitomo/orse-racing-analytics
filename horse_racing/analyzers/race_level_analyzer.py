@@ -1260,37 +1260,37 @@ class REQIAnalyzer(BaseAnalyzer):
                 
                 return self.LEVEL_WEIGHTS
             else:
-                logger.warning("⚠️ グローバル重みが未初期化です。グローバル変数から全データを取得して個別計算します")
-                # フォールバック: グローバル変数から全データを取得
-                import sys
-                main_module = sys.modules.get('__main__')
+                logger.warning("⚠️ グローバル重みが未初期化です。キャッシュから全データを取得して個別計算します")
+                try:
+                    import analyze_REQI
+                    global_data = analyze_REQI.get_cached_combined_data()
+                except ImportError:
+                    global_data = None
                 
-                if main_module and hasattr(main_module, '_global_data'):
-                    global_data = getattr(main_module, '_global_data')
-                    if global_data is not None:
-                        logger.info("💾 グローバル変数から全データを取得中...")
-                        train_data = global_data[(global_data['年'] >= 2010) & (global_data['年'] <= 2020)].copy()
-                        
-                        if len(train_data) == 0:
-                            logger.warning("⚠️ グローバル変数にも訓練期間（2010-2020年）データがありません。全データで計算します。")
-                            train_data = global_data.copy()
-                        
-                        logger.info("📊 訓練期間（2010-2020年）データでの動的重み計算:")
-            logger.info(f"   対象データ: {len(train_data):,}行")
-            logger.info(f"   対象期間: {train_data['年'].min()}-{train_data['年'].max()}年")
-            
-            # 訓練期間データで動的重み計算を実行
-            training_weights = self.calculate_dynamic_weights(train_data)
-            
-            # 訓練期間での統計を計算
-            train_horse_stats = self._calculate_horse_stats_for_data(train_data)
-            
-            if len(train_horse_stats) == 0:
-                logger.warning("⚠️ 訓練期間の馬統計データが空です")
-                return training_weights
-            else:
-                logger.error("❌ グローバル変数がNoneです")
-                return {}
+                if global_data is not None:
+                    logger.info("💾 analyze_REQIキャッシュから全データを取得中...")
+                    train_data = global_data[(global_data['年'] >= 2010) & (global_data['年'] <= 2020)].copy()
+                    
+                    if len(train_data) == 0:
+                        logger.warning("⚠️ キャッシュにも訓練期間（2010-2020年）データがありません。全データで計算します。")
+                        train_data = global_data.copy()
+                    
+                    logger.info("📊 訓練期間（2010-2020年）データでの動的重み計算:")
+                    logger.info(f"   対象データ: {len(train_data):,}行")
+                    logger.info(f"   対象期間: {train_data['年'].min()}-{train_data['年'].max()}年")
+                    
+                    # 訓練期間データで動的重み計算を実行
+                    training_weights = self.calculate_dynamic_weights(train_data)
+                    
+                    # 訓練期間での統計を計算
+                    train_horse_stats = self._calculate_horse_stats_for_data(train_data)
+                    
+                    if len(train_horse_stats) == 0:
+                        logger.warning("⚠️ 訓練期間の馬統計データが空です")
+                        return training_weights
+                else:
+                    logger.error("❌ グローバルキャッシュがNoneです")
+                    return self.LEVEL_WEIGHTS
             
             # 訓練期間での性能を評価
             target_col = 'place_rate'
