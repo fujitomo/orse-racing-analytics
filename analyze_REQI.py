@@ -32,6 +32,7 @@ from horse_racing.services.reqi_initializer import REQIInitializer
 from horse_racing.base.analyzer import AnalysisConfig as _AnalysisConfig
 from horse_racing.analyzers.race_level_analyzer import REQIAnalyzer as _REQIAnalyzer
 from horse_racing.data.utils import filter_by_date_range
+from horse_racing.data.processors.grade_estimator import GradeEstimator
 
 def setup_logging(log_level='INFO', log_file=None):
     """ログ設定を初期化する。
@@ -829,6 +830,125 @@ def calculate_accurate_feature_levels(df: pd.DataFrame) -> pd.DataFrame:
     """
     calculator = FeatureCalculator()
     return calculator.calculate_accurate_feature_levels(df)
+
+
+@log_performance("グレード補完検証")
+def validate_grade_estimation(data_dir: str, encoding: str = 'utf-8') -> Dict[str, Any]:
+    """グレード補完の妥当性を検証します。
+    
+    元のグレードが存在するレースで補完アルゴリズムを適用し、
+    一致率を計算して補完精度を評価します。
+    
+    Args:
+        data_dir (str): データセットディレクトリのパス。
+        encoding (str): ファイルエンコーディング。
+        
+    Returns:
+        Dict[str, Any]: 検証結果（一致率、グレード別一致率など）。
+    """
+    logger.info("📊 グレード補完の妥当性検証を開始...")
+    
+    # データ読み込み
+    df = load_all_data_once(data_dir, encoding)
+    
+    if df is None or len(df) == 0:
+        logger.error("❌ データの読み込みに失敗しました")
+        return {'error': 'データ読み込み失敗'}
+    
+    logger.info(f"📊 読み込んだデータ: {len(df):,}レコード")
+    
+    # グレード列の確認
+    grade_column = 'グレード'
+    if grade_column not in df.columns:
+        # 代替カラム名を試す
+        for alt_col in ['グレード_x', 'grade']:
+            if alt_col in df.columns:
+                grade_column = alt_col
+                break
+        else:
+            logger.error(f"❌ グレード列が見つかりません")
+            return {'error': 'グレード列なし'}
+    
+    # 元のグレードが存在するレース（検証用）
+    original_grade_mask = df[grade_column].notna()
+    validation_df = df[original_grade_mask].copy()
+    
+    logger.info(f"📊 検証対象レコード数: {len(validation_df):,}レコード（元のグレードが存在）")
+    
+    if len(validation_df) == 0:
+        logger.warning("⚠️ 検証対象レコードがありません")
+        return {'error': '検証対象なし'}
+    
+    # 元のグレードを保存
+    original_grades = validation_df[grade_column].copy()
+    
+    # グレード列を一旦欠損値にして、補完アルゴリズムを適用
+    validation_df[grade_column] = np.nan
+    
+    # グレード推定を実行
+    grade_estimator = GradeEstimator()
+    estimated_df = grade_estimator.estimate_grade(validation_df, grade_column)
+    
+    # 推定されたグレード
+    estimated_grades = estimated_df[grade_column]
+    
+    # 一致率を計算
+    valid_mask = original_grades.notna() & estimated_grades.notna()
+    
+    if valid_mask.sum() == 0:
+        logger.warning("⚠️ 比較可能なレコードがありません")
+        return {'error': '比較可能なデータなし'}
+    
+    original_valid = original_grades[valid_mask]
+    estimated_valid = estimated_grades[valid_mask]
+    
+    # 一致率（Accuracy）
+    matches = (original_valid == estimated_valid).sum()
+    total = len(original_valid)
+    accuracy = matches / total
+    
+    # グレード別の一致率
+    grade_accuracy = {}
+    grade_names = {1: 'G1', 2: 'G2', 3: 'G3', 4: 'リステッド', 5: '条件戦', 6: 'L'}
+    
+    for grade in sorted(original_valid.unique()):
+        if pd.notna(grade):
+            grade_mask = original_valid == grade
+            if grade_mask.sum() > 0:
+                grade_matches = (original_valid[grade_mask] == estimated_valid[grade_mask]).sum()
+                grade_total = grade_mask.sum()
+                grade_acc = grade_matches / grade_total
+                grade_name = grade_names.get(int(grade), f'グレード{int(grade)}')
+                grade_accuracy[grade_name] = {
+                    'accuracy': grade_acc,
+                    'matches': int(grade_matches),
+                    'total': int(grade_total)
+                }
+    
+    # 結果を整理
+    results = {
+        'total_records': int(total),
+        'matches': int(matches),
+        'accuracy': accuracy,
+        'accuracy_pct': f"{accuracy * 100:.1f}%",
+        'grade_accuracy': grade_accuracy
+    }
+    
+    # 結果をログ出力
+    logger.info("=" * 60)
+    logger.info("📊 グレード補完の妥当性検証結果")
+    logger.info("=" * 60)
+    logger.info(f"検証対象レコード数: {total:,}レコード")
+    logger.info(f"一致数: {matches:,}レコード")
+    logger.info(f"一致率（Accuracy）: {accuracy * 100:.1f}%")
+    logger.info("")
+    logger.info("グレード別一致率:")
+    for grade_name, stats in grade_accuracy.items():
+        logger.info(f"  {grade_name}: {stats['accuracy']*100:.1f}% ({stats['matches']:,}/{stats['total']:,})")
+    logger.info("=" * 60)
+    
+    return results
+
 
 def analyze_by_periods_optimized(analyzer, periods, base_output_dir):
     """期間別分析を実行します（最適化版・リファクタリング済み）。
@@ -1981,12 +2101,16 @@ def _create_argument_parser() -> argparse.ArgumentParser:
   # 層別分析のみ実行
   python analyze_horse_REQI.py --stratified-only --output-dir results/stratified_analysis
 
+  # グレード補完の妥当性検証
+  python analyze_REQI.py --validate-grade export/dataset
+
 このスクリプトの主要機能:
   1. 競走経験質指数（REQI）とオッズ情報の包括的比較分析
   2. H2仮説「REQIがオッズベースラインを上回る」の検証
   3. 相関分析と回帰分析による統計的評価
   4. 層別分析（年齢層・経験数・距離カテゴリ別）
   5. 期間別分析（3年間隔での時系列分析）
+  6. グレード補完の妥当性検証（一致率計算）
         """
     )
     parser.add_argument('input_path', nargs='?', help='入力ファイルまたはディレクトリのパス (例: export/with_bias)')
@@ -2009,6 +2133,8 @@ def _create_argument_parser() -> argparse.ArgumentParser:
                         help='層別分析を無効化（処理時間短縮用）')
     parser.add_argument('--stratified-only', action='store_true',
                         help='層別分析のみを実行（export/datasetから直接読み込み）')
+    parser.add_argument('--validate-grade', action='store_true',
+                        help='グレード補完の妥当性検証を実行（一致率を計算）')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         default='INFO', help='ログレベルの設定')
     parser.add_argument('--log-file', help='ログファイルのパス（指定しない場合は自動生成）')
@@ -2217,6 +2343,44 @@ def main():
 
         if args.stratified_only:
             return _run_stratified_only(args, dataset_dir, output_dir)
+
+        # グレード補完の妥当性検証
+        if args.validate_grade:
+            logger.info("📊 グレード補完の妥当性検証を実行します...")
+            try:
+                grade_results = validate_grade_estimation(
+                    data_dir=args.input_path or dataset_dir,
+                    encoding=args.encoding
+                )
+                if 'error' not in grade_results:
+                    logger.info(f"✅ グレード補完検証完了: 一致率 {grade_results['accuracy_pct']}")
+                    logger.info(f"📊 検証対象: {grade_results['total_records']:,}レコード")
+                    
+                    # 結果をファイルに保存
+                    result_path = output_dir / 'grade_estimation_validation.md'
+                    with open(result_path, 'w', encoding='utf-8') as f:
+                        f.write("# グレード補完の妥当性検証結果\n\n")
+                        f.write(f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                        f.write("## 概要\n\n")
+                        f.write(f"- **検証対象レコード数**: {grade_results['total_records']:,}レコード\n")
+                        f.write(f"- **一致数**: {grade_results['matches']:,}レコード\n")
+                        f.write(f"- **一致率（Accuracy）**: {grade_results['accuracy_pct']}\n\n")
+                        f.write("## グレード別一致率\n\n")
+                        f.write("| グレード | 一致率 | 一致数 | 総数 |\n")
+                        f.write("|---------|--------|--------|------|\n")
+                        for grade_name, stats in grade_results['grade_accuracy'].items():
+                            f.write(f"| {grade_name} | {stats['accuracy']*100:.1f}% | {stats['matches']:,} | {stats['total']:,} |\n")
+                        f.write("\n## 解釈\n\n")
+                        f.write("この検証は、元のグレードが存在するレースで補完アルゴリズムを適用し、\n")
+                        f.write("推定されたグレードと元のグレードの一致率を計算したものです。\n")
+                    logger.info(f"📋 結果保存先: {result_path}")
+                else:
+                    logger.warning(f"⚠️ グレード補完検証に問題がありました: {grade_results['error']}")
+                return 0
+            except Exception as e:
+                logger.error(f"❌ グレード補完検証でエラー: {str(e)}")
+                logger.error("詳細なエラー情報:", exc_info=True)
+                return 1
 
         if not args.odds_analysis:
             args = validate_args(args)
