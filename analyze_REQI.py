@@ -950,6 +950,346 @@ def validate_grade_estimation(data_dir: str, encoding: str = 'utf-8') -> Dict[st
     return results
 
 
+@log_performance("EDA分析")
+def perform_eda_analysis(data_dir: str, output_dir: str, encoding: str = 'utf-8') -> Dict[str, Any]:
+    """EDA（探索的データ分析）を実行します。
+    
+    基本統計量、欠損率、時系列分割後のデータ特性を確認し、
+    結果をMarkdownレポートとして出力します。
+    
+    Args:
+        data_dir (str): データセットディレクトリのパス。
+        output_dir (str): 出力ディレクトリのパス。
+        encoding (str): ファイルエンコーディング。
+        
+    Returns:
+        Dict[str, Any]: EDA分析結果。
+    """
+    logger.info("📊 EDA（探索的データ分析）を開始...")
+    
+    # データ読み込み
+    df = load_all_data_once(data_dir, encoding)
+    
+    if df is None or len(df) == 0:
+        logger.error("❌ データの読み込みに失敗しました")
+        return {'error': 'データ読み込み失敗'}
+    
+    logger.info(f"📊 読み込んだデータ: {len(df):,}レコード × {len(df.columns)}列")
+    
+    results = {
+        'data_overview': {},
+        'basic_statistics': {},
+        'missing_values': {},
+        'time_series_split': {}
+    }
+    
+    # ========================================
+    # 1. データ概要
+    # ========================================
+    logger.info("📋 1. データ概要を集計中...")
+    
+    results['data_overview'] = {
+        'total_records': len(df),
+        'total_columns': len(df.columns),
+        'memory_usage_mb': df.memory_usage(deep=True).sum() / 1024 / 1024,
+        'duplicate_rows': int(df.duplicated().sum())
+    }
+    
+    # 年の範囲
+    if '年' in df.columns:
+        df['年'] = pd.to_numeric(df['年'], errors='coerce')
+        results['data_overview']['year_range'] = {
+            'min': int(df['年'].min()) if df['年'].notna().any() else None,
+            'max': int(df['年'].max()) if df['年'].notna().any() else None
+        }
+    
+    # ========================================
+    # 2. 基本統計量（主要数値列）
+    # ========================================
+    logger.info("📋 2. 基本統計量を計算中...")
+    
+    # 分析対象の主要数値列
+    key_numeric_cols = [
+        '着順', '確定単勝オッズ', '確定複勝オッズ下', '確定複勝オッズ上',
+        '10時単勝オッズ', '10時複勝オッズ', '距離', '頭数',
+        '1着賞金(1着算入賞金込み)', '本賞金', 'グレード'
+    ]
+    
+    available_numeric_cols = [col for col in key_numeric_cols if col in df.columns]
+    
+    for col in available_numeric_cols:
+        try:
+            series = pd.to_numeric(df[col], errors='coerce')
+            valid_count = series.notna().sum()
+            
+            if valid_count > 0:
+                results['basic_statistics'][col] = {
+                    'count': int(valid_count),
+                    'mean': float(series.mean()),
+                    'std': float(series.std()),
+                    'min': float(series.min()),
+                    '25%': float(series.quantile(0.25)),
+                    '50%': float(series.quantile(0.50)),
+                    '75%': float(series.quantile(0.75)),
+                    'max': float(series.max())
+                }
+        except Exception as e:
+            logger.warning(f"⚠️ {col}の統計計算でエラー: {e}")
+    
+    # ========================================
+    # 3. 欠損率分析
+    # ========================================
+    logger.info("📋 3. 欠損率を分析中...")
+    
+    # 列別欠損率
+    missing_counts = df.isnull().sum()
+    missing_pct = (missing_counts / len(df) * 100).round(2)
+    
+    results['missing_values']['by_column'] = {
+        col: {
+            'missing_count': int(missing_counts[col]),
+            'missing_pct': float(missing_pct[col])
+        }
+        for col in missing_counts[missing_counts > 0].index
+    }
+    
+    results['missing_values']['total_missing_cells'] = int(missing_counts.sum())
+    results['missing_values']['total_cells'] = int(df.size)
+    results['missing_values']['overall_missing_pct'] = float(missing_counts.sum() / df.size * 100)
+    
+    # 年別×主要列の欠損率
+    if '年' in df.columns:
+        key_cols_for_missing = ['グレード', '10時単勝オッズ', '10時複勝オッズ', 
+                                '確定複勝オッズ下', '騎手コード', '着順']
+        available_key_cols = [c for c in key_cols_for_missing if c in df.columns]
+        
+        if available_key_cols:
+            try:
+                year_missing = df.groupby('年')[available_key_cols].apply(
+                    lambda x: x.isnull().mean() * 100
+                ).round(2)
+                results['missing_values']['by_year'] = year_missing.to_dict()
+            except Exception as e:
+                logger.warning(f"⚠️ 年別欠損率の計算でエラー: {e}")
+    
+    # ========================================
+    # 4. 時系列分割後のデータ特性確認
+    # ========================================
+    logger.info("📋 4. 時系列分割後のデータ特性を確認中...")
+    
+    if '年' in df.columns and df['年'].notna().any():
+        # 訓練期間（~2023年）とテスト期間（2024年）で分割
+        train_df = df[df['年'] <= 2023]
+        test_df = df[df['年'] == 2024]
+        
+        def calc_period_stats(period_df, period_name):
+            """期間別の統計を計算"""
+            stats = {
+                'record_count': len(period_df),
+                'unique_horses': period_df['馬名'].nunique() if '馬名' in period_df.columns else None
+            }
+            
+            # 主要数値列の統計
+            for col in ['着順', '確定複勝オッズ下', '距離']:
+                if col in period_df.columns:
+                    series = pd.to_numeric(period_df[col], errors='coerce')
+                    if series.notna().sum() > 0:
+                        stats[f'{col}_mean'] = float(series.mean())
+                        stats[f'{col}_std'] = float(series.std())
+            
+            # グレード分布
+            if 'グレード' in period_df.columns:
+                grade_dist = period_df['グレード'].value_counts(normalize=True) * 100
+                stats['grade_distribution'] = grade_dist.round(2).to_dict()
+            
+            return stats
+        
+        if len(train_df) > 0:
+            results['time_series_split']['train_period'] = {
+                'year_range': f"~2023年",
+                **calc_period_stats(train_df, '訓練期間')
+            }
+        
+        if len(test_df) > 0:
+            results['time_series_split']['test_period'] = {
+                'year_range': "2024年",
+                **calc_period_stats(test_df, 'テスト期間')
+            }
+        
+        # 特性の一貫性チェック
+        if len(train_df) > 0 and len(test_df) > 0:
+            consistency_check = {}
+            for col in ['着順', '確定複勝オッズ下', '距離']:
+                if col in df.columns:
+                    train_mean = pd.to_numeric(train_df[col], errors='coerce').mean()
+                    test_mean = pd.to_numeric(test_df[col], errors='coerce').mean()
+                    if pd.notna(train_mean) and pd.notna(test_mean) and train_mean != 0:
+                        diff_pct = abs(test_mean - train_mean) / train_mean * 100
+                        consistency_check[col] = {
+                            'train_mean': float(train_mean),
+                            'test_mean': float(test_mean),
+                            'diff_pct': float(diff_pct),
+                            'consistent': diff_pct < 20  # 20%以内なら一貫性あり
+                        }
+            results['time_series_split']['consistency_check'] = consistency_check
+    
+    # ========================================
+    # 5. レポート生成
+    # ========================================
+    logger.info("📋 5. EDAレポートを生成中...")
+    
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    report_path = output_path / 'eda_report.md'
+    
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write("# EDA（探索的データ分析）レポート\n\n")
+        f.write(f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        
+        # データ概要
+        f.write("## 1. データ概要\n\n")
+        overview = results['data_overview']
+        f.write(f"- **総レコード数**: {overview['total_records']:,}件\n")
+        f.write(f"- **総列数**: {overview['total_columns']}列\n")
+        f.write(f"- **メモリ使用量**: {overview['memory_usage_mb']:.1f}MB\n")
+        f.write(f"- **重複行数**: {overview['duplicate_rows']:,}件\n")
+        if 'year_range' in overview:
+            yr = overview['year_range']
+            f.write(f"- **データ期間**: {yr['min']}年 - {yr['max']}年\n")
+        f.write("\n")
+        
+        # 基本統計量
+        f.write("## 2. 基本統計量（主要数値列）\n\n")
+        f.write("| 列名 | 有効件数 | 平均 | 標準偏差 | 最小 | 25% | 50% | 75% | 最大 |\n")
+        f.write("|------|----------|------|----------|------|-----|-----|-----|------|\n")
+        
+        for col, stats in results['basic_statistics'].items():
+            f.write(f"| {col} | {stats['count']:,} | {stats['mean']:.2f} | {stats['std']:.2f} | "
+                   f"{stats['min']:.2f} | {stats['25%']:.2f} | {stats['50%']:.2f} | "
+                   f"{stats['75%']:.2f} | {stats['max']:.2f} |\n")
+        f.write("\n")
+        
+        # 欠損率
+        f.write("## 3. 欠損率分析\n\n")
+        mv = results['missing_values']
+        f.write(f"- **総欠損セル数**: {mv['total_missing_cells']:,}セル\n")
+        f.write(f"- **全体欠損率**: {mv['overall_missing_pct']:.2f}%\n\n")
+        
+        f.write("### 3.1 列別欠損率（欠損がある列のみ）\n\n")
+        f.write("| 列名 | 欠損件数 | 欠損率 |\n")
+        f.write("|------|----------|--------|\n")
+        
+        # 欠損率が高い順にソート
+        sorted_missing = sorted(
+            mv['by_column'].items(),
+            key=lambda x: x[1]['missing_pct'],
+            reverse=True
+        )[:20]  # 上位20列のみ表示
+        
+        for col, stats in sorted_missing:
+            f.write(f"| {col} | {stats['missing_count']:,} | {stats['missing_pct']:.2f}% |\n")
+        f.write("\n")
+        
+        # 年別欠損率
+        if 'by_year' in mv and mv['by_year']:
+            f.write("### 3.2 年別×主要列の欠損率（%）\n\n")
+            by_year = mv['by_year']
+            if by_year:
+                # 最初の列名を取得してヘッダーを作成
+                first_col = list(by_year.keys())[0]
+                years = sorted(by_year[first_col].keys())
+                cols = list(by_year.keys())
+                
+                header = "| 年 | " + " | ".join(cols) + " |\n"
+                separator = "|----" + "|------" * len(cols) + "|\n"
+                f.write(header)
+                f.write(separator)
+                
+                for year in years:
+                    row = f"| {int(year)} |"
+                    for col in cols:
+                        val = by_year[col].get(year, 0)
+                        row += f" {val:.1f}% |"
+                    f.write(row + "\n")
+                f.write("\n")
+        
+        # 時系列分割
+        f.write("## 4. 時系列分割後のデータ特性\n\n")
+        ts = results['time_series_split']
+        
+        if 'train_period' in ts and 'test_period' in ts:
+            f.write("### 4.1 期間別データ概要\n\n")
+            f.write("| 期間 | レコード数 | ユニーク馬数 |\n")
+            f.write("|------|------------|-------------|\n")
+            
+            train = ts['train_period']
+            test = ts['test_period']
+            
+            f.write(f"| 訓練期間（{train['year_range']}） | {train['record_count']:,} | "
+                   f"{train.get('unique_horses', 'N/A'):,} |\n")
+            f.write(f"| テスト期間（{test['year_range']}） | {test['record_count']:,} | "
+                   f"{test.get('unique_horses', 'N/A'):,} |\n")
+            f.write("\n")
+            
+            # 一貫性チェック
+            if 'consistency_check' in ts:
+                f.write("### 4.2 データ特性の一貫性チェック\n\n")
+                f.write("| 指標 | 訓練期間平均 | テスト期間平均 | 差異(%) | 一貫性 |\n")
+                f.write("|------|-------------|---------------|---------|--------|\n")
+                
+                for col, check in ts['consistency_check'].items():
+                    status = "✅ 一貫" if check['consistent'] else "⚠️ 差異あり"
+                    f.write(f"| {col} | {check['train_mean']:.2f} | {check['test_mean']:.2f} | "
+                           f"{check['diff_pct']:.1f}% | {status} |\n")
+                f.write("\n")
+                
+                f.write("**判定基準**: 平均値の差異が20%以内であれば「一貫性あり」と判定\n\n")
+        
+        # 結論
+        f.write("## 5. EDA結論\n\n")
+        f.write("### データ品質の評価\n\n")
+        
+        # 欠損率の評価
+        overall_missing = mv['overall_missing_pct']
+        if overall_missing < 5:
+            f.write("- ✅ **欠損率**: 良好（全体欠損率 < 5%）\n")
+        elif overall_missing < 15:
+            f.write("- ⚠️ **欠損率**: 許容範囲（全体欠損率 5-15%）\n")
+        else:
+            f.write("- ❌ **欠損率**: 要確認（全体欠損率 > 15%）\n")
+        
+        # 時系列一貫性の評価
+        if 'consistency_check' in ts:
+            all_consistent = all(c['consistent'] for c in ts['consistency_check'].values())
+            if all_consistent:
+                f.write("- ✅ **時系列一貫性**: 良好（訓練/テスト期間で特性が一致）\n")
+            else:
+                f.write("- ⚠️ **時系列一貫性**: 一部差異あり（データドリフトの可能性）\n")
+        
+        f.write("\n### 分析に使用可能な主要列\n\n")
+        for col in results['basic_statistics'].keys():
+            stats = results['basic_statistics'][col]
+            missing_info = mv['by_column'].get(col, {'missing_pct': 0})
+            f.write(f"- **{col}**: 有効{stats['count']:,}件, 欠損{missing_info.get('missing_pct', 0):.1f}%\n")
+    
+    logger.info(f"✅ EDAレポートを保存: {report_path}")
+    
+    # ログ出力
+    logger.info("=" * 60)
+    logger.info("📊 EDA（探索的データ分析）結果サマリー")
+    logger.info("=" * 60)
+    logger.info(f"総レコード数: {results['data_overview']['total_records']:,}件")
+    logger.info(f"総列数: {results['data_overview']['total_columns']}列")
+    logger.info(f"全体欠損率: {results['missing_values']['overall_missing_pct']:.2f}%")
+    if 'train_period' in results['time_series_split']:
+        logger.info(f"訓練期間レコード数: {results['time_series_split']['train_period']['record_count']:,}件")
+    if 'test_period' in results['time_series_split']:
+        logger.info(f"テスト期間レコード数: {results['time_series_split']['test_period']['record_count']:,}件")
+    logger.info("=" * 60)
+    
+    return results
+
+
 def analyze_by_periods_optimized(analyzer, periods, base_output_dir):
     """期間別分析を実行します（最適化版・リファクタリング済み）。
     
@@ -2104,6 +2444,9 @@ def _create_argument_parser() -> argparse.ArgumentParser:
   # グレード補完の妥当性検証
   python analyze_REQI.py --validate-grade export/dataset
 
+  # EDA（探索的データ分析）の実行
+  python analyze_REQI.py --eda export/dataset --output-dir results/eda
+
 このスクリプトの主要機能:
   1. 競走経験質指数（REQI）とオッズ情報の包括的比較分析
   2. H2仮説「REQIがオッズベースラインを上回る」の検証
@@ -2111,6 +2454,7 @@ def _create_argument_parser() -> argparse.ArgumentParser:
   4. 層別分析（年齢層・経験数・距離カテゴリ別）
   5. 期間別分析（3年間隔での時系列分析）
   6. グレード補完の妥当性検証（一致率計算）
+  7. EDA（探索的データ分析）- 基本統計量、欠損率、時系列分割後の特性確認
         """
     )
     parser.add_argument('input_path', nargs='?', help='入力ファイルまたはディレクトリのパス (例: export/with_bias)')
@@ -2135,6 +2479,8 @@ def _create_argument_parser() -> argparse.ArgumentParser:
                         help='層別分析のみを実行（export/datasetから直接読み込み）')
     parser.add_argument('--validate-grade', action='store_true',
                         help='グレード補完の妥当性検証を実行（一致率を計算）')
+    parser.add_argument('--eda', action='store_true',
+                        help='EDA（探索的データ分析）を実行（基本統計量、欠損率、時系列分割後の特性確認）')
     parser.add_argument('--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                         default='INFO', help='ログレベルの設定')
     parser.add_argument('--log-file', help='ログファイルのパス（指定しない場合は自動生成）')
@@ -2379,6 +2725,27 @@ def main():
                 return 0
             except Exception as e:
                 logger.error(f"❌ グレード補完検証でエラー: {str(e)}")
+                logger.error("詳細なエラー情報:", exc_info=True)
+                return 1
+
+        # EDA（探索的データ分析）
+        if args.eda:
+            logger.info("📊 EDA（探索的データ分析）を実行します...")
+            try:
+                eda_results = perform_eda_analysis(
+                    data_dir=args.input_path or dataset_dir,
+                    output_dir=str(output_dir),
+                    encoding=args.encoding
+                )
+                if 'error' not in eda_results:
+                    logger.info("✅ EDA分析完了")
+                    logger.info(f"📊 分析対象: {eda_results['data_overview']['total_records']:,}レコード")
+                    logger.info(f"📋 レポート保存先: {output_dir / 'eda_report.md'}")
+                else:
+                    logger.warning(f"⚠️ EDA分析に問題がありました: {eda_results['error']}")
+                return 0
+            except Exception as e:
+                logger.error(f"❌ EDA分析でエラー: {str(e)}")
                 logger.error("詳細なエラー情報:", exc_info=True)
                 return 1
 
