@@ -71,12 +71,12 @@ class REQIAnalyzer(BaseAnalyzer):
         self._weights_calculated = False  # 重み計算済みフラグ
 
     def _get_period_output_dir(self) -> Path:
-        """期間別の可視化出力先ディレクトリを取得（output_dir/temp/<期間名>）
+        """期間別の可視化出力先ディレクトリを取得（output_dir/period/visualizations/<期間名>）
 
         - 期間名は`_override_period_info`があればそれを使用
         - なければデータの年カラムから`<min>-<max>`で推定
         """
-        base_temp_dir = Path(self.config.output_dir) / 'temp'
+        base_visualizations_dir = Path(self.config.output_dir) / 'period' / 'visualizations'
         # 期間名の決定
         period_name = None
         if hasattr(self, '_override_period_info') and getattr(self, '_override_period_info'):
@@ -95,7 +95,7 @@ class REQIAnalyzer(BaseAnalyzer):
         if not period_name:
             period_name = 'unknown-period'
 
-        period_dir = base_temp_dir / period_name
+        period_dir = base_visualizations_dir / period_name
         period_dir.mkdir(parents=True, exist_ok=True)
         return period_dir
 
@@ -2005,6 +2005,11 @@ class REQIAnalyzer(BaseAnalyzer):
     
     def _create_feature_scatter_plots(self) -> None:
         """特徴量と複勝率の散布図（回帰分析付き）を作成"""
+        # 期間別分析の可視化は不要のためスキップ
+        if hasattr(self, '_override_period_info') and getattr(self, '_override_period_info'):
+            logger.info("📊 期間別分析の可視化はスキップします（不要な出力を抑制）")
+            return
+        
         try:
             logger.info("📊 特徴量と複勝率の散布図作成を開始...")
             
@@ -2151,7 +2156,7 @@ class REQIAnalyzer(BaseAnalyzer):
             plt.subplots_adjust(right=0.75)
             
             # 保存（日本語フォント設定を確実に適用）
-            # 可視化は output_dir/temp/<期間名>/ に保存
+            # 可視化は output_dir/period/visualizations/<期間名>/ に保存
             period_dir = self._get_period_output_dir()
             output_path = period_dir / f"{config['filename']}.png"
             

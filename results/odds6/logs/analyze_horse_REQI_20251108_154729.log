@@ -1,0 +1,810 @@
+2025-11-08 15:47:29,969 - __main__ - INFO - 📊 層別分析: 有効（年齢層別・経験数別・距離カテゴリ別）
+2025-11-08 15:47:29,969 - __main__ - INFO - 🏇 競走経験質指数（REQI）分析を開始します...
+2025-11-08 15:47:29,969 - __main__ - INFO - 📅 実行日時: 2025-11-08 15:47:29.969456
+2025-11-08 15:47:29,969 - __main__ - INFO - 🖥️ ログレベル: INFO
+2025-11-08 15:47:29,969 - __main__ - INFO - 📝 ログファイル: results\odds6\logs\analyze_horse_REQI_20251108_154729.log
+2025-11-08 15:47:29,969 - __main__ - INFO - 🖥️ システムリソース状況:
+2025-11-08 15:47:29,971 - __main__ - INFO -    プロセスメモリ: 168.0MB
+2025-11-08 15:47:29,971 - __main__ - INFO -    プロセスCPU: 0.0%
+2025-11-08 15:47:29,971 - __main__ - INFO -    システムメモリ使用率: 41.5% (26.5GB/63.7GB)
+2025-11-08 15:47:29,971 - __main__ - INFO -    システムCPU使用率: 11.4%
+2025-11-08 15:47:29,971 - __main__ - INFO - 📊 統一分析器: OddsComparisonUnifiedAnalyzer
+2025-11-08 15:47:29,971 - horse_racing.base.unified_analyzer - INFO - 📖 統一データ読み込み開始...
+2025-11-08 15:47:29,986 - horse_racing.base.unified_analyzer - INFO - 🔍 analyze_REQIモジュールのキャッシュは未設定です
+2025-11-08 15:47:38,420 - horse_racing.base.unified_analyzer - INFO - ✅ データ読み込み完了: 352,737行
+2025-11-08 15:47:39,368 - horse_racing.base.unified_analyzer - INFO - 🔧 統一前処理開始...
+2025-11-08 15:47:39,530 - horse_racing.base.unified_analyzer - INFO - ✅ 前処理完了: 352,737行
+2025-11-08 15:47:42,275 - __main__ - INFO - 📊 [入力データ] データフレーム情報:
+2025-11-08 15:47:42,275 - __main__ - INFO -    📏 形状: 352,737行 × 93列
+2025-11-08 15:47:42,275 - __main__ - INFO -    💾 メモリ使用量: 1241.6MB
+2025-11-08 15:47:42,275 - __main__ - INFO -    📈 データ型分布: {dtype('O'): np.int64(76), dtype('float64'): np.int64(16), dtype('int64'): np.int64(1)}
+2025-11-08 15:47:42,941 - __main__ - INFO -    ⚠️ 欠損値: 3,366,570個 (10.3%)
+2025-11-08 15:47:42,955 - __main__ - INFO -    🔍 欠損トップ15(列):
+         count      %
+不利      352737  100.0
+単勝      352737  100.0
+備考      352737  100.0
+後不利     352737  100.0
+前不利     352737  100.0
+中不利     352737  100.0
+予備      352737  100.0
+レース     316314   89.7
+位置取     286198   81.1
+出遅      214205   60.7
+複勝       60056   17.0
+レース名_y    3778    1.1
+レース名_x    2857    0.8
+グレード_x    2857    0.8
+レース名略称    2857    0.8
+2025-11-08 15:47:43,001 - __main__ - INFO -    🔍 年別×主要列 欠損率(%):
+      10時単勝オッズ  10時複勝オッズ  確定複勝オッズ下  騎手コード
+年                                        
+2010       0.0       0.0       0.0    0.0
+2011       0.0       0.0       0.0    0.0
+2012       0.0       0.0       0.0    0.0
+2013       0.0       0.0       0.0    0.0
+2014       0.0       0.0       0.0    0.0
+2015       0.0       0.0       0.0    0.0
+2016       0.0       0.0       0.0    0.0
+2017       0.0       0.0       0.0    0.0
+2018       0.0       0.0       0.0    0.0
+2019       0.0       0.0       0.0    0.0
+2020       0.0       0.0       0.0    0.0
+2021       0.0       0.0       0.0    0.0
+2022       0.0       0.0       0.0    0.0
+2023       0.0       0.0       0.0    0.0
+2024       0.0       0.0       0.0    0.0
+2025       0.0       0.0       0.0    0.0
+2025-11-08 15:47:43,002 - __main__ - INFO - 📊 読み込んだデータ件数: 352,737件
+2025-11-08 15:47:43,002 - __main__ - INFO - 🎯 グローバル重み初期化開始...
+2025-11-08 15:47:43,002 - horse_racing.services.reqi_initializer - INFO - 🎯 REQI分析初期化開始...
+2025-11-08 15:47:43,002 - horse_racing.services.data_loader_service - INFO - 📖 全CSVファイルを初回読み込み中...
+2025-11-08 15:47:43,009 - horse_racing.services.data_loader_service - INFO - 📊 全CSVファイルを統合中... (1659ファイル)
+2025-11-08 15:47:43,317 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 100/1659ファイル
+2025-11-08 15:47:43,616 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 200/1659ファイル
+2025-11-08 15:47:43,936 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 300/1659ファイル
+2025-11-08 15:47:44,238 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 400/1659ファイル
+2025-11-08 15:47:44,538 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 500/1659ファイル
+2025-11-08 15:47:44,847 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 600/1659ファイル
+2025-11-08 15:47:45,192 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 700/1659ファイル
+2025-11-08 15:47:45,497 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 800/1659ファイル
+2025-11-08 15:47:45,797 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 900/1659ファイル
+2025-11-08 15:47:46,092 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 1000/1659ファイル
+2025-11-08 15:47:46,376 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 1100/1659ファイル
+2025-11-08 15:47:46,670 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 1200/1659ファイル
+2025-11-08 15:47:46,949 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 1300/1659ファイル
+2025-11-08 15:47:47,244 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 1400/1659ファイル
+2025-11-08 15:47:47,533 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 1500/1659ファイル
+2025-11-08 15:47:47,851 - horse_racing.services.data_loader_service - INFO -    読み込み進捗: 1600/1659ファイル
+2025-11-08 15:47:48,037 - horse_racing.services.data_loader_service - INFO - 🔄 データフレーム統合中...
+2025-11-08 15:47:50,484 - horse_racing.services.data_loader_service - INFO - ✅ 統合完了: 352,737行のデータ
+2025-11-08 15:47:50,959 - horse_racing.services.data_loader_service - INFO - 💾 生データをグローバルキャッシュに保存しました
+2025-11-08 15:47:50,959 - horse_racing.services.data_loader_service - INFO - 🔍 キャッシュ確認: raw_data_cached=True
+2025-11-08 15:47:51,986 - horse_racing.services.weight_initialization_service - INFO - 🎯 グローバル重み初期化開始...
+2025-11-08 15:47:52,014 - horse_racing.services.weight_initialization_service - INFO - 📅 全データ期間: 2010-2025年
+2025-11-08 15:47:52,171 - horse_racing.services.weight_initialization_service - INFO - 📊 重み計算用訓練期間データ: 258,308行 (2010-2020年)
+2025-11-08 15:47:52,203 - horse_racing.services.weight_initialization_service - INFO - 📊 全データ期間: 352,737行 (2010-2025年)
+2025-11-08 15:47:52,208 - horse_racing.services.weight_initialization_service - INFO - 🧮 重み計算用特徴量レベル列を計算中（訓練期間）...
+2025-11-08 15:47:52,208 - horse_racing.analyzers.feature_calculator - INFO - 🔄 `calculate_accurate_feature_levels` は新しい `calculate_reqi` を呼び出します。
+2025-11-08 15:47:52,209 - horse_racing.analyzers.feature_calculator - INFO - 🎯 REQI計算処理を開始 (ベクトル化)...
+2025-11-08 15:47:52,307 - horse_racing.analyzers.feature_calculator - INFO - 📊 グレード、場所、距離レベルをベクトル化計算中...
+2025-11-08 15:47:52,363 - horse_racing.analyzers.feature_calculator - WARNING - ⚠️ グローバル重み未初期化。データから個別動的重みを計算します。
+2025-11-08 15:47:52,364 - horse_racing.analyzers.feature_calculator - INFO - 📊 REQI計算式適用: race_level = 0.636*grade + 0.323*venue + 0.041*distance
+2025-11-08 15:47:52,369 - horse_racing.analyzers.feature_calculator - INFO - 🔍 個別動的重み計算を開始...
+2025-11-08 15:47:52,673 - horse_racing.analyzers.feature_calculator - WARNING - ⚠️ フォールバック重みを使用します: {'grade_weight': 0.636, 'venue_weight': 0.323, 'distance_weight': 0.041}
+2025-11-08 15:47:52,675 - horse_racing.analyzers.feature_calculator - INFO - ✅ 個別動的重み計算完了: {'grade_weight': np.float64(0.6953217604856745), 'venue_weight': np.float64(0.2897486177171718), 'distance_weight': np.float64(0.014929621797153689)}
+2025-11-08 15:47:52,675 - horse_racing.analyzers.feature_calculator - INFO - 📊 REQI計算式適用: race_level = 0.695*grade + 0.290*venue + 0.015*distance
+2025-11-08 15:47:52,679 - horse_racing.analyzers.feature_calculator - INFO - ✅ REQI計算処理完了。
+2025-11-08 15:47:52,681 - horse_racing.analyzers.feature_calculator - INFO - ✅ 特徴量計算完了:
+2025-11-08 15:47:52,688 - horse_racing.analyzers.feature_calculator - INFO -   📊 grade_level 分布: mean=1.32, std=1.20, min=1.00, max=9.00
+2025-11-08 15:47:52,695 - horse_racing.analyzers.feature_calculator - INFO -   📊 venue_level 分布: mean=7.65, std=1.88, min=4.00, max=9.00
+2025-11-08 15:47:52,705 - horse_racing.analyzers.feature_calculator - INFO -   📊 distance_level 分布: mean=1.05, std=0.21, min=0.85, max=1.45
+2025-11-08 15:47:52,714 - horse_racing.analyzers.feature_calculator - INFO -   📊 race_level 分布: mean=3.15, std=1.06, min=1.87, max=8.89
+2025-11-08 15:47:52,855 - horse_racing.services.weight_initialization_service - INFO - 🧮 全データで特徴量レベル列を計算中（期間別分析用）...
+2025-11-08 15:47:52,855 - horse_racing.analyzers.feature_calculator - INFO - 🔄 `calculate_accurate_feature_levels` は新しい `calculate_reqi` を呼び出します。
+2025-11-08 15:47:52,855 - horse_racing.analyzers.feature_calculator - INFO - 🎯 REQI計算処理を開始 (ベクトル化)...
+2025-11-08 15:47:52,990 - horse_racing.analyzers.feature_calculator - INFO - 📊 グレード、場所、距離レベルをベクトル化計算中...
+2025-11-08 15:47:53,058 - horse_racing.analyzers.feature_calculator - WARNING - ⚠️ グローバル重み未初期化。データから個別動的重みを計算します。
+2025-11-08 15:47:53,058 - horse_racing.analyzers.feature_calculator - INFO - 📊 REQI計算式適用: race_level = 0.636*grade + 0.323*venue + 0.041*distance
+2025-11-08 15:47:53,058 - horse_racing.analyzers.feature_calculator - INFO - 🔍 個別動的重み計算を開始...
+2025-11-08 15:47:53,491 - horse_racing.analyzers.feature_calculator - WARNING - ⚠️ フォールバック重みを使用します: {'grade_weight': 0.636, 'venue_weight': 0.323, 'distance_weight': 0.041}
+2025-11-08 15:47:53,491 - horse_racing.analyzers.feature_calculator - INFO - ✅ 個別動的重み計算完了: {'grade_weight': np.float64(0.7127524752809119), 'venue_weight': np.float64(0.2748225472604932), 'distance_weight': np.float64(0.01242497745859489)}
+2025-11-08 15:47:53,491 - horse_racing.analyzers.feature_calculator - INFO - 📊 REQI計算式適用: race_level = 0.713*grade + 0.275*venue + 0.012*distance
+2025-11-08 15:47:53,491 - horse_racing.analyzers.feature_calculator - INFO - ✅ REQI計算処理完了。
+2025-11-08 15:47:53,491 - horse_racing.analyzers.feature_calculator - INFO - ✅ 特徴量計算完了:
+2025-11-08 15:47:53,514 - horse_racing.analyzers.feature_calculator - INFO -   📊 grade_level 分布: mean=1.33, std=1.21, min=1.00, max=9.00
+2025-11-08 15:47:53,527 - horse_racing.analyzers.feature_calculator - INFO -   📊 venue_level 分布: mean=7.61, std=1.88, min=4.00, max=9.00
+2025-11-08 15:47:53,541 - horse_racing.analyzers.feature_calculator - INFO -   📊 distance_level 分布: mean=1.05, std=0.21, min=0.85, max=1.45
+2025-11-08 15:47:53,549 - horse_racing.analyzers.feature_calculator - INFO -   📊 race_level 分布: mean=3.05, std=1.07, min=1.82, max=8.91
+2025-11-08 15:47:53,549 - horse_racing.services.weight_initialization_service - INFO - 🚀 競走経験質指数（REQI）特徴量を事前計算中...
+2025-11-08 15:47:53,549 - horse_racing.analyzers.feature_calculator - INFO - 🔄 `calculate_race_level_with_position_weights` は新しい `calculate_reqi` を呼び出します。
+2025-11-08 15:47:53,549 - horse_racing.analyzers.feature_calculator - INFO - 🎯 REQI計算処理を開始 (ベクトル化)...
+2025-11-08 15:47:53,704 - horse_racing.analyzers.feature_calculator - INFO - 📊 グレード、場所、距離レベルをベクトル化計算中...
+2025-11-08 15:47:53,785 - horse_racing.analyzers.feature_calculator - WARNING - ⚠️ グローバル重み未初期化。データから個別動的重みを計算します。
+2025-11-08 15:47:53,785 - horse_racing.analyzers.feature_calculator - INFO - 📊 REQI計算式適用: race_level = 0.636*grade + 0.323*venue + 0.041*distance
+2025-11-08 15:47:53,792 - horse_racing.analyzers.feature_calculator - INFO - 🔍 個別動的重み計算を開始...
+2025-11-08 15:47:54,197 - horse_racing.analyzers.feature_calculator - WARNING - ⚠️ フォールバック重みを使用します: {'grade_weight': 0.636, 'venue_weight': 0.323, 'distance_weight': 0.041}
+2025-11-08 15:47:54,213 - horse_racing.analyzers.feature_calculator - INFO - ✅ 個別動的重み計算完了: {'grade_weight': np.float64(0.7127524752809119), 'venue_weight': np.float64(0.2748225472604932), 'distance_weight': np.float64(0.01242497745859489)}
+2025-11-08 15:47:54,213 - horse_racing.analyzers.feature_calculator - INFO - 📊 REQI計算式適用: race_level = 0.713*grade + 0.275*venue + 0.012*distance
+2025-11-08 15:47:54,213 - horse_racing.analyzers.feature_calculator - INFO - ✅ REQI計算処理完了。
+2025-11-08 15:47:54,213 - horse_racing.analyzers.feature_calculator - INFO - ✅ 特徴量計算完了:
+2025-11-08 15:47:54,228 - horse_racing.analyzers.feature_calculator - INFO -   📊 grade_level 分布: mean=1.33, std=1.21, min=1.00, max=9.00
+2025-11-08 15:47:54,240 - horse_racing.analyzers.feature_calculator - INFO -   📊 venue_level 分布: mean=7.61, std=1.88, min=4.00, max=9.00
+2025-11-08 15:47:54,249 - horse_racing.analyzers.feature_calculator - INFO -   📊 distance_level 分布: mean=1.05, std=0.21, min=0.85, max=1.45
+2025-11-08 15:47:54,261 - horse_racing.analyzers.feature_calculator - INFO -   📊 race_level 分布: mean=3.05, std=1.07, min=1.82, max=8.91
+2025-11-08 15:47:54,430 - horse_racing.services.weight_initialization_service - INFO - 💾 計算済みデータをグローバルキャッシュに保存しました
+2025-11-08 15:47:54,430 - horse_racing.services.weight_initialization_service - INFO - 📊 グローバルデータ: 352,737行（全期間）
+2025-11-08 15:47:54,430 - horse_racing.services.weight_initialization_service - INFO - 📊 重み計算用データ: 258,308行（訓練期間2010-2020年）
+2025-11-08 15:47:54,430 - horse_racing.services.weight_initialization_service - INFO - 📊 期間別分析用データ: 352,737行（全期間）
+2025-11-08 15:47:54,430 - horse_racing.services.weight_initialization_service - INFO - 🚀 競走経験質指数（REQI）特徴量も事前計算済み（期間別分析高速化）
+2025-11-08 15:47:54,650 - horse_racing.core.weight_manager - INFO - 🎯 循環論理回避版の動的重み計算を開始...
+2025-11-08 15:47:54,650 - horse_racing.core.weight_manager - INFO - 📋 改善版計算式: w_i = r²(feature_i, win_rate) / Σr²(feature_j, win_rate)
+2025-11-08 15:47:54,650 - horse_racing.core.weight_manager - INFO - 📋 訓練期間: 2010-2020年（循環論理回避版）
+2025-11-08 15:47:54,650 - horse_racing.core.weight_manager - INFO - 🔧 改善点: 重み算出に勝率を使用し、予測目的（複勝率）と分離
+2025-11-08 15:47:54,933 - horse_racing.core.weight_manager - INFO - 📊 訓練期間フィルタリング後: 258,308行
+2025-11-08 15:47:54,933 - horse_racing.core.weight_manager - INFO - ✅ 訓練データに全ての特徴量カラムが存在
+2025-11-08 15:47:54,933 - horse_racing.core.weight_manager - INFO - 📊 最終計算データの特徴量カラム: ['grade_level', 'venue_level', 'distance_level', 'race_level']
+2025-11-08 15:47:54,933 - horse_racing.core.weight_manager - INFO - 📊 訓練期間データでの動的重み計算:
+2025-11-08 15:47:54,933 - horse_racing.core.weight_manager - INFO -    対象データ: 258,308行
+2025-11-08 15:47:54,952 - horse_racing.core.weight_manager - INFO -    対象期間: 2010-2020年
+2025-11-08 15:47:55,359 - horse_racing.core.weight_manager - INFO - 📊 芝レースフィルタ: 258,308 → 258,308行
+2025-11-08 15:47:55,359 - horse_racing.core.weight_manager - INFO - 📋 訓練データ前処理を期間別と同一化しました
+2025-11-08 15:47:55,414 - horse_racing.core.weight_manager - INFO - 🔍 verify_weight_calculation.py準拠の相関計算を開始...
+2025-11-08 15:47:55,414 - horse_racing.core.weight_manager - INFO - 📊 Phase 1: 馬統計データを作成中...
+2025-11-08 15:47:55,523 - horse_racing.core.weight_manager - INFO - 📊 着順列から複勝フラグを作成（着順<=3）
+2025-11-08 15:47:55,590 - horse_racing.core.weight_manager - INFO - 📊 最低出走数6戦以上でフィルタ: 13,324頭
+2025-11-08 15:47:55,819 - horse_racing.core.weight_manager - INFO - 📊 馬統計データ作成完了: 13,324頭
+2025-11-08 15:47:55,819 - horse_racing.core.weight_manager - INFO - 📈 Phase 2: 馬統計データで相関を計算中...
+2025-11-08 15:47:55,819 - horse_racing.core.weight_manager - INFO - 📊 相関計算用データ: 13,324頭
+2025-11-08 15:47:55,819 - horse_racing.core.weight_manager - INFO -    📈 grade_level: r = 0.328, r² = 0.108, p = 0.000
+2025-11-08 15:47:55,819 - horse_racing.core.weight_manager - INFO -    📈 venue_level: r = 0.259, r² = 0.067, p = 0.000
+2025-11-08 15:47:55,819 - horse_racing.core.weight_manager - INFO -    📈 distance_level: r = 0.093, r² = 0.009, p = 0.000
+2025-11-08 15:47:55,875 - horse_racing.core.weight_manager - INFO - ✅ 勝率ベース相関計算が成功しました
+2025-11-08 15:47:55,875 - horse_racing.core.weight_manager - INFO - 🎯 レポート5.1.3節準拠の重み計算を実行中...
+2025-11-08 15:47:55,875 - horse_racing.core.weight_manager - INFO - 📋 計算式: w_i = r_i² / (r_grade² + r_venue² + r_distance²)
+2025-11-08 15:47:55,876 - horse_racing.core.weight_manager - INFO - 📊 寄与度計算結果:
+2025-11-08 15:47:55,876 - horse_racing.core.weight_manager - INFO -    グレード寄与度: r² = 0.328² = 0.108
+2025-11-08 15:47:55,876 - horse_racing.core.weight_manager - INFO -    場所寄与度: r² = 0.259² = 0.067
+2025-11-08 15:47:55,876 - horse_racing.core.weight_manager - INFO -    距離寄与度: r² = 0.093² = 0.009
+2025-11-08 15:47:55,877 - horse_racing.core.weight_manager - INFO -    総寄与度: 0.184
+2025-11-08 15:47:55,877 - horse_racing.core.weight_manager - INFO - 🎯 正規化された重み:
+2025-11-08 15:47:55,877 - horse_racing.core.weight_manager - INFO -    グレード重み: 0.587 (58.7%)
+2025-11-08 15:47:55,877 - horse_racing.core.weight_manager - INFO -    場所重み: 0.367 (36.7%)
+2025-11-08 15:47:55,878 - horse_racing.core.weight_manager - INFO -    距離重み: 0.047 (4.7%)
+2025-11-08 15:47:55,898 - horse_racing.core.weight_manager - INFO - 📊 訓練期間（2010-2020年）動的重み算出結果:
+2025-11-08 15:47:55,898 - horse_racing.core.weight_manager - INFO -    グレード: 0.587 (58.7%)
+2025-11-08 15:47:55,899 - horse_racing.core.weight_manager - INFO -    場所: 0.367 (36.7%)
+2025-11-08 15:47:55,899 - horse_racing.core.weight_manager - INFO -    距離: 0.047 (4.7%)
+2025-11-08 15:47:55,899 - horse_racing.core.weight_manager - INFO - ✅ レポート5.1.3節準拠: w_i = r_i² / Σr_i²
+2025-11-08 15:47:55,900 - horse_racing.core.weight_manager - INFO - 📊 ========== 動的重み計算結果（詳細ログ） ==========
+2025-11-08 15:47:55,924 - horse_racing.core.weight_manager - INFO - 📋 計算基準期間: 2010-2020年
+2025-11-08 15:47:55,925 - horse_racing.core.weight_manager - INFO - 📋 対象データ数: 258,308行
+2025-11-08 15:47:55,925 - horse_racing.core.weight_manager - INFO - 📋 計算式: w_i = r_i² / (r_grade² + r_venue² + r_distance²)
+2025-11-08 15:47:55,925 - horse_racing.core.weight_manager - INFO - 🔍 相関分析結果:
+2025-11-08 15:47:55,926 - horse_racing.core.weight_manager - INFO -    📊 gradeレベル: r = 0.3283, r² = 0.1078
+2025-11-08 15:47:55,926 - horse_racing.core.weight_manager - INFO -    📊 venueレベル: r = 0.2595, r² = 0.0673
+2025-11-08 15:47:55,926 - horse_racing.core.weight_manager - INFO -    📊 distanceレベル: r = 0.0928, r² = 0.0086
+2025-11-08 15:47:55,926 - horse_racing.core.weight_manager - INFO -    📊 総寄与度: 0.1837
+2025-11-08 15:47:55,927 - horse_racing.core.weight_manager - INFO - ⚖️ 算出された重み配分:
+2025-11-08 15:47:55,927 - horse_racing.core.weight_manager - INFO -    📊 グレード重み: 0.5866 (58.66%)
+2025-11-08 15:47:55,927 - horse_racing.core.weight_manager - INFO -    📊 場所重み: 0.3665 (36.65%)
+2025-11-08 15:47:55,927 - horse_racing.core.weight_manager - INFO -    📊 距離重み: 0.0469 (4.69%)
+2025-11-08 15:47:55,927 - horse_racing.core.weight_manager - INFO -    📊 重み合計: 1.0000 (1.000に正規化)
+2025-11-08 15:47:55,927 - horse_racing.core.weight_manager - INFO - 📊 REQI計算式:
+2025-11-08 15:47:55,928 - horse_racing.core.weight_manager - INFO -    race_level = 0.5866 × grade_level + 0.3665 × venue_level + 0.0469 × distance_level
+2025-11-08 15:47:55,928 - horse_racing.core.weight_manager - INFO - ✅ 動的重み計算完了 - 全モジュールでこの重みを使用
+2025-11-08 15:47:55,928 - horse_racing.core.weight_manager - INFO - ============================================================
+2025-11-08 15:47:55,978 - horse_racing.services.weight_initialization_service - INFO - ✅ グローバル重み設定完了: {'grade_weight': np.float64(0.586586387171881), 'venue_weight': np.float64(0.3665475443612478), 'distance_weight': np.float64(0.046866068466871136)}
+2025-11-08 15:47:56,204 - horse_racing.services.reqi_initializer - INFO - ✅ REQI分析初期化完了
+2025-11-08 15:47:56,270 - __main__ - INFO - ✅ グローバル重み初期化完了
+2025-11-08 15:47:56,271 - __main__ - INFO - ✅ グローバル重み初期化完了
+2025-11-08 15:47:56,271 - __main__ - INFO - 📁 出力ディレクトリ確認済み: C:\Users\fujit\Desktop\競馬データ分析\results\odds6
+2025-11-08 15:47:56,272 - __main__ - INFO - 📁 入力パス: export/dataset
+2025-11-08 15:47:56,272 - __main__ - INFO - 📊 出力ディレクトリ: results/odds6
+2025-11-08 15:47:56,272 - __main__ - INFO - 🎯 最小レース数: 6
+2025-11-08 15:47:56,272 - __main__ - INFO - 🎯 競走経験質指数（REQI）とオッズの比較分析を実行します...
+2025-11-08 15:47:56,273 - __main__ - INFO - 🚀 [包括的オッズ比較分析] 開始 - 開始時メモリ: 2146.3MB, CPU: 0.0%
+2025-11-08 15:47:56,273 - __main__ - INFO - 🎯 包括的オッズ比較分析を開始...
+2025-11-08 15:47:56,274 - horse_racing.data.data_loader - INFO - 📖 全CSVファイルを初回読み込み中...
+2025-11-08 15:47:56,274 - horse_racing.data.data_loader - INFO - 📊 全CSVファイルを統合中... (1659ファイル)
+2025-11-08 15:47:56,638 - horse_racing.data.data_loader - INFO -    読み込み進捗: 100/1659ファイル
+2025-11-08 15:47:56,990 - horse_racing.data.data_loader - INFO -    読み込み進捗: 200/1659ファイル
+2025-11-08 15:47:57,339 - horse_racing.data.data_loader - INFO -    読み込み進捗: 300/1659ファイル
+2025-11-08 15:47:57,646 - horse_racing.data.data_loader - INFO -    読み込み進捗: 400/1659ファイル
+2025-11-08 15:47:57,976 - horse_racing.data.data_loader - INFO -    読み込み進捗: 500/1659ファイル
+2025-11-08 15:47:58,296 - horse_racing.data.data_loader - INFO -    読み込み進捗: 600/1659ファイル
+2025-11-08 15:47:58,597 - horse_racing.data.data_loader - INFO -    読み込み進捗: 700/1659ファイル
+2025-11-08 15:47:58,920 - horse_racing.data.data_loader - INFO -    読み込み進捗: 800/1659ファイル
+2025-11-08 15:47:59,264 - horse_racing.data.data_loader - INFO -    読み込み進捗: 900/1659ファイル
+2025-11-08 15:47:59,590 - horse_racing.data.data_loader - INFO -    読み込み進捗: 1000/1659ファイル
+2025-11-08 15:47:59,903 - horse_racing.data.data_loader - INFO -    読み込み進捗: 1100/1659ファイル
+2025-11-08 15:48:00,219 - horse_racing.data.data_loader - INFO -    読み込み進捗: 1200/1659ファイル
+2025-11-08 15:48:00,515 - horse_racing.data.data_loader - INFO -    読み込み進捗: 1300/1659ファイル
+2025-11-08 15:48:00,811 - horse_racing.data.data_loader - INFO -    読み込み進捗: 1400/1659ファイル
+2025-11-08 15:48:01,117 - horse_racing.data.data_loader - INFO -    読み込み進捗: 1500/1659ファイル
+2025-11-08 15:48:01,416 - horse_racing.data.data_loader - INFO -    読み込み進捗: 1600/1659ファイル
+2025-11-08 15:48:01,584 - horse_racing.data.data_loader - INFO - 🔄 データフレーム統合中...
+2025-11-08 15:48:04,135 - horse_racing.data.data_loader - INFO - ✅ 統合完了: 352,737行のデータ
+2025-11-08 15:48:04,589 - horse_racing.data.data_loader - INFO - 💾 生データをグローバルキャッシュに保存しました
+2025-11-08 15:48:04,589 - horse_racing.data.data_loader - INFO - 🔍 キャッシュ確認: raw_data_cached=True
+2025-11-08 15:48:05,687 - __main__ - INFO - 統合データ: 352,737 レコード
+2025-11-08 15:48:08,542 - __main__ - INFO - 📊 [統合オッズデータ] データフレーム情報:
+2025-11-08 15:48:08,542 - __main__ - INFO -    📏 形状: 352,737行 × 93列
+2025-11-08 15:48:08,542 - __main__ - INFO -    💾 メモリ使用量: 1251.0MB
+2025-11-08 15:48:08,542 - __main__ - INFO -    📈 データ型分布: {dtype('O'): np.int64(77), dtype('float64'): np.int64(16)}
+2025-11-08 15:48:09,283 - __main__ - INFO -    ⚠️ 欠損値: 3,366,570個 (10.3%)
+2025-11-08 15:48:09,285 - __main__ - INFO -    🔍 欠損トップ15(列):
+         count      %
+不利      352737  100.0
+単勝      352737  100.0
+備考      352737  100.0
+後不利     352737  100.0
+前不利     352737  100.0
+中不利     352737  100.0
+予備      352737  100.0
+レース     316314   89.7
+位置取     286198   81.1
+出遅      214205   60.7
+複勝       60056   17.0
+レース名_y    3778    1.1
+レース名_x    2857    0.8
+グレード_x    2857    0.8
+レース名略称    2857    0.8
+2025-11-08 15:48:09,343 - __main__ - INFO -    🔍 年別×主要列 欠損率(%):
+      10時単勝オッズ  10時複勝オッズ  確定複勝オッズ下  騎手コード
+年                                        
+2010       0.0       0.0       0.0    0.0
+2011       0.0       0.0       0.0    0.0
+2012       0.0       0.0       0.0    0.0
+2013       0.0       0.0       0.0    0.0
+2014       0.0       0.0       0.0    0.0
+2015       0.0       0.0       0.0    0.0
+2016       0.0       0.0       0.0    0.0
+2017       0.0       0.0       0.0    0.0
+2018       0.0       0.0       0.0    0.0
+2019       0.0       0.0       0.0    0.0
+2020       0.0       0.0       0.0    0.0
+2021       0.0       0.0       0.0    0.0
+2022       0.0       0.0       0.0    0.0
+2023       0.0       0.0       0.0    0.0
+2024       0.0       0.0       0.0    0.0
+2025       0.0       0.0       0.0    0.0
+2025-11-08 15:48:09,344 - __main__ - INFO - 📊 レースデータにrace_level（REQI）を計算中...
+2025-11-08 15:48:09,345 - __main__ - INFO - 🚀 [REQI特徴量算出] 開始 - 開始時メモリ: 2929.7MB, CPU: 0.0%
+2025-11-08 15:48:09,345 - horse_racing.analyzers.feature_calculator - INFO - 🔄 `calculate_race_level_with_position_weights` は新しい `calculate_reqi` を呼び出します。
+2025-11-08 15:48:09,345 - horse_racing.analyzers.feature_calculator - INFO - 🎯 REQI計算処理を開始 (ベクトル化)...
+2025-11-08 15:48:09,484 - horse_racing.analyzers.feature_calculator - INFO - 📊 グレード、場所、距離レベルをベクトル化計算中...
+2025-11-08 15:48:09,553 - horse_racing.core.weight_manager - INFO - ✅ グローバル重みを正常に取得しました
+2025-11-08 15:48:09,553 - horse_racing.analyzers.feature_calculator - INFO - ✅ グローバル重みを使用: {'grade_weight': np.float64(0.586586387171881), 'venue_weight': np.float64(0.3665475443612478), 'distance_weight': np.float64(0.046866068466871136)}
+2025-11-08 15:48:09,553 - horse_racing.analyzers.feature_calculator - INFO - 📊 REQI計算式適用: race_level = 0.587*grade + 0.367*venue + 0.047*distance
+2025-11-08 15:48:09,553 - horse_racing.analyzers.feature_calculator - INFO - ✅ REQI計算処理完了。
+2025-11-08 15:48:09,553 - horse_racing.analyzers.feature_calculator - INFO - ✅ 特徴量計算完了:
+2025-11-08 15:48:09,574 - horse_racing.analyzers.feature_calculator - INFO -   📊 grade_level 分布: mean=1.33, std=1.21, min=1.00, max=9.00
+2025-11-08 15:48:09,579 - horse_racing.analyzers.feature_calculator - INFO -   📊 venue_level 分布: mean=7.61, std=1.88, min=4.00, max=9.00
+2025-11-08 15:48:09,592 - horse_racing.analyzers.feature_calculator - INFO -   📊 distance_level 分布: mean=1.05, std=0.21, min=0.85, max=1.45
+2025-11-08 15:48:09,606 - horse_racing.analyzers.feature_calculator - INFO -   📊 race_level 分布: mean=3.62, std=1.06, min=2.09, max=8.65
+2025-11-08 15:48:09,606 - __main__ - WARNING - ⚠️ [REQI特徴量算出] メモリ使用量が200MB増加しました: +261.1MB
+2025-11-08 15:48:09,607 - __main__ - INFO - ✅ [REQI特徴量算出] 完了 - 実行時間: 0.26秒
+2025-11-08 15:48:09,607 - __main__ - INFO -    💾 メモリ使用量: 3190.8MB (差分: +261.1MB)
+2025-11-08 15:48:09,607 - __main__ - INFO -    🖥️  CPU使用率: 99.9%
+2025-11-08 15:48:09,674 - __main__ - INFO - ✅ race_level計算完了: 平均値=3.617
+2025-11-08 15:48:09,675 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🎯 [オッズ分析:REQI（競走経験質指数）計算] 開始 - 開始時メモリ: 2940.5MB
+2025-11-08 15:48:09,675 - horse_racing.analyzers.odds_comparison_analyzer - INFO - REQI（競走経験質指数）の計算を開始します
+2025-11-08 15:48:09,770 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🔍 グローバル重み状態チェック:
+2025-11-08 15:48:09,770 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 is_initialized(): True
+2025-11-08 15:48:09,770 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 _global_weights存在: True
+2025-11-08 15:48:09,770 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 グローバル重み内容: {'grade_weight': np.float64(0.586586387171881), 'venue_weight': np.float64(0.3665475443612478), 'distance_weight': np.float64(0.046866068466871136)}
+2025-11-08 15:48:09,770 - horse_racing.core.weight_manager - INFO - ✅ グローバル重みを正常に取得しました
+2025-11-08 15:48:09,770 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 ========== オッズ分析でグローバル重み使用 ==========
+2025-11-08 15:48:09,770 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ グローバル重みシステムを使用してHorseREQI計算:
+2025-11-08 15:48:09,770 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 グレード重み: 0.5866 (58.66%)
+2025-11-08 15:48:09,770 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 場所重み: 0.3665 (36.65%)
+2025-11-08 15:48:09,770 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 距離重み: 0.0469 (4.69%)
+2025-11-08 15:48:09,770 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 算出基準: 2010-2020 (258,308行)
+2025-11-08 15:48:09,770 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ============================================================
+2025-11-08 15:48:09,785 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🎯 [オッズ分析:過去実績重み付け] 開始 - 開始時メモリ: 2949.6MB
+2025-11-08 15:48:11,025 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🔄 過去実績による重み付け開始...
+2025-11-08 15:48:11,079 - horse_racing.analyzers.odds_comparison_analyzer - WARNING - ⚠️ 大量データ検出 (352,737レース) - 簡易版重み付けを適用
+2025-11-08 15:48:11,080 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🚀 高速版過去実績重み付けを実行中...
+2025-11-08 15:48:12,177 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 高速版過去実績重み付け完了
+2025-11-08 15:48:12,268 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ [オッズ分析:過去実績重み付け] 完了 - 実行時間: 2.48秒
+2025-11-08 15:48:12,268 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    💾 メモリ差分: +274.6MB
+2025-11-08 15:48:12,268 - horse_racing.analyzers.odds_comparison_analyzer - WARNING - ⚠️ [オッズ分析:過去実績重み付け] メモリ使用量が200MB増加しました: 274.6MB
+2025-11-08 15:48:12,268 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🐎 馬ごとのHorseREQI集約開始...
+2025-11-08 15:48:12,268 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 大量データ検出 - 高速集約処理を使用
+2025-11-08 15:48:12,268 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🚀 高速馬統計計算を実行中...
+2025-11-08 15:48:12,318 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📅 日付情報を検出: '年月日'カラムを使用
+2025-11-08 15:48:12,319 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📅 サンプル日付: [20120121, 20120513, 20120617, 20160321, 20160410]
+2025-11-08 15:48:12,451 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📅 年月日を日付型に変換完了
+2025-11-08 15:48:12,611 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📅 日付データ確認:
+2025-11-08 15:48:12,611 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    first_race_date範囲: 2010-01-05 00:00:00 - 2025-01-05 00:00:00
+2025-11-08 15:48:12,611 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    last_race_date範囲: 2010-05-02 00:00:00 - 2025-04-20 00:00:00
+2025-11-08 15:48:12,611 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 高速馬統計計算完了: 18,162頭
+2025-11-08 15:48:12,611 - horse_racing.analyzers.odds_comparison_analyzer - INFO - REQI（競走経験質指数）計算完了: 18,162頭
+2025-11-08 15:48:12,611 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🔄 REQI: 時間的分離による複勝結果統合を適用中...
+2025-11-08 15:48:12,683 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 調整例 1: base=2.488, place_rate=0.000, factor=0.860, adjusted=2.139
+2025-11-08 15:48:12,684 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 調整例 2: base=2.103, place_rate=0.364, factor=1.000, adjusted=2.103
+2025-11-08 15:48:12,684 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 調整例 3: base=2.084, place_rate=0.083, factor=0.898, adjusted=1.872
+2025-11-08 15:48:12,921 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 複勝結果統合完了:
+2025-11-08 15:48:12,921 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 調整前平均: 2.356
+2025-11-08 15:48:12,921 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 調整後平均（REQI）: 2.267
+2025-11-08 15:48:12,921 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 平均調整係数: 0.952
+2025-11-08 15:48:12,921 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 調整係数範囲: 0.860 - 1.140
+2025-11-08 15:48:12,921 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 強調馬数(1.0倍超): 1,404頭 (7.7%)
+2025-11-08 15:48:12,921 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    📊 減算馬数(1.0倍未満): 11,721頭 (64.5%)
+2025-11-08 15:48:13,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ [オッズ分析:REQI（競走経験質指数）計算] 完了 - 実行時間: 3.35秒
+2025-11-08 15:48:13,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    💾 メモリ差分: -18.9MB
+2025-11-08 15:48:13,022 - __main__ - INFO - HorseREQI計算完了: 18,162頭
+2025-11-08 15:48:13,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🎯 [オッズ分析:相関分析] 開始 - 開始時メモリ: 2921.6MB
+2025-11-08 15:48:13,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 相関分析を開始します
+2025-11-08 15:48:13,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 相関分析完了
+2025-11-08 15:48:13,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO - reqi: r=0.615, R²=0.378, p=0.000e+00
+2025-11-08 15:48:13,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO - max_reqi: r=0.731, R²=0.534, p=0.000e+00
+2025-11-08 15:48:13,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO - odds_based_place_prediction: r=0.821, R²=0.675, p=0.000e+00
+2025-11-08 15:48:13,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO - odds_based_win_prediction: r=0.806, R²=0.650, p=0.000e+00
+2025-11-08 15:48:13,034 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ [オッズ分析:相関分析] 完了 - 実行時間: 0.01秒
+2025-11-08 15:48:13,034 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    💾 メモリ差分: +0.0MB
+2025-11-08 15:48:13,034 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🎯 [オッズ分析:回帰分析] 開始 - 開始時メモリ: 2921.6MB
+2025-11-08 15:48:13,034 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🔬 【修正版】回帰分析を開始します（データリーケージ完全防止）
+2025-11-08 15:48:13,042 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📅 馬統計データ期間: 2010-01-05 - 2025-01-05
+2025-11-08 15:48:13,043 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 2021年基準の時系列分割を使用
+2025-11-08 15:48:13,048 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割結果: 訓練14,596頭, 検証3,566頭
+2025-11-08 15:48:13,052 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割を使用（基準: 2021年）
+2025-11-08 15:48:13,053 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 訓練データ: 14,596頭, 検証データ: 3,566頭
+2025-11-08 15:48:13,065 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🎯 [オッズ分析:Bootstrap信頼区間計算] 開始 - 開始時メモリ: 2925.8MB
+2025-11-08 15:48:13,066 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🔄 Bootstrap法実行中 (n_bootstrap=1000)...
+2025-11-08 15:48:13,185 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ⏳ [オッズ分析:Bootstrap] 進捗: 100/1,000 (10.0%) - 経過時間: 0.1秒, 残り予想: 1.1秒
+2025-11-08 15:48:13,317 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ⏳ [オッズ分析:Bootstrap] 進捗: 200/1,000 (20.0%) - 経過時間: 0.3秒, 残り予想: 1.0秒
+2025-11-08 15:48:13,432 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ⏳ [オッズ分析:Bootstrap] 進捗: 300/1,000 (30.0%) - 経過時間: 0.4秒, 残り予想: 0.9秒
+2025-11-08 15:48:13,558 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ⏳ [オッズ分析:Bootstrap] 進捗: 400/1,000 (40.0%) - 経過時間: 0.5秒, 残り予想: 0.7秒
+2025-11-08 15:48:13,675 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ⏳ [オッズ分析:Bootstrap] 進捗: 500/1,000 (50.0%) - 経過時間: 0.6秒, 残り予想: 0.6秒
+2025-11-08 15:48:13,783 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ⏳ [オッズ分析:Bootstrap] 進捗: 600/1,000 (60.0%) - 経過時間: 0.7秒, 残り予想: 0.5秒
+2025-11-08 15:48:13,899 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ⏳ [オッズ分析:Bootstrap] 進捗: 700/1,000 (70.0%) - 経過時間: 0.8秒, 残り予想: 0.4秒
+2025-11-08 15:48:14,000 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ⏳ [オッズ分析:Bootstrap] 進捗: 800/1,000 (80.0%) - 経過時間: 0.9秒, 残り予想: 0.2秒
+2025-11-08 15:48:14,124 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ⏳ [オッズ分析:Bootstrap] 進捗: 900/1,000 (90.0%) - 経過時間: 1.1秒, 残り予想: 0.1秒
+2025-11-08 15:48:14,234 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ⏳ [オッズ分析:Bootstrap] 進捗: 1,000/1,000 (100.0%) - 経過時間: 1.2秒, 残り予想: 0.0秒
+2025-11-08 15:48:14,234 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ [オッズ分析:Bootstrap信頼区間計算] 完了 - 実行時間: 1.17秒
+2025-11-08 15:48:14,234 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    💾 メモリ差分: +0.0MB
+2025-11-08 15:48:14,234 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 回帰分析完了
+2025-11-08 15:48:14,234 - horse_racing.analyzers.odds_comparison_analyzer - INFO - オッズベースライン R²: 0.6426
+2025-11-08 15:48:14,234 - horse_racing.analyzers.odds_comparison_analyzer - INFO - HorseREQI R²: 0.3267
+2025-11-08 15:48:14,234 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 統合モデル R²: 0.6787
+2025-11-08 15:48:14,234 - horse_racing.analyzers.odds_comparison_analyzer - INFO - H2仮説サポート: True
+2025-11-08 15:48:14,234 - horse_racing.analyzers.statistical_validation - INFO - 🔬 オッズ比較分析の包括的検証を開始...
+2025-11-08 15:48:14,234 - horse_racing.analyzers.statistical_validation - INFO - 📊 avg_race_level の代替として reqi を使用
+2025-11-08 15:48:14,234 - horse_racing.analyzers.statistical_validation - INFO - 📊 max_race_level の代替として max_reqi を使用
+2025-11-08 15:48:14,234 - horse_racing.analyzers.statistical_validation - INFO - 🔍 循環論理の検出を実行中...
+2025-11-08 15:48:14,249 - horse_racing.analyzers.statistical_validation - INFO - ✅ 循環論理検出完了: 正常
+2025-11-08 15:48:14,249 - horse_racing.analyzers.statistical_validation - INFO - 🔍 統計的検定の妥当性を検証中...
+2025-11-08 15:48:14,249 - horse_racing.analyzers.statistical_validation - INFO - ✅ 統計的検定検証完了: 妥当
+2025-11-08 15:48:14,249 - horse_racing.analyzers.statistical_validation - INFO - 🔍 データリーケージの兆候を検出中...
+2025-11-08 15:48:14,249 - horse_racing.analyzers.statistical_validation - INFO - ✅ データリーケージ検出完了: 正常
+2025-11-08 15:48:14,249 - horse_racing.analyzers.statistical_validation - INFO - ✅ オッズ比較分析の包括的検証完了
+2025-11-08 15:48:14,251 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ [オッズ分析:回帰分析] 完了 - 実行時間: 1.22秒
+2025-11-08 15:48:14,251 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    💾 メモリ差分: +4.4MB
+2025-11-08 15:48:14,251 - __main__ - INFO - 📊 REQI vs オッズ効果サイズ比較を実行中...
+2025-11-08 15:48:14,251 - __main__ - INFO - 📊 REQI vs オッズ効果サイズ比較を開始...
+2025-11-08 15:48:14,252 - __main__ - INFO -    分析対象: 18,162頭
+2025-11-08 15:48:14,252 - __main__ - INFO - 🔍 REQI効果サイズ計算中...
+2025-11-08 15:48:14,254 - __main__ - INFO - 🔍 オッズ効果サイズ計算中...
+2025-11-08 15:48:14,255 - __main__ - INFO - 📈 REQI効果サイズ: Cohen's d = 0.963 (非常に大効果)
+2025-11-08 15:48:14,256 - __main__ - INFO -    - 高REQI群: 32.3%, 低REQI群: 16.3%
+2025-11-08 15:48:14,256 - __main__ - INFO - 📈 オッズ効果サイズ: Cohen's d = 1.793 (非常に大効果)
+2025-11-08 15:48:14,256 - __main__ - INFO -    - 人気馬群: 36.6%, 不人気馬群: 12.0%
+2025-11-08 15:48:14,256 - __main__ - INFO - ✅ オッズの方が効果が大きい
+2025-11-08 15:48:14,256 - __main__ - INFO - 📊 可視化（散布図・モデル性能比較）を作成中...
+2025-11-08 15:48:14,256 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🎯 [オッズ分析:可視化作成] 開始 - 開始時メモリ: 2927.7MB
+2025-11-08 15:48:14,256 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🎨 可視化を作成します
+2025-11-08 15:48:14,258 - horse_racing.utils.font_config - INFO - 📝 日本語フォントを設定: Yu Gothic
+2025-11-08 15:48:14,259 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📁 可視化出力ディレクトリ: results\odds6\odds_comparison
+2025-11-08 15:48:14,259 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 可視化対象データ: 18,162頭
+2025-11-08 15:48:14,259 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📈 必要カラム確認: reqi=True, place_rate=True
+2025-11-08 15:48:14,259 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 相関散布図を作成中...
+2025-11-08 15:48:15,926 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 相関散布図を保存: results\odds6\odds_comparison\correlation_scatter_plots.png
+2025-11-08 15:48:15,926 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 モデル性能比較チャートを作成中...
+2025-11-08 15:48:16,163 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ モデル性能比較チャートを保存: results\odds6\odds_comparison\model_performance_comparison.png
+2025-11-08 15:48:16,163 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 🎨 可視化保存完了: results\odds6\odds_comparison
+2025-11-08 15:48:16,163 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📁 作成された可視化ファイル:
+2025-11-08 15:48:16,163 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    - correlation_scatter_plots.png
+2025-11-08 15:48:16,163 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    - model_performance_comparison.png
+2025-11-08 15:48:16,163 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ [オッズ分析:可視化作成] 完了 - 実行時間: 1.91秒
+2025-11-08 15:48:16,163 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    💾 メモリ差分: +14.8MB
+2025-11-08 15:48:16,165 - __main__ - INFO - ✅ 可視化の作成が完了しました
+2025-11-08 15:48:16,165 - horse_racing.core.weight_manager - INFO - ✅ グローバル重みを正常に取得しました
+2025-11-08 15:48:16,165 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 上位20%戦略のシミュレーションを実行中...
+2025-11-08 15:48:16,165 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 3年分投資シミュレーション開始: [2022, 2023, 2024]
+2025-11-08 15:48:16,165 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 odds戦略: 2022年の予測（訓練: ~2021年）
+2025-11-08 15:48:16,165 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2021年, テスト期間2022年
+2025-11-08 15:48:16,834 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 280,221レース
+2025-11-08 15:48:16,834 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,837レース
+2025-11-08 15:48:16,834 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:17,149 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:17,149 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:17,158 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:17,159 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:17,206 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:17,206 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率63.3% (2022年実績)
+2025-11-08 15:48:17,206 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率57.3% (2022年実績)
+2025-11-08 15:48:17,208 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率63.4% (2022年実績)
+2025-11-08 15:48:17,288 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2022年完了: 回収率63.3%
+2025-11-08 15:48:17,289 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 odds戦略: 2023年の予測（訓練: ~2022年）
+2025-11-08 15:48:17,289 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2022年, テスト期間2023年
+2025-11-08 15:48:18,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 302,058レース
+2025-11-08 15:48:18,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 22,393レース
+2025-11-08 15:48:18,022 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:18,311 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:18,311 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:18,319 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:18,320 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:18,369 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:18,369 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率66.5% (2023年実績)
+2025-11-08 15:48:18,369 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率62.3% (2023年実績)
+2025-11-08 15:48:18,369 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率64.1% (2023年実績)
+2025-11-08 15:48:18,442 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2023年完了: 回収率66.5%
+2025-11-08 15:48:18,443 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 odds戦略: 2024年の予測（訓練: ~2023年）
+2025-11-08 15:48:18,443 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2023年, テスト期間2024年
+2025-11-08 15:48:19,250 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 324,451レース
+2025-11-08 15:48:19,250 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,962レース
+2025-11-08 15:48:19,250 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:19,579 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:19,579 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:19,601 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:19,601 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:19,649 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:19,651 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率69.4% (2024年実績)
+2025-11-08 15:48:19,651 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率59.7% (2024年実績)
+2025-11-08 15:48:19,651 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率66.6% (2024年実績)
+2025-11-08 15:48:19,722 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2024年完了: 回収率69.4%
+2025-11-08 15:48:19,723 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 reqi戦略: 2022年の予測（訓練: ~2021年）
+2025-11-08 15:48:19,723 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2021年, テスト期間2022年
+2025-11-08 15:48:20,441 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 280,221レース
+2025-11-08 15:48:20,441 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,837レース
+2025-11-08 15:48:20,441 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:20,736 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:20,736 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:20,741 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:20,741 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:20,802 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:20,802 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率63.3% (2022年実績)
+2025-11-08 15:48:20,802 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率57.3% (2022年実績)
+2025-11-08 15:48:20,803 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率63.4% (2022年実績)
+2025-11-08 15:48:20,878 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2022年完了: 回収率57.3%
+2025-11-08 15:48:20,878 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 reqi戦略: 2023年の予測（訓練: ~2022年）
+2025-11-08 15:48:20,879 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2022年, テスト期間2023年
+2025-11-08 15:48:21,646 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 302,058レース
+2025-11-08 15:48:21,646 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 22,393レース
+2025-11-08 15:48:21,646 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:22,119 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:22,119 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:22,128 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:22,130 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:22,184 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:22,185 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率66.5% (2023年実績)
+2025-11-08 15:48:22,185 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率62.3% (2023年実績)
+2025-11-08 15:48:22,185 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率64.1% (2023年実績)
+2025-11-08 15:48:22,255 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2023年完了: 回収率62.3%
+2025-11-08 15:48:22,256 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 reqi戦略: 2024年の予測（訓練: ~2023年）
+2025-11-08 15:48:22,256 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2023年, テスト期間2024年
+2025-11-08 15:48:22,957 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 324,451レース
+2025-11-08 15:48:22,957 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,962レース
+2025-11-08 15:48:22,957 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:23,230 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:23,230 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:23,246 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:23,247 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:23,290 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:23,291 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率69.4% (2024年実績)
+2025-11-08 15:48:23,291 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率59.7% (2024年実績)
+2025-11-08 15:48:23,291 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率66.6% (2024年実績)
+2025-11-08 15:48:23,357 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2024年完了: 回収率59.7%
+2025-11-08 15:48:23,358 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 integrated戦略: 2022年の予測（訓練: ~2021年）
+2025-11-08 15:48:23,358 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2021年, テスト期間2022年
+2025-11-08 15:48:23,984 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 280,221レース
+2025-11-08 15:48:23,985 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,837レース
+2025-11-08 15:48:23,985 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:24,277 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:24,277 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:24,285 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:24,285 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:24,335 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:24,336 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率63.3% (2022年実績)
+2025-11-08 15:48:24,337 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率57.3% (2022年実績)
+2025-11-08 15:48:24,337 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率63.4% (2022年実績)
+2025-11-08 15:48:24,407 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2022年完了: 回収率63.4%
+2025-11-08 15:48:24,408 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 integrated戦略: 2023年の予測（訓練: ~2022年）
+2025-11-08 15:48:24,408 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2022年, テスト期間2023年
+2025-11-08 15:48:25,142 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 302,058レース
+2025-11-08 15:48:25,144 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 22,393レース
+2025-11-08 15:48:25,144 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:25,438 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:25,438 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:25,447 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:25,447 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:25,501 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:25,501 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率66.5% (2023年実績)
+2025-11-08 15:48:25,502 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率62.3% (2023年実績)
+2025-11-08 15:48:25,502 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率64.1% (2023年実績)
+2025-11-08 15:48:25,581 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2023年完了: 回収率64.1%
+2025-11-08 15:48:25,581 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 integrated戦略: 2024年の予測（訓練: ~2023年）
+2025-11-08 15:48:25,581 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2023年, テスト期間2024年
+2025-11-08 15:48:26,396 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 324,451レース
+2025-11-08 15:48:26,411 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,962レース
+2025-11-08 15:48:26,411 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:26,796 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:26,796 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:26,804 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:26,806 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:26,856 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:26,856 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率69.4% (2024年実績)
+2025-11-08 15:48:26,856 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率59.7% (2024年実績)
+2025-11-08 15:48:26,856 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率66.6% (2024年実績)
+2025-11-08 15:48:26,931 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2024年完了: 回収率66.6%
+2025-11-08 15:48:26,932 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 上位5%戦略のシミュレーションを実行中...
+2025-11-08 15:48:26,932 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 3年分投資シミュレーション開始: [2022, 2023, 2024]
+2025-11-08 15:48:26,932 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 odds戦略: 2022年の予測（訓練: ~2021年）
+2025-11-08 15:48:26,932 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2021年, テスト期間2022年
+2025-11-08 15:48:27,687 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 280,221レース
+2025-11-08 15:48:27,687 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,837レース
+2025-11-08 15:48:27,687 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:27,968 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:27,968 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:27,979 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:27,979 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:28,013 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:28,013 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率65.0% (2022年実績)
+2025-11-08 15:48:28,013 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率60.2% (2022年実績)
+2025-11-08 15:48:28,013 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率67.2% (2022年実績)
+2025-11-08 15:48:28,077 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2022年完了: 回収率65.0%
+2025-11-08 15:48:28,078 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 odds戦略: 2023年の予測（訓練: ~2022年）
+2025-11-08 15:48:28,078 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2022年, テスト期間2023年
+2025-11-08 15:48:28,846 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 302,058レース
+2025-11-08 15:48:28,846 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 22,393レース
+2025-11-08 15:48:28,846 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:29,141 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:29,141 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:29,149 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:29,149 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:29,185 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:29,185 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率63.8% (2023年実績)
+2025-11-08 15:48:29,185 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率54.6% (2023年実績)
+2025-11-08 15:48:29,185 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率66.6% (2023年実績)
+2025-11-08 15:48:29,255 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2023年完了: 回収率63.8%
+2025-11-08 15:48:29,256 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 odds戦略: 2024年の予測（訓練: ~2023年）
+2025-11-08 15:48:29,256 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2023年, テスト期間2024年
+2025-11-08 15:48:30,040 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 324,451レース
+2025-11-08 15:48:30,040 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,962レース
+2025-11-08 15:48:30,040 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:30,392 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:30,392 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:30,402 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:30,403 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:30,432 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:30,433 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率67.3% (2024年実績)
+2025-11-08 15:48:30,433 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率62.1% (2024年実績)
+2025-11-08 15:48:30,433 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率68.0% (2024年実績)
+2025-11-08 15:48:30,524 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2024年完了: 回収率67.3%
+2025-11-08 15:48:30,525 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 reqi戦略: 2022年の予測（訓練: ~2021年）
+2025-11-08 15:48:30,525 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2021年, テスト期間2022年
+2025-11-08 15:48:31,245 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 280,221レース
+2025-11-08 15:48:31,245 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,837レース
+2025-11-08 15:48:31,245 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:31,519 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:31,519 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:31,531 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:31,531 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:31,556 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:31,556 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率65.0% (2022年実績)
+2025-11-08 15:48:31,556 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率60.2% (2022年実績)
+2025-11-08 15:48:31,556 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率67.2% (2022年実績)
+2025-11-08 15:48:31,615 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2022年完了: 回収率60.2%
+2025-11-08 15:48:31,616 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 reqi戦略: 2023年の予測（訓練: ~2022年）
+2025-11-08 15:48:31,616 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2022年, テスト期間2023年
+2025-11-08 15:48:32,290 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 302,058レース
+2025-11-08 15:48:32,290 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 22,393レース
+2025-11-08 15:48:32,290 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:32,556 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:32,556 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:32,566 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:32,566 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:32,589 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:32,589 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率63.8% (2023年実績)
+2025-11-08 15:48:32,589 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率54.6% (2023年実績)
+2025-11-08 15:48:32,589 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率66.6% (2023年実績)
+2025-11-08 15:48:32,655 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2023年完了: 回収率54.6%
+2025-11-08 15:48:32,655 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 reqi戦略: 2024年の予測（訓練: ~2023年）
+2025-11-08 15:48:32,655 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2023年, テスト期間2024年
+2025-11-08 15:48:33,390 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 324,451レース
+2025-11-08 15:48:33,390 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,962レース
+2025-11-08 15:48:33,390 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:33,714 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:33,714 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:33,723 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:33,723 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:33,759 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:33,759 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率67.3% (2024年実績)
+2025-11-08 15:48:33,759 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率62.1% (2024年実績)
+2025-11-08 15:48:33,759 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率68.0% (2024年実績)
+2025-11-08 15:48:33,845 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2024年完了: 回収率62.1%
+2025-11-08 15:48:33,845 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 integrated戦略: 2022年の予測（訓練: ~2021年）
+2025-11-08 15:48:33,846 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2021年, テスト期間2022年
+2025-11-08 15:48:34,488 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 280,221レース
+2025-11-08 15:48:34,488 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,837レース
+2025-11-08 15:48:34,488 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:34,738 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:34,738 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:34,749 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 14,490頭
+2025-11-08 15:48:34,749 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:34,773 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:34,773 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率65.0% (2022年実績)
+2025-11-08 15:48:34,773 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率60.2% (2022年実績)
+2025-11-08 15:48:34,773 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率67.2% (2022年実績)
+2025-11-08 15:48:34,836 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2022年完了: 回収率67.2%
+2025-11-08 15:48:34,836 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 integrated戦略: 2023年の予測（訓練: ~2022年）
+2025-11-08 15:48:34,836 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2022年, テスト期間2023年
+2025-11-08 15:48:35,520 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 302,058レース
+2025-11-08 15:48:35,520 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 22,393レース
+2025-11-08 15:48:35,520 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:35,789 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:35,789 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:35,798 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 15,546頭
+2025-11-08 15:48:35,798 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:35,816 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:35,816 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率63.8% (2023年実績)
+2025-11-08 15:48:35,816 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率54.6% (2023年実績)
+2025-11-08 15:48:35,816 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率66.6% (2023年実績)
+2025-11-08 15:48:35,888 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2023年完了: 回収率66.6%
+2025-11-08 15:48:35,889 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 
+📅 integrated戦略: 2024年の予測（訓練: ~2023年）
+2025-11-08 15:48:35,889 - horse_racing.analyzers.odds_comparison_analyzer - INFO - 📊 時系列分割投資シミュレーション: 訓練期間~2023年, テスト期間2024年
+2025-11-08 15:48:36,663 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練データ: 324,451レース
+2025-11-08 15:48:36,664 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テストデータ: 21,962レース
+2025-11-08 15:48:36,664 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計を計算中...
+2025-11-08 15:48:36,965 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:36,965 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    テスト期間の実績を集計中...
+2025-11-08 15:48:36,965 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    訓練期間の馬統計: 16,703頭
+2025-11-08 15:48:36,965 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    レース単位の投資シミュレーションを実行中...
+2025-11-08 15:48:37,003 - horse_racing.analyzers.odds_comparison_analyzer - INFO - ✅ 時系列分割投資シミュレーション完了
+2025-11-08 15:48:37,003 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   オッズのみ: 回収率67.3% (2024年実績)
+2025-11-08 15:48:37,003 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   REQIのみ: 回収率62.1% (2024年実績)
+2025-11-08 15:48:37,003 - horse_racing.analyzers.odds_comparison_analyzer - INFO -   統合戦略: 回収率68.0% (2024年実績)
+2025-11-08 15:48:37,073 - horse_racing.analyzers.odds_comparison_analyzer - INFO -    ✅ 2024年完了: 回収率68.0%
+2025-11-08 15:48:37,074 - horse_racing.analyzers.odds_comparison_analyzer - INFO - レポート生成完了: results\odds6\odds_comparison_report.md
+2025-11-08 15:48:37,151 - __main__ - WARNING - ⚠️ [包括的オッズ比較分析] メモリ使用量が200MB増加しました: +481.9MB
+2025-11-08 15:48:37,151 - __main__ - INFO - ✅ [包括的オッズ比較分析] 完了 - 実行時間: 40.88秒
+2025-11-08 15:48:37,151 - __main__ - INFO -    💾 メモリ使用量: 2628.2MB (差分: +481.9MB)
+2025-11-08 15:48:37,152 - __main__ - INFO -    🖥️  CPU使用率: 98.2%
+2025-11-08 15:48:37,152 - __main__ - INFO - ✅ 包括版オッズ比較分析が完了しました。
+2025-11-08 15:48:37,152 - __main__ - INFO - 📊 分析対象: 352,737レコード, 18,162頭
+2025-11-08 15:48:37,152 - __main__ - INFO - 📁 結果保存先: results\odds6
+2025-11-08 15:48:37,153 - __main__ - INFO - 🎯 H2仮説「REQIがオッズベースラインを上回る」: サポート
+2025-11-08 15:48:37,153 - __main__ - INFO -    性能改善: +0.0361
+2025-11-08 15:48:37,153 - __main__ - INFO - ℹ️ 包括版が完了したため、簡易版の強制生成はスキップします。
+2025-11-08 15:48:37,153 - __main__ - INFO - 📋 統合層別分析レポートを生成中...
+2025-11-08 15:48:37,153 - __main__ - INFO - 🚀 [データセット作成] 開始 - 開始時メモリ: 2628.2MB, CPU: 0.0%
+2025-11-08 15:48:37,153 - __main__ - INFO - 📁 データセット読み込み開始: export/dataset
+2025-11-08 15:48:37,159 - __main__ - INFO - 発見されたファイル数: 1659
+2025-11-08 15:48:37,608 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 100/1,659 (6.0%) - 経過時間: 0.4秒, 残り予想: 7.0秒
+2025-11-08 15:48:38,011 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 200/1,659 (12.1%) - 経過時間: 0.9秒, 残り予想: 6.2秒
+2025-11-08 15:48:38,430 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 300/1,659 (18.1%) - 経過時間: 1.3秒, 残り予想: 5.8秒
+2025-11-08 15:48:38,873 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 400/1,659 (24.1%) - 経過時間: 1.7秒, 残り予想: 5.4秒
+2025-11-08 15:48:39,280 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 500/1,659 (30.1%) - 経過時間: 2.1秒, 残り予想: 4.9秒
+2025-11-08 15:48:39,701 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 600/1,659 (36.2%) - 経過時間: 2.5秒, 残り予想: 4.5秒
+2025-11-08 15:48:40,111 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 700/1,659 (42.2%) - 経過時間: 3.0秒, 残り予想: 4.0秒
+2025-11-08 15:48:40,499 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 800/1,659 (48.2%) - 経過時間: 3.3秒, 残り予想: 3.6秒
+2025-11-08 15:48:40,864 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 900/1,659 (54.2%) - 経過時間: 3.7秒, 残り予想: 3.1秒
+2025-11-08 15:48:41,216 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 1,000/1,659 (60.3%) - 経過時間: 4.1秒, 残り予想: 2.7秒
+2025-11-08 15:48:41,565 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 1,100/1,659 (66.3%) - 経過時間: 4.4秒, 残り予想: 2.2秒
+2025-11-08 15:48:41,900 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 1,200/1,659 (72.3%) - 経過時間: 4.7秒, 残り予想: 1.8秒
+2025-11-08 15:48:42,301 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 1,300/1,659 (78.4%) - 経過時間: 5.1秒, 残り予想: 1.4秒
+2025-11-08 15:48:42,666 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 1,400/1,659 (84.4%) - 経過時間: 5.5秒, 残り予想: 1.0秒
+2025-11-08 15:48:43,059 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 1,500/1,659 (90.4%) - 経過時間: 5.9秒, 残り予想: 0.6秒
+2025-11-08 15:48:43,413 - __main__ - INFO - ⏳ [ファイル読み込み] 進捗: 1,600/1,659 (96.4%) - 経過時間: 6.3秒, 残り予想: 0.2秒
+2025-11-08 15:48:43,623 - __main__ - INFO - 🔗 データフレーム統合中...
+2025-11-08 15:48:47,329 - __main__ - INFO - ✅ 統合完了: 352,737行のデータ (統合時間: 3.70秒)
+2025-11-08 15:48:47,354 - __main__ - INFO -    期間: 2010-2025
+2025-11-08 15:48:47,415 - __main__ - INFO -    馬数: 58,704頭
+2025-11-08 15:48:50,542 - __main__ - INFO - 📊 [統合後データセット] データフレーム情報:
+2025-11-08 15:48:50,542 - __main__ - INFO -    📏 形状: 352,737行 × 93列
+2025-11-08 15:48:50,542 - __main__ - INFO -    💾 メモリ使用量: 1258.7MB
+2025-11-08 15:48:50,542 - __main__ - INFO -    📈 データ型分布: {dtype('O'): np.int64(77), dtype('float64'): np.int64(16)}
+2025-11-08 15:48:51,320 - __main__ - INFO -    ⚠️ 欠損値: 3,366,570個 (10.3%)
+2025-11-08 15:48:51,320 - __main__ - INFO -    🔍 欠損トップ15(列):
+         count      %
+不利      352737  100.0
+単勝      352737  100.0
+備考      352737  100.0
+後不利     352737  100.0
+前不利     352737  100.0
+中不利     352737  100.0
+予備      352737  100.0
+レース     316314   89.7
+位置取     286198   81.1
+出遅      214205   60.7
+複勝       60056   17.0
+レース名_y    3778    1.1
+レース名_x    2857    0.8
+グレード_x    2857    0.8
+レース名略称    2857    0.8
+2025-11-08 15:48:51,382 - __main__ - INFO -    🔍 年別×主要列 欠損率(%):
+      10時単勝オッズ  10時複勝オッズ  確定複勝オッズ下  騎手コード
+年                                        
+2010       0.0       0.0       0.0    0.0
+2011       0.0       0.0       0.0    0.0
+2012       0.0       0.0       0.0    0.0
+2013       0.0       0.0       0.0    0.0
+2014       0.0       0.0       0.0    0.0
+2015       0.0       0.0       0.0    0.0
+2016       0.0       0.0       0.0    0.0
+2017       0.0       0.0       0.0    0.0
+2018       0.0       0.0       0.0    0.0
+2019       0.0       0.0       0.0    0.0
+2020       0.0       0.0       0.0    0.0
+2021       0.0       0.0       0.0    0.0
+2022       0.0       0.0       0.0    0.0
+2023       0.0       0.0       0.0    0.0
+2024       0.0       0.0       0.0    0.0
+2025       0.0       0.0       0.0    0.0
+2025-11-08 15:48:51,382 - __main__ - INFO - 🚀 [REQI特徴量算出] 開始 - 開始時メモリ: 3459.9MB, CPU: 0.0%
+2025-11-08 15:48:51,383 - horse_racing.analyzers.feature_calculator - INFO - 🔄 `calculate_race_level_with_position_weights` は新しい `calculate_reqi` を呼び出します。
+2025-11-08 15:48:51,383 - horse_racing.analyzers.feature_calculator - INFO - 🎯 REQI計算処理を開始 (ベクトル化)...
+2025-11-08 15:48:51,518 - horse_racing.analyzers.feature_calculator - INFO - 📊 グレード、場所、距離レベルをベクトル化計算中...
+2025-11-08 15:48:51,590 - horse_racing.core.weight_manager - INFO - ✅ グローバル重みを正常に取得しました
+2025-11-08 15:48:51,590 - horse_racing.analyzers.feature_calculator - INFO - ✅ グローバル重みを使用: {'grade_weight': np.float64(0.586586387171881), 'venue_weight': np.float64(0.3665475443612478), 'distance_weight': np.float64(0.046866068466871136)}
+2025-11-08 15:48:51,591 - horse_racing.analyzers.feature_calculator - INFO - 📊 REQI計算式適用: race_level = 0.587*grade + 0.367*venue + 0.047*distance
+2025-11-08 15:48:51,592 - horse_racing.analyzers.feature_calculator - INFO - ✅ REQI計算処理完了。
+2025-11-08 15:48:51,592 - horse_racing.analyzers.feature_calculator - INFO - ✅ 特徴量計算完了:
+2025-11-08 15:48:51,604 - horse_racing.analyzers.feature_calculator - INFO -   📊 grade_level 分布: mean=1.33, std=1.21, min=1.00, max=9.00
+2025-11-08 15:48:51,614 - horse_racing.analyzers.feature_calculator - INFO -   📊 venue_level 分布: mean=7.61, std=1.88, min=4.00, max=9.00
+2025-11-08 15:48:51,628 - horse_racing.analyzers.feature_calculator - INFO -   📊 distance_level 分布: mean=1.05, std=0.21, min=0.85, max=1.45
+2025-11-08 15:48:51,628 - horse_racing.analyzers.feature_calculator - INFO -   📊 race_level 分布: mean=3.62, std=1.06, min=2.09, max=8.65
+2025-11-08 15:48:51,628 - __main__ - WARNING - ⚠️ [REQI特徴量算出] メモリ使用量が200MB増加しました: +242.1MB
+2025-11-08 15:48:51,628 - __main__ - INFO - ✅ [REQI特徴量算出] 完了 - 実行時間: 0.25秒
+2025-11-08 15:48:51,628 - __main__ - INFO -    💾 メモリ使用量: 3702.0MB (差分: +242.1MB)
+2025-11-08 15:48:51,640 - __main__ - INFO -    🖥️  CPU使用率: 100.0%
+2025-11-08 15:48:51,640 - __main__ - INFO - 🐎 馬ごとの統計計算開始...
+2025-11-08 15:48:51,640 - __main__ - INFO - 📊 大量データ検出 - 高速統計計算を使用
+2025-11-08 15:48:51,640 - __main__ - INFO - 🚀 高速馬統計計算を実行中...
+2025-11-08 15:49:01,560 - __main__ - INFO - ✅ 高速統計計算完了: 18162頭
+2025-11-08 15:49:01,575 - __main__ - INFO - ✅ 競走経験質指数（REQI）分析用データセット準備完了: 18162頭
+2025-11-08 15:49:01,575 - __main__ - INFO -    平均競走経験質指数（REQI）範囲: 2.093 - 8.373
+2025-11-08 15:49:01,807 - __main__ - INFO - ✅ [データセット作成] 完了 - 実行時間: 24.65秒
+2025-11-08 15:49:01,807 - __main__ - INFO -    💾 メモリ使用量: 2702.3MB (差分: +74.1MB)
+2025-11-08 15:49:01,807 - __main__ - INFO -    🖥️  CPU使用率: 98.8%
+2025-11-08 15:49:01,807 - __main__ - INFO - 🚀 [統合層別分析] 開始 - 開始時メモリ: 2702.3MB, CPU: 0.0%
+2025-11-08 15:49:01,807 - horse_racing.analyzers.stratified_analyzer - INFO - 🔬 統合層別分析を開始...
+2025-11-08 15:49:01,807 - horse_racing.analyzers.stratified_analyzer - INFO - 👶 年齢層別分析（REQI効果の年齢差）...
+2025-11-08 15:49:01,823 - horse_racing.analyzers.stratified_analyzer - INFO -   2歳馬: n=1081, r_avg=0.114, r_max=0.143
+2025-11-08 15:49:01,827 - horse_racing.analyzers.stratified_analyzer - INFO -   3歳馬: n=5906, r_avg=0.269, r_max=0.270
+2025-11-08 15:49:01,829 - horse_racing.analyzers.stratified_analyzer - INFO -   4歳以上: n=11175, r_avg=0.393, r_max=0.314
+2025-11-08 15:49:01,829 - horse_racing.analyzers.stratified_analyzer - INFO - 📊 経験数別分析（REQI効果の経験差）...
+2025-11-08 15:49:01,832 - horse_racing.analyzers.stratified_analyzer - INFO -   16戦以上: n=5968, r_avg=0.372, r_max=0.267
+2025-11-08 15:49:01,834 - horse_racing.analyzers.stratified_analyzer - INFO -   6-15戦: n=12194, r_avg=0.342, r_max=0.324
+2025-11-08 15:49:01,836 - horse_racing.analyzers.stratified_analyzer - INFO - 🏃 距離カテゴリ別分析（REQI効果の距離適性差）...
+2025-11-08 15:49:01,839 - horse_racing.analyzers.stratified_analyzer - INFO -   マイル(1401-1800m): n=6569, r_avg=0.403, r_max=0.358
+2025-11-08 15:49:01,842 - horse_racing.analyzers.stratified_analyzer - INFO -   中距離(1801-2000m): n=4046, r_avg=0.376, r_max=0.359
+2025-11-08 15:49:01,844 - horse_racing.analyzers.stratified_analyzer - INFO -   短距離(≤1400m): n=6609, r_avg=0.257, r_max=0.259
+2025-11-08 15:49:01,846 - horse_racing.analyzers.stratified_analyzer - INFO -   長距離(≥2001m): n=938, r_avg=0.358, r_max=0.346
+2025-11-08 15:49:01,847 - horse_racing.analyzers.stratified_analyzer - INFO - 🎯 Bootstrap信頼区間算出...
+2025-11-08 15:49:01,847 - horse_racing.analyzers.stratified_analyzer - INFO - 📈 効果サイズ評価...
+2025-11-08 15:49:01,847 - __main__ - INFO - ✅ [統合層別分析] 完了 - 実行時間: 0.04秒
+2025-11-08 15:49:01,847 - __main__ - INFO -    💾 メモリ使用量: 2705.7MB (差分: +3.4MB)
+2025-11-08 15:49:01,847 - __main__ - INFO -    🖥️  CPU使用率: 33.2%
+2025-11-08 15:49:01,847 - horse_racing.output.report_generator - INFO - 📋 層別分析レポート保存: results\odds6\stratified_analysis_integrated_report.md
+2025-11-08 15:49:01,847 - __main__ - INFO - ✅ 統合層別分析レポート生成完了

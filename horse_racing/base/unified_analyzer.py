@@ -343,7 +343,7 @@ class PeriodAnalysisUnifiedAnalyzer(UnifiedAnalyzerBase):
                 analyze_REQI.GLOBAL_DATA_CACHE.set_feature_levels(df)
             
             # 期間別分析実行
-            all_results = module.analyze_by_periods_optimized(self.race_analyzer, periods, Path("temp"))
+            all_results = module.analyze_by_periods_optimized(self.race_analyzer, periods, Path("results"))
             
             logger.info("✅ 期間別分析完了")
             return all_results

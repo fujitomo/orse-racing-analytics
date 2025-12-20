@@ -148,9 +148,9 @@ class PeriodAnalysisService:
         self.logger.info(f"📊 期間 {period_name} の分析開始...")
         
         try:
-            # 期間別出力ディレクトリの作成
-            period_output_dir = base_output_dir / period_name
-            period_output_dir.mkdir(parents=True, exist_ok=True)
+            # 期間別出力ディレクトリの作成（不要な出力を抑制するためコメントアウト）
+            # period_output_dir = base_output_dir / period_name
+            # period_output_dir.mkdir(parents=True, exist_ok=True)
             
             # データフレームフィルタリング
             period_mask = (df_with_features['年'] >= start_year) & (df_with_features['年'] <= end_year)
@@ -181,10 +181,11 @@ class PeriodAnalysisService:
                 self.logger.info(f"✅ 期間 {period_name} で重み設定完了: {weights}")
             
             # 期間別アナライザーを作成
+            # output_dirはbase_output_dirを指定し、_get_period_output_dirが適切なサブディレクトリを生成
             period_config = AnalysisConfig(
                 input_path=analyzer.config.input_path,
                 min_races=analyzer.config.min_races,
-                output_dir=str(period_output_dir),
+                output_dir=str(base_output_dir),
                 date_str=analyzer.config.date_str,
                 start_date=None,
                 end_date=None
@@ -210,10 +211,10 @@ class PeriodAnalysisService:
             self.logger.info(f"  📈 分析実行中...")
             results = period_analyzer.analyze()
             
-            # 結果の可視化
-            self.logger.info(f"  📊 可視化生成中...")
-            period_analyzer.stats = results
-            period_analyzer.visualize()
+            # 結果の可視化（期間別可視化は不要のためスキップ）
+            # self.logger.info(f"  📊 可視化生成中...")
+            # period_analyzer.stats = results
+            # period_analyzer.visualize()
             
             # 期間情報を結果に追加
             results['period_info'] = {
