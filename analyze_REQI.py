@@ -952,6 +952,177 @@ def validate_grade_estimation(data_dir: str, encoding: str = 'utf-8') -> Dict[st
     return results
 
 
+def _create_eda_distribution_charts(df: pd.DataFrame, basic_stats: Dict[str, Any], output_dir: Path) -> Dict[str, str]:
+    """EDA用のデータ分布グラフ（ヒストグラム・箱ひげ図）を生成する
+    
+    Args:
+        df: 分析対象のデータフレーム
+        basic_stats: 基本統計量の辞書
+        output_dir: 出力ディレクトリ
+        
+    Returns:
+        生成したグラフファイルのパス辞書
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.error("❌ matplotlibのインポートに失敗")
+        return {}
+    
+    from horse_racing.utils.font_config import setup_japanese_fonts
+    selected_font = setup_japanese_fonts(suppress_warnings=True)
+    
+    if selected_font is None:
+        import platform
+        if platform.system() == 'Windows':
+            selected_font = 'Yu Gothic'
+        else:
+            selected_font = 'DejaVu Sans'
+    
+    charts = {}
+    viz_dir = output_dir / 'eda_visualizations'
+    viz_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 可視化対象の主要列
+    target_cols = [
+        ('確定複勝オッズ下', '確定複勝オッズ', 'オッズ（倍）'),
+        ('距離', 'レース距離', '距離（m）'),
+        ('1着賞金(1着算入賞金込み)', '1着賞金', '賞金（万円）'),
+        ('着順', '着順', '着順')
+    ]
+    
+    available_cols = [(col, name, unit) for col, name, unit in target_cols if col in df.columns]
+    
+    if not available_cols:
+        logger.warning("⚠️ 可視化対象の列が見つかりません")
+        return {}
+    
+    try:
+        # ========================================
+        # 1. ヒストグラム（4列分を1枚に）
+        # ========================================
+        logger.info("📊 ヒストグラムを作成中...")
+        
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        axes = axes.flatten()
+        
+        fig.suptitle('主要数値列のデータ分布（ヒストグラム）', fontsize=16, fontweight='bold', fontfamily=selected_font)
+        
+        for idx, (col, name, unit) in enumerate(available_cols[:4]):
+            ax = axes[idx]
+            series = pd.to_numeric(df[col], errors='coerce').dropna()
+            
+            if len(series) == 0:
+                ax.text(0.5, 0.5, 'データなし', ha='center', va='center', fontsize=12, fontfamily=selected_font)
+                ax.set_title(name, fontsize=12, fontfamily=selected_font)
+                continue
+            
+            # 外れ値を除去（99パーセンタイル以下）
+            upper_limit = series.quantile(0.99)
+            series_clipped = series[series <= upper_limit]
+            
+            ax.hist(series_clipped, bins=50, color='steelblue', edgecolor='white', alpha=0.7)
+            ax.set_title(f'{name}の分布', fontsize=12, fontfamily=selected_font)
+            ax.set_xlabel(unit, fontsize=10, fontfamily=selected_font)
+            ax.set_ylabel('頻度', fontsize=10, fontfamily=selected_font)
+            ax.grid(True, alpha=0.3)
+            
+            # 統計情報をテキストボックスで表示
+            stats_text = f'平均: {series.mean():.1f}\n中央値: {series.median():.1f}\n標準偏差: {series.std():.1f}'
+            ax.text(0.95, 0.95, stats_text, transform=ax.transAxes, fontsize=9,
+                   verticalalignment='top', horizontalalignment='right',
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                   fontfamily=selected_font)
+            
+            for label in ax.get_xticklabels():
+                label.set_fontfamily(selected_font)
+            for label in ax.get_yticklabels():
+                label.set_fontfamily(selected_font)
+        
+        # 未使用のサブプロットを非表示
+        for idx in range(len(available_cols), 4):
+            axes[idx].set_visible(False)
+        
+        plt.tight_layout()
+        hist_path = viz_dir / 'data_distribution_histograms.png'
+        plt.savefig(hist_path, dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
+        plt.close()
+        charts['histograms'] = str(hist_path)
+        logger.info(f"   💾 ヒストグラム保存: {hist_path}")
+        
+        # ========================================
+        # 2. 箱ひげ図（4列分を1枚に）
+        # ========================================
+        logger.info("📊 箱ひげ図を作成中...")
+        
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        axes = axes.flatten()
+        
+        fig.suptitle('主要数値列のデータ分布（箱ひげ図）', fontsize=16, fontweight='bold', fontfamily=selected_font)
+        
+        for idx, (col, name, unit) in enumerate(available_cols[:4]):
+            ax = axes[idx]
+            series = pd.to_numeric(df[col], errors='coerce').dropna()
+            
+            if len(series) == 0:
+                ax.text(0.5, 0.5, 'データなし', ha='center', va='center', fontsize=12, fontfamily=selected_font)
+                ax.set_title(name, fontsize=12, fontfamily=selected_font)
+                continue
+            
+            # 外れ値を除去（99パーセンタイル以下）
+            upper_limit = series.quantile(0.99)
+            series_clipped = series[series <= upper_limit]
+            
+            ax.boxplot(series_clipped, vert=True, patch_artist=True,
+                           boxprops=dict(facecolor='lightblue', color='steelblue'),
+                           medianprops=dict(color='red', linewidth=2),
+                           whiskerprops=dict(color='steelblue'),
+                           capprops=dict(color='steelblue'),
+                           flierprops=dict(marker='o', markerfacecolor='gray', markersize=3, alpha=0.5))
+            
+            ax.set_title(f'{name}の分布', fontsize=12, fontfamily=selected_font)
+            ax.set_ylabel(unit, fontsize=10, fontfamily=selected_font)
+            ax.set_xticklabels([''], fontfamily=selected_font)
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            # 四分位数を表示
+            q1 = series.quantile(0.25)
+            q2 = series.quantile(0.50)
+            q3 = series.quantile(0.75)
+            stats_text = f'Q1: {q1:.1f}\n中央値: {q2:.1f}\nQ3: {q3:.1f}'
+            ax.text(1.15, 0.5, stats_text, transform=ax.transAxes, fontsize=9,
+                   verticalalignment='center',
+                   bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8),
+                   fontfamily=selected_font)
+            
+            for label in ax.get_yticklabels():
+                label.set_fontfamily(selected_font)
+        
+        # 未使用のサブプロットを非表示
+        for idx in range(len(available_cols), 4):
+            axes[idx].set_visible(False)
+        
+        plt.tight_layout()
+        box_path = viz_dir / 'data_distribution_boxplots.png'
+        plt.savefig(box_path, dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
+        plt.close()
+        charts['boxplots'] = str(box_path)
+        logger.info(f"   💾 箱ひげ図保存: {box_path}")
+        
+        logger.info(f"✅ データ分布可視化完了: {viz_dir}")
+        return charts
+        
+    except Exception as e:
+        logger.error(f"❌ データ分布可視化でエラー: {str(e)}")
+        try:
+            plt.close('all')
+        except Exception:
+            pass
+        return {}
+
+
 @log_performance("EDA分析")
 def perform_eda_analysis(data_dir: str, output_dir: str, encoding: str = 'utf-8') -> Dict[str, Any]:
     """EDA（探索的データ分析）を実行します。
@@ -1136,9 +1307,17 @@ def perform_eda_analysis(data_dir: str, output_dir: str, encoding: str = 'utf-8'
             results['time_series_split']['consistency_check'] = consistency_check
     
     # ========================================
-    # 5. レポート生成
+    # 5. データ分布の可視化
     # ========================================
-    logger.info("📋 5. EDAレポートを生成中...")
+    logger.info("📋 5. データ分布の可視化を生成中...")
+    
+    distribution_charts = _create_eda_distribution_charts(df, results['basic_statistics'], Path(output_dir))
+    results['distribution_charts'] = distribution_charts
+    
+    # ========================================
+    # 6. レポート生成
+    # ========================================
+    logger.info("📋 6. EDAレポートを生成中...")
     
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -1170,6 +1349,19 @@ def perform_eda_analysis(data_dir: str, output_dir: str, encoding: str = 'utf-8'
                    f"{stats['min']:.2f} | {stats['25%']:.2f} | {stats['50%']:.2f} | "
                    f"{stats['75%']:.2f} | {stats['max']:.2f} |\n")
         f.write("\n")
+        
+        # データ分布の可視化グラフ
+        if distribution_charts:
+            f.write("### 2.1 データ分布の可視化\n\n")
+            f.write("主要数値列の分布を視覚的に確認できます。\n\n")
+            
+            if 'histograms' in distribution_charts:
+                f.write("**ヒストグラム（データの頻度分布）**:\n\n")
+                f.write("![主要数値列のヒストグラム](eda_visualizations/data_distribution_histograms.png)\n\n")
+            
+            if 'boxplots' in distribution_charts:
+                f.write("**箱ひげ図（四分位数と外れ値）**:\n\n")
+                f.write("![主要数値列の箱ひげ図](eda_visualizations/data_distribution_boxplots.png)\n\n")
         
         # 欠損率
         f.write("## 3. 欠損率分析\n\n")
@@ -1314,9 +1506,129 @@ def analyze_by_periods(analyzer, periods, base_output_dir):
     return analyze_by_periods_optimized(analyzer, periods, base_output_dir)
 
 
+def _create_period_time_series_chart(all_results: Dict[str, Any], output_dir: Path) -> Optional[str]:
+    """期間別分析の時系列グラフを生成する
+    
+    Args:
+        all_results: 期間別分析結果
+        output_dir: 出力ディレクトリ
+        
+    Returns:
+        生成したグラフのパス（失敗時はNone）
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        logger.error("❌ matplotlibのインポートに失敗")
+        return None
+    
+    from horse_racing.utils.font_config import setup_japanese_fonts
+    selected_font = setup_japanese_fonts(suppress_warnings=True)
+    
+    if selected_font is None:
+        import platform
+        if platform.system() == 'Windows':
+            selected_font = 'Yu Gothic'
+        else:
+            selected_font = 'DejaVu Sans'
+    
+    try:
+        # データ準備
+        periods = []
+        corr_avg_list = []
+        corr_max_list = []
+        r2_avg_list = []
+        r2_max_list = []
+        
+        for period_name, results in all_results.items():
+            correlation_stats = results.get('correlation_stats', {})
+            periods.append(period_name)
+            corr_avg_list.append(correlation_stats.get('correlation_place_avg', 0.0))
+            corr_max_list.append(correlation_stats.get('correlation_place_max', 0.0))
+            r2_avg_list.append(correlation_stats.get('r2_place_avg', 0.0))
+            r2_max_list.append(correlation_stats.get('r2_place_max', 0.0))
+        
+        if len(periods) < 2:
+            logger.warning("⚠️ 時系列グラフ生成には2期間以上必要です")
+            return None
+        
+        # グラフ作成（2行1列）
+        fig, axes = plt.subplots(2, 1, figsize=(12, 10))
+        fig.suptitle('期間別REQI性能の時系列推移', fontsize=16, fontweight='bold', fontfamily=selected_font)
+        
+        x = range(len(periods))
+        
+        # 上段: 相関係数の推移
+        ax1 = axes[0]
+        ax1.plot(x, corr_avg_list, 'b-o', linewidth=2, markersize=8, label='平均REQI相関 (r)')
+        ax1.plot(x, corr_max_list, 'g-s', linewidth=2, markersize=8, label='最高REQI相関 (r)')
+        ax1.set_ylabel('相関係数 (r)', fontsize=12, fontfamily=selected_font)
+        ax1.set_title('相関係数の時系列推移', fontsize=14, fontfamily=selected_font)
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(periods, fontfamily=selected_font)
+        ax1.legend(prop={'family': selected_font}, loc='best')
+        ax1.grid(True, alpha=0.3)
+        ax1.set_ylim(0, max(max(corr_avg_list), max(corr_max_list)) * 1.2)
+        
+        # 数値ラベル追加
+        for i, (avg, mx) in enumerate(zip(corr_avg_list, corr_max_list)):
+            ax1.annotate(f'{avg:.3f}', (i, avg), textcoords="offset points", 
+                        xytext=(0, 10), ha='center', fontsize=9, color='blue',
+                        fontfamily=selected_font)
+            ax1.annotate(f'{mx:.3f}', (i, mx), textcoords="offset points", 
+                        xytext=(0, -15), ha='center', fontsize=9, color='green',
+                        fontfamily=selected_font)
+        
+        # 下段: 決定係数の推移
+        ax2 = axes[1]
+        ax2.plot(x, r2_avg_list, 'b-o', linewidth=2, markersize=8, label='平均REQI R²')
+        ax2.plot(x, r2_max_list, 'g-s', linewidth=2, markersize=8, label='最高REQI R²')
+        ax2.set_xlabel('期間', fontsize=12, fontfamily=selected_font)
+        ax2.set_ylabel('決定係数 (R²)', fontsize=12, fontfamily=selected_font)
+        ax2.set_title('決定係数の時系列推移', fontsize=14, fontfamily=selected_font)
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(periods, fontfamily=selected_font)
+        ax2.legend(prop={'family': selected_font}, loc='best')
+        ax2.grid(True, alpha=0.3)
+        ax2.set_ylim(0, max(max(r2_avg_list), max(r2_max_list)) * 1.2)
+        
+        # 数値ラベル追加
+        for i, (avg, mx) in enumerate(zip(r2_avg_list, r2_max_list)):
+            ax2.annotate(f'{avg:.3f}', (i, avg), textcoords="offset points", 
+                        xytext=(0, 10), ha='center', fontsize=9, color='blue',
+                        fontfamily=selected_font)
+            ax2.annotate(f'{mx:.3f}', (i, mx), textcoords="offset points", 
+                        xytext=(0, -15), ha='center', fontsize=9, color='green',
+                        fontfamily=selected_font)
+        
+        plt.tight_layout()
+        
+        # 保存
+        chart_path = output_dir / 'period_time_series_chart.png'
+        plt.savefig(chart_path, dpi=300, bbox_inches='tight', 
+                   facecolor='white', edgecolor='none')
+        plt.close()
+        
+        logger.info(f"✅ 期間別時系列グラフを保存: {chart_path}")
+        return str(chart_path)
+        
+    except Exception as e:
+        logger.error(f"❌ 期間別時系列グラフ生成でエラー: {str(e)}")
+        try:
+            plt.close('all')
+        except Exception:
+            pass
+        return None
+
+
 def generate_period_summary_report(all_results, output_dir):
     """期間別分析の総合レポートを生成"""
     report_path = output_dir / '競走経験質指数（REQI）分析_期間別総合レポート.md'
+    
+    # 時系列グラフを生成
+    chart_path = _create_period_time_series_chart(all_results, output_dir)
     
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write("# 競走経験質指数（REQI）分析 期間別総合レポート\n\n")
@@ -1372,6 +1684,12 @@ def generate_period_summary_report(all_results, output_dir):
                 f.write("- 相関分析データなし\n\n")
         
         f.write("\n## 💡 総合的な傾向と知見\n\n")
+        
+        # 時系列グラフへの参照
+        if chart_path:
+            f.write("### 時系列推移グラフ\n\n")
+            f.write("期間別の相関係数・決定係数の推移を視覚的に確認できます。\n\n")
+            f.write(f"![期間別REQI性能の時系列推移](period_time_series_chart.png)\n\n")
         
         # 期間別の相関係数変化
         if len(all_results) > 1:
@@ -2600,7 +2918,7 @@ def _create_scatter_plot(horse_stats: pd.DataFrame, config: dict, output_dir: Pa
     ax.grid(True, alpha=0.3)
     
     # 凡例のフォント設定
-    legend = ax.legend(fontsize=10, prop={'family': selected_font})
+    ax.legend(fontsize=10, prop={'family': selected_font})
     
     # 統計情報ボックス
     stats_text = f'サンプル数: {len(x_data):,}頭\n'
