@@ -140,13 +140,19 @@ class REQIAnalyzer(BaseAnalyzer):
             return self.LEVEL_WEIGHTS
             
         logger.info("🎯 race_level_analyzer.py: 動的重み計算中...")
+        logger.info("📋 循環論理回避: 目的変数（複勝率）≠重み算出基準（勝率）")
         
-        # 複勝率の計算（3着以内の割合）
-        df['place_flag'] = (df['着順'] <= 3).astype(int)
+        # 勝率の計算（1着のみ）- 循環論理回避のため
+        df['is_winner'] = (pd.to_numeric(df['着順'], errors='coerce') == 1).astype(int)
         
-        # 馬ごとの複勝率を計算
-        horse_place_rates = df.groupby('馬名')['place_flag'].mean().to_dict()
-        df['horse_place_rate'] = df['馬名'].map(horse_place_rates)
+        # 馬ごとの勝率を計算（最低6戦以上）
+        horse_win_rates = df.groupby('馬名').agg({
+            'is_winner': 'mean',
+            '着順': 'count'
+        }).reset_index()
+        horse_win_rates = horse_win_rates[horse_win_rates['着順'] >= 6]
+        horse_win_rates_dict = dict(zip(horse_win_rates['馬名'], horse_win_rates['is_winner']))
+        df['horse_win_rate'] = df['馬名'].map(horse_win_rates_dict)
         
         # 特徴量レベルを計算
         grade_level = self._calculate_grade_level(df)
@@ -154,17 +160,17 @@ class REQIAnalyzer(BaseAnalyzer):
         distance_level = self._calculate_distance_level(df)
         prize_level = self._calculate_prize_level(df)
         
-        # 各要素と複勝率の相関係数を計算
-        grade_corr = grade_level.corr(df['horse_place_rate'])
-        venue_corr = venue_level.corr(df['horse_place_rate'])
-        distance_corr = distance_level.corr(df['horse_place_rate'])
-        prize_corr = prize_level.corr(df['horse_place_rate'])
+        # 各要素と勝率の相関係数を計算（循環論理回避）
+        grade_corr = grade_level.corr(df['horse_win_rate'])
+        venue_corr = venue_level.corr(df['horse_win_rate'])
+        distance_corr = distance_level.corr(df['horse_win_rate'])
+        prize_corr = prize_level.corr(df['horse_win_rate'])
         
-        print(f"\n📊 race_level_analyzer.py 相関分析結果:")
-        print(f"  📊 グレードレベル相関: r = {grade_corr:.3f}")
-        print(f"  📊 場所レベル相関: r = {venue_corr:.3f}")
-        print(f"  📊 距離レベル相関: r = {distance_corr:.3f}")
-        print(f"  📊 賞金レベル相関: r = {prize_corr:.3f}")
+        print(f"\n📊 race_level_analyzer.py 相関分析結果（勝率ベース、循環論理回避）:")
+        print(f"  📊 グレードレベル vs 勝率: r = {grade_corr:.3f}")
+        print(f"  📊 場所レベル vs 勝率: r = {venue_corr:.3f}")
+        print(f"  📊 距離レベル vs 勝率: r = {distance_corr:.3f}")
+        print(f"  📊 賞金レベル vs 勝率: r = {prize_corr:.3f}")
         
         # レポート記載の重み算出方法: w_i = r_i² / (r_grade² + r_venue² + r_distance² + r_prize²)
         grade_contribution = grade_corr ** 2
@@ -2976,14 +2982,28 @@ class REQIAnalyzer(BaseAnalyzer):
             if 'correlation_results' in results and 'correlation_matrix' in results['correlation_results']:
                 fig, ax = plt.subplots(1, 1, figsize=(8, 6))
                 corr_matrix = results['correlation_results']['correlation_matrix']
-                sns.heatmap(corr_matrix, annot=True, cmap='RdYlBu_r', center=0, square=True, ax=ax)
-                ax.set_title('特徴量間相関行列')
-                
-                plot_path = output_dir / 'multicollinearity_validation.png'
                 
                 # 日本語フォント設定を再適用
                 from horse_racing.utils.font_config import setup_japanese_fonts
                 setup_japanese_fonts(suppress_warnings=True)
+                
+                # ラベルマッピング（日本語 / 英語）
+                label_mapping = {
+                    'grade_level': 'グレード / Grade',
+                    'venue_level': '場所 / Venue',
+                    'distance_level': '距離 / Distance'
+                }
+                
+                # 相関行列のラベルを日本語と英語の両方に変換
+                corr_matrix_labeled = corr_matrix.copy()
+                corr_matrix_labeled.columns = [label_mapping.get(col, col) for col in corr_matrix.columns]
+                corr_matrix_labeled.index = [label_mapping.get(idx, idx) for idx in corr_matrix.index]
+                
+                sns.heatmap(corr_matrix_labeled, annot=True, cmap='RdYlBu_r', center=0, square=True, ax=ax,
+                           fmt='.3f', cbar_kws={'label': '相関係数 / Correlation Coefficient'})
+                ax.set_title('特徴量間相関行列 / Correlation Matrix', fontsize=14, fontweight='bold')
+                
+                plot_path = output_dir / 'multicollinearity_validation.png'
                 
                 plt.savefig(plot_path, dpi=300, bbox_inches='tight', 
                            facecolor='white', edgecolor='none')

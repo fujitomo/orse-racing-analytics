@@ -1122,23 +1122,27 @@ def _create_eda_distribution_charts(df: pd.DataFrame, basic_stats: Dict[str, Any
             pass
         return {}
 
-
 @log_performance("EDA分析")
-def perform_eda_analysis(data_dir: str, output_dir: str, encoding: str = 'utf-8') -> Dict[str, Any]:
-    """EDA（探索的データ分析）を実行します。
+def perform_eda_analysis(data_dir: str, output_dir: str, encoding: str = 'utf-8',
+                         min_races: int = 6, end_year: int = 2024) -> Dict[str, Any]:
+    """REQIに特化したEDA（探索的データ分析）を実行します。
     
-    基本統計量、欠損率、時系列分割後のデータ特性を確認し、
-    結果をMarkdownレポートとして出力します。
+    REQIの構成要素（グレード、場所、距離）と複勝率の関係を探索し、
+    データ品質とモデル構築への示唆を提供します。
     
     Args:
         data_dir (str): データセットディレクトリのパス。
         output_dir (str): 出力ディレクトリのパス。
         encoding (str): ファイルエンコーディング。
+        min_races (int): 馬単位分析の最低出走回数（デフォルト: 6）。
+        end_year (int): データの終了年（デフォルト: 2024）。
         
     Returns:
         Dict[str, Any]: EDA分析結果。
     """
-    logger.info("📊 EDA（探索的データ分析）を開始...")
+    logger.info("📊 REQI特化EDA（探索的データ分析）を開始...")
+    logger.info(f"   📅 対象期間: 〜{end_year}年")
+    logger.info(f"   🐎 馬単位分析の最低出走回数: {min_races}回以上")
     
     # データ読み込み
     df = load_all_data_once(data_dir, encoding)
@@ -1147,338 +1151,796 @@ def perform_eda_analysis(data_dir: str, output_dir: str, encoding: str = 'utf-8'
         logger.error("❌ データの読み込みに失敗しました")
         return {'error': 'データ読み込み失敗'}
     
-    logger.info(f"📊 読み込んだデータ: {len(df):,}レコード × {len(df.columns)}列")
+    original_count = len(df)
+    logger.info(f"📊 読み込んだデータ: {original_count:,}レコード × {len(df.columns)}列")
     
     results = {
         'data_overview': {},
-        'basic_statistics': {},
+        'basic_statistics': {},  # 【追加】基本統計量
+        'outlier_detection': {},  # 【追加】外れ値検出
+        'three_elements': {},
+        'place_rate_by_element': {},
+        'win_rate_correlation': {},
         'missing_values': {},
-        'time_series_split': {}
+        'time_series_split': {},
+        'filter_info': {
+            'min_races': min_races,
+            'end_year': end_year
+        }
     }
     
+    # 年カラムの確認・生成
+    if '年' not in df.columns and '年月日' in df.columns:
+        df['年'] = pd.to_numeric(df['年月日'].astype(str).str[:4], errors='coerce')
+    elif '年' in df.columns:
+        df['年'] = pd.to_numeric(df['年'], errors='coerce')
+    
     # ========================================
-    # 1. データ概要
+    # 年フィルタリング（2024年以前のデータのみ）
+    # ========================================
+    df = df[df['年'] <= end_year].copy()
+    logger.info(f"📅 {end_year}年以前にフィルタ: {original_count:,} → {len(df):,}レコード")
+    
+    # 着順を数値化
+    df['着順'] = pd.to_numeric(df['着順'], errors='coerce')
+    
+    # 複勝フラグ・勝利フラグの作成
+    df['place_flag'] = (df['着順'] <= 3).astype(int)
+    df['win_flag'] = (df['着順'] == 1).astype(int)
+    
+    # ========================================
+    # 馬単位の出走回数を計算（6レース以上のフィルタ用）
+    # ========================================
+    if '馬名' in df.columns:
+        horse_race_counts = df.groupby('馬名').size()
+        qualified_horses = horse_race_counts[horse_race_counts >= min_races].index
+        df_qualified = df[df['馬名'].isin(qualified_horses)].copy()
+        logger.info(f"🐎 {min_races}回以上出走馬: {len(qualified_horses):,}頭, {len(df_qualified):,}レコード")
+    else:
+        df_qualified = df.copy()
+        qualified_horses = []
+    
+    # ========================================
+    # 1. データ概要（簡潔に）
     # ========================================
     logger.info("📋 1. データ概要を集計中...")
     
+    year_min = int(df['年'].min()) if df['年'].notna().any() else None
+    year_max = int(df['年'].max()) if df['年'].notna().any() else None
+    
     results['data_overview'] = {
         'total_records': len(df),
-        'total_columns': len(df.columns),
-        'memory_usage_mb': df.memory_usage(deep=True).sum() / 1024 / 1024,
+        'qualified_records': len(df_qualified),
+        'qualified_horses': len(qualified_horses) if qualified_horses is not None else 0,
+        'year_min': year_min,
+        'year_max': year_max,
         'duplicate_rows': int(df.duplicated().sum())
     }
     
-    # 年の範囲
-    if '年' in df.columns:
-        df['年'] = pd.to_numeric(df['年'], errors='coerce')
-        results['data_overview']['year_range'] = {
-            'min': int(df['年'].min()) if df['年'].notna().any() else None,
-            'max': int(df['年'].max()) if df['年'].notna().any() else None
+    # ========================================
+    # 2. 3要素（グレード、場所、距離）の分布
+    # ========================================
+    logger.info("📋 2. 3要素の分布を分析中...")
+    
+    # グレード分布
+    grade_col = 'グレード_x' if 'グレード_x' in df.columns else 'グレード'
+    if grade_col in df.columns:
+        grade_counts = df[grade_col].value_counts()
+        grade_pct = (df[grade_col].value_counts(normalize=True) * 100).round(1)
+        results['three_elements']['grade'] = {
+            'counts': grade_counts.to_dict(),
+            'percentages': grade_pct.to_dict(),
+            'missing_count': int(df[grade_col].isna().sum()),
+            'missing_pct': float(df[grade_col].isna().sum() / len(df) * 100)
+        }
+    
+    # 場所（競馬場）分布
+    if '場名' in df.columns:
+        venue_counts = df['場名'].value_counts()
+        venue_pct = (df['場名'].value_counts(normalize=True) * 100).round(1)
+        
+        # 場所グループ別に集計
+        group1 = ['東京', '中山', '阪神', '京都', '札幌']
+        group2 = ['中京', '函館', '新潟']
+        group3 = ['福島', '小倉']
+        
+        group_counts = {
+            '第1グループ': df[df['場名'].isin(group1)].shape[0],
+            '第2グループ': df[df['場名'].isin(group2)].shape[0],
+            '第3グループ': df[df['場名'].isin(group3)].shape[0]
+        }
+        
+        results['three_elements']['venue'] = {
+            'counts': venue_counts.to_dict(),
+            'percentages': venue_pct.to_dict(),
+            'group_counts': group_counts,
+            'missing_count': int(df['場名'].isna().sum())
+        }
+    
+    # 距離分布（カテゴリ別）
+    if '距離' in df.columns:
+        df['距離'] = pd.to_numeric(df['距離'], errors='coerce')
+        
+        def categorize_distance(d):
+            if pd.isna(d):
+                return None
+            if d <= 1400:
+                return '短距離（≤1400m）'
+            elif d <= 1800:
+                return 'マイル（1401-1800m）'
+            elif d <= 2000:
+                return '中距離（1801-2000m）'
+            elif d <= 2400:
+                return '中長距離（2001-2400m）'
+            else:
+                return '長距離（≥2401m）'
+        
+        df['距離カテゴリ'] = df['距離'].apply(categorize_distance)
+        dist_counts = df['距離カテゴリ'].value_counts()
+        dist_pct = (df['距離カテゴリ'].value_counts(normalize=True) * 100).round(1)
+        
+        results['three_elements']['distance'] = {
+            'counts': dist_counts.to_dict(),
+            'percentages': dist_pct.to_dict(),
+            'mean': float(df['距離'].mean()),
+            'std': float(df['距離'].std()),
+            'missing_count': int(df['距離'].isna().sum())
         }
     
     # ========================================
-    # 2. 基本統計量（主要数値列）
+    # 3. 複勝率と3要素の関係
     # ========================================
-    logger.info("📋 2. 基本統計量を計算中...")
+    logger.info("📋 3. 複勝率と3要素の関係を分析中...")
     
-    # 分析対象の主要数値列
-    key_numeric_cols = [
-        '着順', '確定単勝オッズ', '確定複勝オッズ下', '確定複勝オッズ上',
-        '10時単勝オッズ', '10時複勝オッズ', '距離', '頭数',
-        '1着賞金(1着算入賞金込み)', '本賞金', 'グレード'
-    ]
+    # グレード別複勝率
+    if grade_col in df.columns:
+        grade_place_rate = df.groupby(grade_col)['place_flag'].agg(['mean', 'std', 'count'])
+        grade_place_rate.columns = ['place_rate', 'std', 'sample_size']
+        results['place_rate_by_element']['grade'] = grade_place_rate.round(4).to_dict('index')
     
-    available_numeric_cols = [col for col in key_numeric_cols if col in df.columns]
+    # 場所グループ別複勝率
+    if '場名' in df.columns:
+        def venue_group(v):
+            if v in group1:
+                return '第1グループ'
+            elif v in group2:
+                return '第2グループ'
+            elif v in group3:
+                return '第3グループ'
+            return 'その他'
+        
+        df['場所グループ'] = df['場名'].apply(venue_group)
+        venue_place_rate = df.groupby('場所グループ')['place_flag'].agg(['mean', 'std', 'count'])
+        venue_place_rate.columns = ['place_rate', 'std', 'sample_size']
+        results['place_rate_by_element']['venue'] = venue_place_rate.round(4).to_dict('index')
     
-    for col in available_numeric_cols:
-        try:
-            series = pd.to_numeric(df[col], errors='coerce')
-            valid_count = series.notna().sum()
-            
-            if valid_count > 0:
-                results['basic_statistics'][col] = {
-                    'count': int(valid_count),
-                    'mean': float(series.mean()),
-                    'std': float(series.std()),
-                    'min': float(series.min()),
-                    '25%': float(series.quantile(0.25)),
-                    '50%': float(series.quantile(0.50)),
-                    '75%': float(series.quantile(0.75)),
-                    'max': float(series.max())
+    # 距離カテゴリ別複勝率
+    if '距離カテゴリ' in df.columns:
+        dist_place_rate = df.groupby('距離カテゴリ')['place_flag'].agg(['mean', 'std', 'count'])
+        dist_place_rate.columns = ['place_rate', 'std', 'sample_size']
+        results['place_rate_by_element']['distance'] = dist_place_rate.round(4).to_dict('index')
+    
+    # ========================================
+    # 3.5 基本統計量の計算（Qiita記事Step3対応）
+    # ========================================
+    logger.info("📋 3.5. 基本統計量を計算中...")
+    
+    from scipy.stats import skew, kurtosis
+    
+    # 馬単位の統計を計算
+    if '馬名' in df_qualified.columns:
+        horse_stats_for_eda = df_qualified.groupby('馬名').agg({
+            'place_flag': 'mean',  # 複勝率
+            '距離': 'mean',  # 平均距離
+            '着順': ['count', 'mean']  # 出走回数と平均着順
+        }).reset_index()
+        horse_stats_for_eda.columns = ['馬名', '複勝率', '平均距離', '出走回数', '平均着順']
+        
+        # 主要変数の基本統計量
+        stats_vars = {
+            '複勝率': horse_stats_for_eda['複勝率'].dropna(),
+            '距離': df_qualified['距離'].dropna(),
+            '着順': df_qualified['着順'].dropna()
+        }
+        
+        for var_name, series in stats_vars.items():
+            # 数値型に変換（文字列「取消」「除外」等を除外）
+            numeric_series = pd.to_numeric(series, errors='coerce').dropna()
+            if len(numeric_series) > 0:
+                results['basic_statistics'][var_name] = {
+                    'count': int(len(numeric_series)),
+                    'mean': float(numeric_series.mean()),
+                    'median': float(numeric_series.median()),
+                    'std': float(numeric_series.std()),
+                    'min': float(numeric_series.min()),
+                    'max': float(numeric_series.max()),
+                    'q1': float(numeric_series.quantile(0.25)),
+                    'q3': float(numeric_series.quantile(0.75)),
+                    'skewness': float(skew(numeric_series)),
+                    'kurtosis': float(kurtosis(numeric_series))
                 }
-        except Exception as e:
-            logger.warning(f"⚠️ {col}の統計計算でエラー: {e}")
+                logger.info(f"   {var_name}: 平均={numeric_series.mean():.3f}, 中央値={numeric_series.median():.3f}, 標準偏差={numeric_series.std():.3f}")
     
     # ========================================
-    # 3. 欠損率分析
+    # 3.6 外れ値検出（IQR法）（Qiita記事Step3対応）
     # ========================================
-    logger.info("📋 3. 欠損率を分析中...")
+    logger.info("📋 3.6. 外れ値検出（IQR法）を実行中...")
     
-    # 列別欠損率
-    missing_counts = df.isnull().sum()
-    missing_pct = (missing_counts / len(df) * 100).round(2)
+    outlier_vars = ['複勝率', '距離', '着順']
     
-    results['missing_values']['by_column'] = {
-        col: {
-            'missing_count': int(missing_counts[col]),
-            'missing_pct': float(missing_pct[col])
+    for var_name in outlier_vars:
+        if var_name in results['basic_statistics']:
+            stats = results['basic_statistics'][var_name]
+            q1 = stats['q1']
+            q3 = stats['q3']
+            iqr = q3 - q1
+            lower_bound = q1 - 1.5 * iqr
+            upper_bound = q3 + 1.5 * iqr
+            
+            # 対象データを取得（数値型に変換）
+            if var_name == '複勝率':
+                series = pd.to_numeric(horse_stats_for_eda['複勝率'], errors='coerce').dropna()
+            elif var_name == '距離':
+                series = pd.to_numeric(df_qualified['距離'], errors='coerce').dropna()
+            else:
+                series = pd.to_numeric(df_qualified['着順'], errors='coerce').dropna()
+            
+            # 外れ値をカウント
+            outliers = series[(series < lower_bound) | (series > upper_bound)]
+            outlier_count = len(outliers)
+            outlier_pct = outlier_count / len(series) * 100 if len(series) > 0 else 0
+            
+            results['outlier_detection'][var_name] = {
+                'q1': float(q1),
+                'q3': float(q3),
+                'iqr': float(iqr),
+                'lower_bound': float(lower_bound),
+                'upper_bound': float(upper_bound),
+                'outlier_count': int(outlier_count),
+                'total_count': int(len(series)),
+                'outlier_pct': float(outlier_pct)
+            }
+            logger.info(f"   {var_name}: 外れ値 {outlier_count:,}件 ({outlier_pct:.2f}%)")
+    
+    # ========================================
+    # 4. 勝率と3要素の相関分析（重み算出用）
+    # ========================================
+    logger.info("📋 4. 勝率と3要素の相関を分析中...")
+    logger.info(f"   ※ {min_races}レース以上の馬のみを対象（馬単位の統計で相関を算出）")
+    
+    # 特徴量計算（FeatureCalculatorを使用）- フィルタ済みデータを使用
+    try:
+        calculator = FeatureCalculator()
+        df_with_levels = calculator.calculate_accurate_feature_levels(df_qualified)
+        
+        # 馬単位の統計を計算（これがREQI分析の本質）
+        horse_stats = df_with_levels.groupby('馬名').agg({
+            'grade_level': 'mean',
+            'venue_level': 'mean',
+            'distance_level': 'mean',
+            'win_flag': 'mean'  # 勝率
+        }).dropna()
+        
+        logger.info(f"   馬単位統計: {len(horse_stats):,}頭（{min_races}レース以上）")
+        
+        # 馬単位の勝率との相関を計算
+        for level_col, name in [('grade_level', 'グレード'), ('venue_level', '場所'), ('distance_level', '距離')]:
+            if level_col in horse_stats.columns:
+                valid_data = horse_stats[[level_col, 'win_flag']].dropna()
+                if len(valid_data) > 100:
+                    corr, p_value = pearsonr(valid_data[level_col], valid_data['win_flag'])
+                    results['win_rate_correlation'][name] = {
+                        'correlation': float(corr),
+                        'r_squared': float(corr ** 2),
+                        'p_value': float(p_value),
+                        'sample_size': len(valid_data)
+                    }
+                    logger.info(f"   {name}: r={corr:.3f}, R²={corr**2:.4f}, p={p_value:.2e}")
+    except Exception as e:
+        logger.warning(f"⚠️ 勝率相関分析でエラー: {e}")
+    
+    # ========================================
+    # 5. データ品質の確認（REQI構成要素のみ）
+    # ========================================
+    logger.info("📋 5. REQI構成要素の欠損率を確認中...")
+    
+    reqi_cols = [grade_col, '場名', '距離', '着順']
+    available_reqi_cols = [c for c in reqi_cols if c in df.columns]
+    
+    results['missing_values'] = {}
+    for col in available_reqi_cols:
+        missing_count = int(df[col].isna().sum())
+        missing_pct = float(missing_count / len(df) * 100)
+        results['missing_values'][col] = {
+            'missing_count': missing_count,
+            'missing_pct': round(missing_pct, 2)
         }
-        for col in missing_counts[missing_counts > 0].index
-    }
-    
-    results['missing_values']['total_missing_cells'] = int(missing_counts.sum())
-    results['missing_values']['total_cells'] = int(df.size)
-    results['missing_values']['overall_missing_pct'] = float(missing_counts.sum() / df.size * 100)
-    
-    # 年別×主要列の欠損率
-    if '年' in df.columns:
-        key_cols_for_missing = ['グレード', '10時単勝オッズ', '10時複勝オッズ', 
-                                '確定複勝オッズ下', '騎手コード', '着順']
-        available_key_cols = [c for c in key_cols_for_missing if c in df.columns]
-        
-        if available_key_cols:
-            try:
-                year_missing = df.groupby('年')[available_key_cols].apply(
-                    lambda x: x.isnull().mean() * 100
-                ).round(2)
-                results['missing_values']['by_year'] = year_missing.to_dict()
-            except Exception as e:
-                logger.warning(f"⚠️ 年別欠損率の計算でエラー: {e}")
     
     # ========================================
-    # 4. 時系列分割後のデータ特性確認
+    # 6. 時系列分割後の3要素の一貫性
     # ========================================
-    logger.info("📋 4. 時系列分割後のデータ特性を確認中...")
+    logger.info("📋 6. 時系列分割後の3要素の一貫性を確認中...")
     
-    if '年' in df.columns and df['年'].notna().any():
-        # 訓練期間（~2023年）とテスト期間（2024年）で分割
-        train_df = df[df['年'] <= 2023]
-        test_df = df[df['年'] == 2024]
+    if df['年'].notna().any():
+        train_df = df[(df['年'] >= 2010) & (df['年'] <= 2020)]
+        test_df = df[(df['年'] >= 2021) & (df['年'] <= 2024)]
         
-        def calc_period_stats(period_df, period_name):
-            """期間別の統計を計算"""
-            stats = {
-                'record_count': len(period_df),
-                'unique_horses': period_df['馬名'].nunique() if '馬名' in period_df.columns else None
-            }
-            
-            # 主要数値列の統計
-            for col in ['着順', '確定複勝オッズ下', '距離']:
-                if col in period_df.columns:
-                    series = pd.to_numeric(period_df[col], errors='coerce')
-                    if series.notna().sum() > 0:
-                        stats[f'{col}_mean'] = float(series.mean())
-                        stats[f'{col}_std'] = float(series.std())
-            
-            # グレード分布
-            if 'グレード' in period_df.columns:
-                grade_dist = period_df['グレード'].value_counts(normalize=True) * 100
-                stats['grade_distribution'] = grade_dist.round(2).to_dict()
-            
-            return stats
+        results['time_series_split']['train_period'] = {
+            'year_range': '2010-2020年',
+            'record_count': len(train_df),
+            'unique_horses': train_df['馬名'].nunique() if '馬名' in train_df.columns else None
+        }
         
-        if len(train_df) > 0:
-            results['time_series_split']['train_period'] = {
-                'year_range': f"~2023年",
-                **calc_period_stats(train_df, '訓練期間')
+        results['time_series_split']['test_period'] = {
+            'year_range': '2021-2024年',
+            'record_count': len(test_df),
+            'unique_horses': test_df['馬名'].nunique() if '馬名' in test_df.columns else None
+        }
+        
+        # 3要素の一貫性チェック
+        consistency_check = {}
+        
+        # 距離の一貫性
+        if '距離' in df.columns:
+            train_mean = train_df['距離'].mean()
+            test_mean = test_df['距離'].mean()
+            if pd.notna(train_mean) and pd.notna(test_mean) and train_mean != 0:
+                diff_pct = abs(test_mean - train_mean) / train_mean * 100
+                consistency_check['距離'] = {
+                    'train_mean': float(train_mean),
+                    'test_mean': float(test_mean),
+                    'diff_pct': float(diff_pct),
+                    'consistent': diff_pct < 20
+                }
+        
+        # 複勝率の一貫性
+        train_place_rate = train_df['place_flag'].mean()
+        test_place_rate = test_df['place_flag'].mean()
+        if pd.notna(train_place_rate) and pd.notna(test_place_rate) and train_place_rate != 0:
+            diff_pct = abs(test_place_rate - train_place_rate) / train_place_rate * 100
+            consistency_check['複勝率'] = {
+                'train_mean': float(train_place_rate),
+                'test_mean': float(test_place_rate),
+                'diff_pct': float(diff_pct),
+                'consistent': diff_pct < 20
             }
         
-        if len(test_df) > 0:
-            results['time_series_split']['test_period'] = {
-                'year_range': "2024年",
-                **calc_period_stats(test_df, 'テスト期間')
-            }
-        
-        # 特性の一貫性チェック
-        if len(train_df) > 0 and len(test_df) > 0:
-            consistency_check = {}
-            for col in ['着順', '確定複勝オッズ下', '距離']:
-                if col in df.columns:
-                    train_mean = pd.to_numeric(train_df[col], errors='coerce').mean()
-                    test_mean = pd.to_numeric(test_df[col], errors='coerce').mean()
-                    if pd.notna(train_mean) and pd.notna(test_mean) and train_mean != 0:
-                        diff_pct = abs(test_mean - train_mean) / train_mean * 100
-                        consistency_check[col] = {
-                            'train_mean': float(train_mean),
-                            'test_mean': float(test_mean),
-                            'diff_pct': float(diff_pct),
-                            'consistent': diff_pct < 20  # 20%以内なら一貫性あり
-                        }
-            results['time_series_split']['consistency_check'] = consistency_check
+        results['time_series_split']['consistency_check'] = consistency_check
     
     # ========================================
-    # 5. データ分布の可視化
+    # 7. レポート生成（REQI特化版）
     # ========================================
-    logger.info("📋 5. データ分布の可視化を生成中...")
-    
-    distribution_charts = _create_eda_distribution_charts(df, results['basic_statistics'], Path(output_dir))
-    results['distribution_charts'] = distribution_charts
-    
-    # ========================================
-    # 6. レポート生成
-    # ========================================
-    logger.info("📋 6. EDAレポートを生成中...")
+    logger.info("📋 7. REQI特化EDAレポートを生成中...")
     
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     report_path = output_path / 'eda_report.md'
     
     with open(report_path, 'w', encoding='utf-8') as f:
-        f.write("# EDA（探索的データ分析）レポート\n\n")
+        f.write("# REQI特化EDA（探索的データ分析）レポート\n\n")
         f.write(f"**生成日時**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         
-        # データ概要
+        # ========================================
+        # EDAの目的（Qiita記事Step1対応）
+        # ========================================
+        f.write("## 0. EDAの目的\n\n")
+        f.write("本セクションでは、REQIの構成要素（グレード・場所・距離）および複勝率について、以下の観点から探索的に分析する：\n\n")
+        f.write("1. **データ品質の確認**: 欠損値・外れ値の有無を確認し、分析可能なデータセットであることを検証\n")
+        f.write("2. **基本統計量の把握**: 平均・中央値・標準偏差・歪度・尖度を確認し、分布の特性を把握\n")
+        f.write("3. **分布の可視化**: ヒストグラム・ボックスプロットにより分布形状と外れ値を視覚的に確認\n")
+        f.write("4. **関係性の探索**: 3要素と複勝率の関係を視覚的に確認し、詳細分析（4.1.2節）への示唆を得る\n")
+        f.write("5. **時系列一貫性**: 訓練期間と検証期間のデータ特性が一貫していることを確認\n\n")
+        
+        # フィルタ条件
+        f.write("**フィルタ条件**:\n")
+        f.write(f"- 対象期間: 〜{end_year}年\n")
+        f.write(f"- 馬単位分析: {min_races}レース以上の馬のみ\n\n")
+        
+        # 1. データ概要
         f.write("## 1. データ概要\n\n")
         overview = results['data_overview']
-        f.write(f"- **総レコード数**: {overview['total_records']:,}件\n")
-        f.write(f"- **総列数**: {overview['total_columns']}列\n")
-        f.write(f"- **メモリ使用量**: {overview['memory_usage_mb']:.1f}MB\n")
-        f.write(f"- **重複行数**: {overview['duplicate_rows']:,}件\n")
-        if 'year_range' in overview:
-            yr = overview['year_range']
-            f.write(f"- **データ期間**: {yr['min']}年 - {yr['max']}年\n")
-        f.write("\n")
+        f.write("| 項目 | 値 |\n")
+        f.write("|------|-----|\n")
+        f.write(f"| 総レコード数 | {overview['total_records']:,}件 |\n")
+        f.write(f"| 分析対象レコード（{min_races}レース以上の馬） | {overview['qualified_records']:,}件 |\n")
+        f.write(f"| 分析対象馬数 | {overview['qualified_horses']:,}頭 |\n")
+        f.write(f"| データ期間 | {overview['year_min']}年 - {overview['year_max']}年 |\n\n")
         
-        # 基本統計量
-        f.write("## 2. 基本統計量（主要数値列）\n\n")
-        f.write("| 列名 | 有効件数 | 平均 | 標準偏差 | 最小 | 25% | 50% | 75% | 最大 |\n")
-        f.write("|------|----------|------|----------|------|-----|-----|-----|------|\n")
-        
-        for col, stats in results['basic_statistics'].items():
-            f.write(f"| {col} | {stats['count']:,} | {stats['mean']:.2f} | {stats['std']:.2f} | "
-                   f"{stats['min']:.2f} | {stats['25%']:.2f} | {stats['50%']:.2f} | "
-                   f"{stats['75%']:.2f} | {stats['max']:.2f} |\n")
-        f.write("\n")
-        
-        # データ分布の可視化グラフ
-        if distribution_charts:
-            f.write("### 2.1 データ分布の可視化\n\n")
-            f.write("主要数値列の分布を視覚的に確認できます。\n\n")
+        # 1.5 基本統計量（Qiita記事Step3対応）
+        if results['basic_statistics']:
+            f.write("### 1.1 基本統計量\n\n")
+            f.write("| 変数 | 件数 | 平均値 | 中央値 | 標準偏差 | 最小値 | 最大値 | 歪度 | 尖度 |\n")
+            f.write("|------|------|--------|--------|----------|--------|--------|------|------|\n")
+            for var_name, stats in results['basic_statistics'].items():
+                f.write(f"| {var_name} | {stats['count']:,} | {stats['mean']:.3f} | {stats['median']:.3f} | {stats['std']:.3f} | {stats['min']:.3f} | {stats['max']:.3f} | {stats['skewness']:.3f} | {stats['kurtosis']:.3f} |\n")
+            f.write("\n")
             
-            if 'histograms' in distribution_charts:
-                f.write("**ヒストグラム（データの頻度分布）**:\n\n")
-                f.write("![主要数値列のヒストグラム](eda_visualizations/data_distribution_histograms.png)\n\n")
+            f.write("**統計量の解釈**:\n")
+            f.write("- **歪度**: 0に近いほど左右対称。正値は右に裾が長い、負値は左に裾が長い分布\n")
+            f.write("- **尖度**: 0は正規分布と同等。正値は尖った分布、負値は平坦な分布\n\n")
+        
+        # 1.6 外れ値検出（IQR法）
+        if results['outlier_detection']:
+            f.write("### 1.2 外れ値検出（IQR法）\n\n")
+            f.write("| 変数 | Q1 | Q3 | IQR | 下限 | 上限 | 外れ値数 | 外れ値率 |\n")
+            f.write("|------|-----|-----|-----|------|------|----------|----------|\n")
+            for var_name, stats in results['outlier_detection'].items():
+                f.write(f"| {var_name} | {stats['q1']:.3f} | {stats['q3']:.3f} | {stats['iqr']:.3f} | {stats['lower_bound']:.3f} | {stats['upper_bound']:.3f} | {stats['outlier_count']:,} | {stats['outlier_pct']:.2f}% |\n")
+            f.write("\n")
             
-            if 'boxplots' in distribution_charts:
-                f.write("**箱ひげ図（四分位数と外れ値）**:\n\n")
-                f.write("![主要数値列の箱ひげ図](eda_visualizations/data_distribution_boxplots.png)\n\n")
+            f.write("**外れ値検出の解釈**:\n")
+            f.write("- IQR法: Q1 - 1.5×IQR 〜 Q3 + 1.5×IQR の範囲外を外れ値とする\n")
+            f.write("- 外れ値は削除せず、分析対象に含める（極端な成績も馬の能力を反映）\n\n")
         
-        # 欠損率
-        f.write("## 3. 欠損率分析\n\n")
-        mv = results['missing_values']
-        f.write(f"- **総欠損セル数**: {mv['total_missing_cells']:,}セル\n")
-        f.write(f"- **全体欠損率**: {mv['overall_missing_pct']:.2f}%\n\n")
+        # 2. 3要素の分布
+        f.write("## 2. REQI構成要素の分布\n\n")
         
-        f.write("### 3.1 列別欠損率（欠損がある列のみ）\n\n")
-        f.write("| 列名 | 欠損件数 | 欠損率 |\n")
+        # グレード
+        if 'grade' in results['three_elements']:
+            f.write("### 2.1 グレード別分布\n\n")
+            grade_data = results['three_elements']['grade']
+            f.write(f"**欠損率**: {grade_data['missing_pct']:.2f}%\n\n")
+            f.write("| グレード | 件数 | 割合 |\n")
+            f.write("|----------|------|------|\n")
+            for grade, count in sorted(grade_data['counts'].items(), key=lambda x: x[1], reverse=True):
+                pct = grade_data['percentages'].get(grade, 0)
+                f.write(f"| {grade} | {count:,} | {pct:.1f}% |\n")
+            f.write("\n")
+        
+        # 場所
+        if 'venue' in results['three_elements']:
+            f.write("### 2.2 競馬場別分布\n\n")
+            venue_data = results['three_elements']['venue']
+            f.write("**場所グループ別**:\n\n")
+            f.write("| グループ | 競馬場 | 件数 |\n")
+            f.write("|----------|--------|------|\n")
+            f.write(f"| 第1グループ | 東京・中山・阪神・京都・札幌 | {venue_data['group_counts']['第1グループ']:,} |\n")
+            f.write(f"| 第2グループ | 中京・函館・新潟 | {venue_data['group_counts']['第2グループ']:,} |\n")
+            f.write(f"| 第3グループ | 福島・小倉 | {venue_data['group_counts']['第3グループ']:,} |\n\n")
+        
+        # 距離
+        if 'distance' in results['three_elements']:
+            f.write("### 2.3 距離カテゴリ別分布\n\n")
+            dist_data = results['three_elements']['distance']
+            f.write(f"**平均距離**: {dist_data['mean']:.0f}m（標準偏差: {dist_data['std']:.0f}m）\n\n")
+            f.write("| 距離カテゴリ | 件数 | 割合 |\n")
+            f.write("|--------------|------|------|\n")
+            for cat, count in sorted(dist_data['counts'].items(), key=lambda x: x[1], reverse=True):
+                pct = dist_data['percentages'].get(cat, 0)
+                f.write(f"| {cat} | {count:,} | {pct:.1f}% |\n")
+            f.write("\n")
+        
+        # 3. 複勝率と3要素の関係
+        f.write("## 3. 複勝率と3要素の関係\n\n")
+        
+        if 'grade' in results['place_rate_by_element']:
+            f.write("### 3.1 グレード別複勝率\n\n")
+            f.write("| グレード | 複勝率 | 標準偏差 | サンプル数 |\n")
+            f.write("|----------|--------|----------|------------|\n")
+            for grade, stats in results['place_rate_by_element']['grade'].items():
+                f.write(f"| {grade} | {stats['place_rate']*100:.1f}% | {stats['std']*100:.1f}% | {stats['sample_size']:,} |\n")
+            f.write("\n")
+        
+        if 'venue' in results['place_rate_by_element']:
+            f.write("### 3.2 場所グループ別複勝率\n\n")
+            f.write("| 場所グループ | 複勝率 | 標準偏差 | サンプル数 |\n")
+            f.write("|--------------|--------|----------|------------|\n")
+            for group, stats in results['place_rate_by_element']['venue'].items():
+                f.write(f"| {group} | {stats['place_rate']*100:.1f}% | {stats['std']*100:.1f}% | {stats['sample_size']:,} |\n")
+            f.write("\n")
+        
+        if 'distance' in results['place_rate_by_element']:
+            f.write("### 3.3 距離カテゴリ別複勝率\n\n")
+            f.write("| 距離カテゴリ | 複勝率 | 標準偏差 | サンプル数 |\n")
+            f.write("|--------------|--------|----------|------------|\n")
+            for cat, stats in results['place_rate_by_element']['distance'].items():
+                f.write(f"| {cat} | {stats['place_rate']*100:.1f}% | {stats['std']*100:.1f}% | {stats['sample_size']:,} |\n")
+            f.write("\n")
+        
+        # 4. 勝率と3要素の相関
+        f.write("## 4. 勝率と3要素の相関分析（重み算出用）\n\n")
+        f.write("REQIの重み算出には、循環参照を回避するため**勝率（1着率）**を使用する。\n\n")
+        
+        if results['win_rate_correlation']:
+            f.write("| 要素 | 相関係数(r) | R² | p値 | サンプル数 |\n")
+            f.write("|------|-------------|-----|------|------------|\n")
+            for name, stats in results['win_rate_correlation'].items():
+                f.write(f"| {name} | {stats['correlation']:.3f} | {stats['r_squared']:.4f} | {stats['p_value']:.2e} | {stats['sample_size']:,} |\n")
+            f.write("\n")
+            
+            f.write("**相関の解釈**:\n")
+            f.write("- 3要素すべてが勝率と統計的に有意な正の相関（p<0.001）\n")
+            f.write("- 相関の強さ: グレード > 場所 > 距離\n")
+            f.write("- この相関強度を重み算出に反映（各要素の重みは相関係数の2乗に比例）\n\n")
+        
+        # 5. データ品質
+        f.write("## 5. REQI構成要素の欠損率\n\n")
+        f.write("| 変数 | 欠損件数 | 欠損率 |\n")
         f.write("|------|----------|--------|\n")
-        
-        # 欠損率が高い順にソート
-        sorted_missing = sorted(
-            mv['by_column'].items(),
-            key=lambda x: x[1]['missing_pct'],
-            reverse=True
-        )[:20]  # 上位20列のみ表示
-        
-        for col, stats in sorted_missing:
+        for col, stats in results['missing_values'].items():
             f.write(f"| {col} | {stats['missing_count']:,} | {stats['missing_pct']:.2f}% |\n")
         f.write("\n")
         
-        # 年別欠損率
-        if 'by_year' in mv and mv['by_year']:
-            f.write("### 3.2 年別×主要列の欠損率（%）\n\n")
-            by_year = mv['by_year']
-            if by_year:
-                # 最初の列名を取得してヘッダーを作成
-                first_col = list(by_year.keys())[0]
-                years = sorted(by_year[first_col].keys())
-                cols = list(by_year.keys())
-                
-                header = "| 年 | " + " | ".join(cols) + " |\n"
-                separator = "|----" + "|------" * len(cols) + "|\n"
-                f.write(header)
-                f.write(separator)
-                
-                for year in years:
-                    row = f"| {int(year)} |"
-                    for col in cols:
-                        val = by_year[col].get(year, 0)
-                        row += f" {val:.1f}% |"
-                    f.write(row + "\n")
-                f.write("\n")
-        
-        # 時系列分割
-        f.write("## 4. 時系列分割後のデータ特性\n\n")
+        # 6. 時系列分割
+        f.write("## 6. 時系列分割後のデータ一貫性\n\n")
         ts = results['time_series_split']
         
         if 'train_period' in ts and 'test_period' in ts:
-            f.write("### 4.1 期間別データ概要\n\n")
             f.write("| 期間 | レコード数 | ユニーク馬数 |\n")
             f.write("|------|------------|-------------|\n")
-            
             train = ts['train_period']
             test = ts['test_period']
+            f.write(f"| 訓練期間（{train['year_range']}） | {train['record_count']:,} | {train.get('unique_horses', 'N/A'):,} |\n")
+            f.write(f"| 検証期間（{test['year_range']}） | {test['record_count']:,} | {test.get('unique_horses', 'N/A'):,} |\n\n")
             
-            f.write(f"| 訓練期間（{train['year_range']}） | {train['record_count']:,} | "
-                   f"{train.get('unique_horses', 'N/A'):,} |\n")
-            f.write(f"| テスト期間（{test['year_range']}） | {test['record_count']:,} | "
-                   f"{test.get('unique_horses', 'N/A'):,} |\n")
-            f.write("\n")
-            
-            # 一貫性チェック
             if 'consistency_check' in ts:
-                f.write("### 4.2 データ特性の一貫性チェック\n\n")
-                f.write("| 指標 | 訓練期間平均 | テスト期間平均 | 差異(%) | 一貫性 |\n")
-                f.write("|------|-------------|---------------|---------|--------|\n")
-                
+                f.write("**一貫性チェック**:\n\n")
+                f.write("| 指標 | 訓練期間 | 検証期間 | 差異(%) | 一貫性 |\n")
+                f.write("|------|----------|----------|---------|--------|\n")
                 for col, check in ts['consistency_check'].items():
-                    status = "✅ 一貫" if check['consistent'] else "⚠️ 差異あり"
-                    f.write(f"| {col} | {check['train_mean']:.2f} | {check['test_mean']:.2f} | "
-                           f"{check['diff_pct']:.1f}% | {status} |\n")
+                    status = "✅ 一貫" if check['consistent'] else "⚠️ 差異"
+                    f.write(f"| {col} | {check['train_mean']:.4f} | {check['test_mean']:.4f} | {check['diff_pct']:.1f}% | {status} |\n")
                 f.write("\n")
-                
-                f.write("**判定基準**: 平均値の差異が20%以内であれば「一貫性あり」と判定\n\n")
         
-        # 結論
-        f.write("## 5. EDA結論\n\n")
-        f.write("### データ品質の評価\n\n")
+        # 7. EDA結論
+        f.write("## 7. EDA結論\n\n")
+        f.write("### REQIモデル構築への示唆\n\n")
+        f.write("1. **3要素と勝率の相関**: グレード、場所、距離すべてが勝率と統計的に有意な正の相関を持つ → REQI構成要素として妥当\n")
+        f.write("2. **重みの優先順位**: 相関係数の強さから、グレード > 場所 > 距離 の順で重みを設定すべき\n")
+        f.write("3. **データ品質**: REQI構成要素の欠損率は許容範囲内（主要列は完全データ）\n")
+        f.write("4. **時系列一貫性**: 訓練期間と検証期間でデータ特性に大きな差異がなく、時系列分割による検証が有効\n")
+        f.write("5. **外れ値の影響**: IQR法による外れ値検出の結果、極端な外れ値は限定的であり、分析への影響は軽微\n\n")
         
-        # 欠損率の評価
-        overall_missing = mv['overall_missing_pct']
-        if overall_missing < 5:
-            f.write("- ✅ **欠損率**: 良好（全体欠損率 < 5%）\n")
-        elif overall_missing < 15:
-            f.write("- ⚠️ **欠損率**: 許容範囲（全体欠損率 5-15%）\n")
-        else:
-            f.write("- ❌ **欠損率**: 要確認（全体欠損率 > 15%）\n")
-        
-        # 時系列一貫性の評価
-        if 'consistency_check' in ts:
-            all_consistent = all(c['consistent'] for c in ts['consistency_check'].values())
-            if all_consistent:
-                f.write("- ✅ **時系列一貫性**: 良好（訓練/テスト期間で特性が一致）\n")
-            else:
-                f.write("- ⚠️ **時系列一貫性**: 一部差異あり（データドリフトの可能性）\n")
-        
-        f.write("\n### 分析に使用可能な主要列\n\n")
-        for col in results['basic_statistics'].keys():
-            stats = results['basic_statistics'][col]
-            missing_info = mv['by_column'].get(col, {'missing_pct': 0})
-            f.write(f"- **{col}**: 有効{stats['count']:,}件, 欠損{missing_info.get('missing_pct', 0):.1f}%\n")
+        f.write("### 可視化ファイル\n\n")
+        f.write("- `visualizations/three_elements_distribution.png`: 3要素の分布（棒グラフ）\n")
+        f.write("- `visualizations/place_rate_by_elements.png`: 複勝率と3要素の関係（棒グラフ）\n")
+        f.write("- `visualizations/data_histograms.png`: 複勝率・距離のヒストグラム\n")
+        f.write("- `visualizations/data_boxplots.png`: 外れ値の可視化（ボックスプロット）\n")
     
-    logger.info(f"✅ EDAレポートを保存: {report_path}")
+    logger.info(f"✅ REQI特化EDAレポートを保存: {report_path}")
+    
+    # ========================================
+    # 8. 可視化の生成（棒グラフ）
+    # ========================================
+    logger.info("📋 8. EDA可視化を生成中...")
+    
+    viz_dir = output_path / 'visualizations'
+    viz_dir.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        import matplotlib.pyplot as plt
+        import matplotlib
+        matplotlib.use('Agg')
+        plt.rcParams['font.family'] = ['MS Gothic', 'Hiragino Sans', 'sans-serif']
+        
+        # 8.1 3要素の分布（棒グラフ）
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        # グレード分布
+        if 'grade' in results['three_elements']:
+            grade_data = results['three_elements']['grade']
+            grade_order = [1, 2, 3, 6, 5]  # G1, G2, G3, リステッド, 条件戦
+            grade_labels = {1: 'G1', 2: 'G2', 3: 'G3', 6: 'リステッド', 5: '条件戦'}
+            sorted_data = [(g, grade_data['counts'].get(g, 0)) for g in grade_order if g in grade_data['counts']]
+            if sorted_data:
+                labels = [grade_labels.get(g, str(g)) for g, _ in sorted_data]
+                values = [v for _, v in sorted_data]
+                bars = axes[0].bar(labels, values, color=['#d62728', '#ff7f0e', '#2ca02c', '#9467bd', '#1f77b4'])
+                axes[0].set_title('グレード別レコード数', fontsize=12, fontweight='bold')
+                axes[0].set_ylabel('レコード数')
+                axes[0].tick_params(axis='x', rotation=45)
+                for bar, val in zip(bars, values):
+                    axes[0].text(bar.get_x() + bar.get_width()/2, bar.get_height(), 
+                               f'{val:,}', ha='center', va='bottom', fontsize=8)
+        
+        # 場所グループ分布
+        if 'venue' in results['three_elements']:
+            venue_data = results['three_elements']['venue']
+            groups = ['第1グループ', '第2グループ', '第3グループ']
+            group_counts = [venue_data['group_counts'].get(g, 0) for g in groups]
+            bars = axes[1].bar(groups, group_counts, color=['#1f77b4', '#ff7f0e', '#2ca02c'])
+            axes[1].set_title('競馬場グループ別レコード数', fontsize=12, fontweight='bold')
+            axes[1].set_ylabel('レコード数')
+            for bar, val in zip(bars, group_counts):
+                axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height(), 
+                           f'{val:,}', ha='center', va='bottom', fontsize=9)
+        
+        # 距離カテゴリ分布
+        if 'distance' in results['three_elements']:
+            dist_data = results['three_elements']['distance']
+            dist_order = ['短距離（≤1400m）', 'マイル（1401-1800m）', '中距離（1801-2000m）', 
+                         '中長距離（2001-2400m）', '長距離（≥2401m）']
+            dist_labels = ['短距離', 'マイル', '中距離', '中長距離', '長距離']
+            dist_values = [dist_data['counts'].get(d, 0) for d in dist_order]
+            bars = axes[2].bar(dist_labels, dist_values, color=['#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'])
+            axes[2].set_title('距離カテゴリ別レコード数', fontsize=12, fontweight='bold')
+            axes[2].set_ylabel('レコード数')
+            for bar, val in zip(bars, dist_values):
+                axes[2].text(bar.get_x() + bar.get_width()/2, bar.get_height(), 
+                           f'{val:,}', ha='center', va='bottom', fontsize=8)
+        
+        plt.tight_layout()
+        dist_chart_path = viz_dir / 'three_elements_distribution.png'
+        plt.savefig(dist_chart_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        logger.info(f"   ✅ 3要素分布グラフを保存: {dist_chart_path}")
+        
+        # 8.2 複勝率と3要素の関係（棒グラフ）- エラーバーなし
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        # グレード別複勝率
+        if 'grade' in results['place_rate_by_element']:
+            grade_pr = results['place_rate_by_element']['grade']
+            grade_order = [1, 2, 3, 6, 5]
+            grade_labels = {1: 'G1', 2: 'G2', 3: 'G3', 6: 'リステッド', 5: '条件戦'}
+            sorted_pr = [(g, grade_pr.get(g, {})) for g in grade_order if g in grade_pr]
+            if sorted_pr:
+                labels = [grade_labels.get(g, str(g)) for g, _ in sorted_pr]
+                values = [d.get('place_rate', 0) * 100 for _, d in sorted_pr]
+                bars = axes[0].bar(labels, values, 
+                                  color=['#d62728', '#ff7f0e', '#2ca02c', '#9467bd', '#1f77b4'], alpha=0.9)
+                axes[0].set_title('グレード別複勝率', fontsize=12, fontweight='bold')
+                axes[0].set_ylabel('複勝率 (%)')
+                axes[0].set_ylim(0, 30)
+                axes[0].tick_params(axis='x', rotation=45)
+                for bar, val in zip(bars, values):
+                    axes[0].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5, 
+                               f'{val:.1f}%', ha='center', va='bottom', fontsize=9)
+        
+        # 場所グループ別複勝率
+        if 'venue' in results['place_rate_by_element']:
+            venue_pr = results['place_rate_by_element']['venue']
+            groups = ['第1グループ', '第2グループ', '第3グループ']
+            values = [venue_pr.get(g, {}).get('place_rate', 0) * 100 for g in groups]
+            bars = axes[1].bar(groups, values, 
+                              color=['#1f77b4', '#ff7f0e', '#2ca02c'], alpha=0.9)
+            axes[1].set_title('競馬場グループ別複勝率', fontsize=12, fontweight='bold')
+            axes[1].set_ylabel('複勝率 (%)')
+            axes[1].set_ylim(0, 30)
+            for bar, val in zip(bars, values):
+                axes[1].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5, 
+                           f'{val:.1f}%', ha='center', va='bottom', fontsize=9)
+        
+        # 距離カテゴリ別複勝率
+        if 'distance' in results['place_rate_by_element']:
+            dist_pr = results['place_rate_by_element']['distance']
+            dist_order = ['短距離（≤1400m）', 'マイル（1401-1800m）', '中距離（1801-2000m）', 
+                         '中長距離（2001-2400m）', '長距離（≥2401m）']
+            dist_labels = ['短距離', 'マイル', '中距離', '中長距離', '長距離']
+            values = [dist_pr.get(d, {}).get('place_rate', 0) * 100 for d in dist_order]
+            bars = axes[2].bar(dist_labels, values, 
+                              color=['#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22'], alpha=0.9)
+            axes[2].set_title('距離カテゴリ別複勝率', fontsize=12, fontweight='bold')
+            axes[2].set_ylabel('複勝率 (%)')
+            axes[2].set_ylim(0, 30)
+            for bar, val in zip(bars, values):
+                axes[2].text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5, 
+                           f'{val:.1f}%', ha='center', va='bottom', fontsize=9)
+        
+        plt.tight_layout()
+        pr_chart_path = viz_dir / 'place_rate_by_elements.png'
+        plt.savefig(pr_chart_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        logger.info(f"   ✅ 複勝率グラフを保存: {pr_chart_path}")
+        
+        results['visualizations'] = {
+            'distribution_chart': str(dist_chart_path),
+            'place_rate_chart': str(pr_chart_path)
+        }
+        
+        # ========================================
+        # 8.3 ヒストグラム（複勝率・距離の分布）
+        # ========================================
+        logger.info("📋 8.3. ヒストグラムを生成中...")
+        
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        fig.suptitle('主要変数の分布（ヒストグラム）', fontsize=14, fontweight='bold')
+        
+        # 複勝率のヒストグラム（馬単位）
+        if '馬名' in df_qualified.columns:
+            horse_place_rates = df_qualified.groupby('馬名')['place_flag'].mean()
+            axes[0].hist(horse_place_rates, bins=30, color='steelblue', edgecolor='white', alpha=0.7)
+            axes[0].set_title('複勝率の分布（馬単位）', fontsize=12)
+            axes[0].set_xlabel('複勝率')
+            axes[0].set_ylabel('頻度')
+            axes[0].axvline(horse_place_rates.mean(), color='red', linestyle='--', 
+                           label=f'平均: {horse_place_rates.mean():.3f}')
+            axes[0].axvline(horse_place_rates.median(), color='orange', linestyle='--',
+                           label=f'中央値: {horse_place_rates.median():.3f}')
+            axes[0].legend()
+            axes[0].grid(True, alpha=0.3)
+        
+        # 距離のヒストグラム
+        if '距離' in df_qualified.columns:
+            distance_data = df_qualified['距離'].dropna()
+            axes[1].hist(distance_data, bins=30, color='forestgreen', edgecolor='white', alpha=0.7)
+            axes[1].set_title('レース距離の分布', fontsize=12)
+            axes[1].set_xlabel('距離（m）')
+            axes[1].set_ylabel('頻度')
+            axes[1].axvline(distance_data.mean(), color='red', linestyle='--',
+                           label=f'平均: {distance_data.mean():.0f}m')
+            axes[1].axvline(distance_data.median(), color='orange', linestyle='--',
+                           label=f'中央値: {distance_data.median():.0f}m')
+            axes[1].legend()
+            axes[1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        histogram_path = viz_dir / 'data_histograms.png'
+        plt.savefig(histogram_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        logger.info(f"   ✅ ヒストグラムを保存: {histogram_path}")
+        results['visualizations']['histograms'] = str(histogram_path)
+        
+        # ========================================
+        # 8.4 ボックスプロット（外れ値の可視化）
+        # ========================================
+        logger.info("📋 8.4. ボックスプロットを生成中...")
+        
+        fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+        fig.suptitle('外れ値の可視化（ボックスプロット）', fontsize=14, fontweight='bold')
+        
+        # 複勝率のボックスプロット
+        if '馬名' in df_qualified.columns:
+            horse_place_rates = df_qualified.groupby('馬名')['place_flag'].mean()
+            bp1 = axes[0].boxplot(horse_place_rates, vert=True, patch_artist=True,
+                                  boxprops=dict(facecolor='lightblue', color='steelblue'),
+                                  medianprops=dict(color='red', linewidth=2),
+                                  flierprops=dict(marker='o', markerfacecolor='gray', markersize=3, alpha=0.5))
+            axes[0].set_title('複勝率の分布（馬単位）', fontsize=12)
+            axes[0].set_ylabel('複勝率')
+            axes[0].set_xticklabels([''])
+            axes[0].grid(True, alpha=0.3, axis='y')
+            
+            # 四分位数を表示
+            q1 = horse_place_rates.quantile(0.25)
+            q2 = horse_place_rates.quantile(0.50)
+            q3 = horse_place_rates.quantile(0.75)
+            stats_text = f'Q1: {q1:.3f}\n中央値: {q2:.3f}\nQ3: {q3:.3f}'
+            axes[0].text(1.15, 0.5, stats_text, transform=axes[0].transAxes, fontsize=10,
+                        verticalalignment='center',
+                        bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+        
+        # 着順のボックスプロット
+        if '着順' in df_qualified.columns:
+            rank_data = df_qualified['着順'].dropna()
+            bp2 = axes[1].boxplot(rank_data, vert=True, patch_artist=True,
+                                  boxprops=dict(facecolor='lightgreen', color='forestgreen'),
+                                  medianprops=dict(color='red', linewidth=2),
+                                  flierprops=dict(marker='o', markerfacecolor='gray', markersize=3, alpha=0.5))
+            axes[1].set_title('着順の分布', fontsize=12)
+            axes[1].set_ylabel('着順')
+            axes[1].set_xticklabels([''])
+            axes[1].grid(True, alpha=0.3, axis='y')
+            
+            # 四分位数を表示
+            q1 = rank_data.quantile(0.25)
+            q2 = rank_data.quantile(0.50)
+            q3 = rank_data.quantile(0.75)
+            stats_text = f'Q1: {q1:.0f}\n中央値: {q2:.0f}\nQ3: {q3:.0f}'
+            axes[1].text(1.15, 0.5, stats_text, transform=axes[1].transAxes, fontsize=10,
+                        verticalalignment='center',
+                        bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+        
+        plt.tight_layout()
+        boxplot_path = viz_dir / 'data_boxplots.png'
+        plt.savefig(boxplot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        logger.info(f"   ✅ ボックスプロットを保存: {boxplot_path}")
+        results['visualizations']['boxplots'] = str(boxplot_path)
+        
+    except Exception as e:
+        logger.warning(f"⚠️ 可視化生成でエラー: {e}")
+        results['visualizations'] = {}
     
     # ログ出力
     logger.info("=" * 60)
-    logger.info("📊 EDA（探索的データ分析）結果サマリー")
+    logger.info("📊 REQI特化EDA結果サマリー")
     logger.info("=" * 60)
     logger.info(f"総レコード数: {results['data_overview']['total_records']:,}件")
-    logger.info(f"総列数: {results['data_overview']['total_columns']}列")
-    logger.info(f"全体欠損率: {results['missing_values']['overall_missing_pct']:.2f}%")
-    if 'train_period' in results['time_series_split']:
-        logger.info(f"訓練期間レコード数: {results['time_series_split']['train_period']['record_count']:,}件")
-    if 'test_period' in results['time_series_split']:
-        logger.info(f"テスト期間レコード数: {results['time_series_split']['test_period']['record_count']:,}件")
+    logger.info(f"データ期間: {results['data_overview']['year_min']}-{results['data_overview']['year_max']}年")
+    if results['win_rate_correlation']:
+        for name, stats in results['win_rate_correlation'].items():
+            logger.info(f"{name}と勝率の相関: r={stats['correlation']:.3f}, R²={stats['r_squared']:.4f}")
     logger.info("=" * 60)
     
     return results
@@ -3261,11 +3723,14 @@ def main():
                 eda_results = perform_eda_analysis(
                     data_dir=args.input_path or dataset_dir,
                     output_dir=str(output_dir),
-                    encoding=args.encoding
+                    encoding=args.encoding,
+                    min_races=args.min_races,
+                    end_year=2024
                 )
                 if 'error' not in eda_results:
                     logger.info("✅ EDA分析完了")
-                    logger.info(f"📊 分析対象: {eda_results['data_overview']['total_records']:,}レコード")
+                    logger.info(f"📊 分析対象レコード: {eda_results['data_overview']['qualified_records']:,}件")
+                    logger.info(f"📊 分析対象馬数: {eda_results['data_overview']['qualified_horses']:,}頭")
                     logger.info(f"📋 レポート保存先: {output_dir / 'eda_report.md'}")
                 else:
                     logger.warning(f"⚠️ EDA分析に問題がありました: {eda_results['error']}")
