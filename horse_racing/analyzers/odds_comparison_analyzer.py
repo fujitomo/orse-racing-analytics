@@ -1116,10 +1116,13 @@ class OddsComparisonAnalyzer:
             y = horse_df['place_rate'].values
             axes[0, 0].scatter(x, y, alpha=0.6, s=20)
             
-            # 回帰直線を追加
+            # 回帰直線を追加（データ範囲内のみ）
             z = np.polyfit(x, y, 1)
             p = np.poly1d(z)
-            axes[0, 0].plot(x, p(x), "r--", alpha=0.8, linewidth=2)
+            x_line = np.linspace(x.min(), x.max(), 100)
+            y_line = p(x_line)
+            axes[0, 0].plot(x_line, y_line, "r--", alpha=0.8, linewidth=2)
+            axes[0, 0].set_ylim(bottom=0)  # 複勝率は0以上
             
             axes[0, 0].set_xlabel('REQI（競走経験質指数）')
             axes[0, 0].set_ylabel('複勝率')
@@ -1131,10 +1134,13 @@ class OddsComparisonAnalyzer:
             y = horse_df['place_rate'].values
             axes[0, 1].scatter(x, y, alpha=0.6, s=20)
             
-            # 回帰直線を追加
+            # 回帰直線を追加（データ範囲内のみ）
             z = np.polyfit(x, y, 1)
             p = np.poly1d(z)
-            axes[0, 1].plot(x, p(x), "r--", alpha=0.8, linewidth=2)
+            x_line = np.linspace(x.min(), x.max(), 100)
+            y_line = p(x_line)
+            axes[0, 1].plot(x_line, y_line, "r--", alpha=0.8, linewidth=2)
+            axes[0, 1].set_ylim(bottom=0)  # 複勝率は0以上
             
             axes[0, 1].set_xlabel('最高REQI（競走経験質指数）')
             axes[0, 1].set_ylabel('複勝率')
@@ -1146,10 +1152,13 @@ class OddsComparisonAnalyzer:
             y = horse_df['place_rate'].values
             axes[1, 0].scatter(x, y, alpha=0.6, s=20)
             
-            # 回帰直線を追加
+            # 回帰直線を追加（データ範囲内のみ）
             z = np.polyfit(x, y, 1)
             p = np.poly1d(z)
-            axes[1, 0].plot(x, p(x), "r--", alpha=0.8, linewidth=2)
+            x_line = np.linspace(x.min(), x.max(), 100)
+            y_line = p(x_line)
+            axes[1, 0].plot(x_line, y_line, "r--", alpha=0.8, linewidth=2)
+            axes[1, 0].set_ylim(bottom=0)  # 複勝率は0以上
             
             axes[1, 0].set_xlabel('複勝オッズベース複勝率予測')
             axes[1, 0].set_ylabel('複勝率')
@@ -1161,10 +1170,13 @@ class OddsComparisonAnalyzer:
             y = horse_df['place_rate'].values
             axes[1, 1].scatter(x, y, alpha=0.6, s=20)
             
-            # 回帰直線を追加
+            # 回帰直線を追加（データ範囲内のみ）
             z = np.polyfit(x, y, 1)
             p = np.poly1d(z)
-            axes[1, 1].plot(x, p(x), "r--", alpha=0.8, linewidth=2)
+            x_line = np.linspace(x.min(), x.max(), 100)
+            y_line = p(x_line)
+            axes[1, 1].plot(x_line, y_line, "r--", alpha=0.8, linewidth=2)
+            axes[1, 1].set_ylim(bottom=0)  # 複勝率は0以上
             
             axes[1, 1].set_xlabel('単勝オッズベース勝率予測')
             axes[1, 1].set_ylabel('複勝率')

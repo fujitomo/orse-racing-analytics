@@ -1,5 +1,0 @@
-2025-12-20 15:12:33,493 - __main__ - ERROR - ❌ 入力値エラー: 'cp932' codec can't encode character '\U0001f3c1' in position 0: illegal multibyte sequence
-2025-12-20 15:12:33,493 - __main__ - ERROR - 💡 解決方法:
-2025-12-20 15:12:33,494 - __main__ - ERROR -    • パラメータの値が正しいか確認してください
-2025-12-20 15:12:33,494 - __main__ - ERROR -    • --help でオプションの詳細を確認できます
-2025-12-20 15:12:33,494 - __main__ - ERROR - 📝 ログファイル: results\grade_validation\logs\analyze_horse_REQI_20251220_151233.log

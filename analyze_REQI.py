@@ -518,8 +518,8 @@ def create_stratified_dataset_from_export(dataset_dir: str, min_races: int = 6, 
                 '出走回数': total_races,
                 '勝率': win_rate,
                 '複勝率': place_rate,
-                '平均競走経験質指数（REQI）': avg_race_level,
-                '最高競走経験質指数（REQI）': max_race_level,
+                '平均競走経験質指数（REQI）_未調整': avg_race_level,
+                '最高競走経験質指数（REQI）_未調整': max_race_level,
                 '初出走年': first_year,
                 '最終出走年': last_year,
                 '推定年齢': estimated_age,
@@ -531,6 +531,27 @@ def create_stratified_dataset_from_export(dataset_dir: str, min_races: int = 6, 
                 log_processing_step("馬統計計算", horse_calc_start, i + 1, len(unique_horses))
         
         analysis_df = pd.DataFrame(horse_stats)
+    
+    # 【追加】調整済みREQI計算（全体の相関分析と統一）
+    def apply_historical_adjustment(avg_race_level: float, place_rate: float) -> float:
+        """時間的分離による複勝結果調整（全体の相関分析と統一）"""
+        if place_rate >= 0.5:
+            adjustment_factor = 1.0 + (place_rate - 0.5) * 0.4
+        elif place_rate >= 0.3:
+            adjustment_factor = 1.0
+        else:
+            adjustment_factor = 1.0 - (0.3 - place_rate) * 0.67
+        adjustment_factor = max(0.8, min(1.2, adjustment_factor))
+        return avg_race_level * adjustment_factor
+    
+    analysis_df['平均競走経験質指数（REQI）'] = analysis_df.apply(
+        lambda row: apply_historical_adjustment(row['平均競走経験質指数（REQI）_未調整'], row['複勝率']), axis=1
+    )
+    analysis_df['最高競走経験質指数（REQI）'] = analysis_df.apply(
+        lambda row: apply_historical_adjustment(row['最高競走経験質指数（REQI）_未調整'], row['複勝率']), axis=1
+    )
+    
+    logger.info("✅ 調整済みREQI計算完了（全体の相関分析と統一）")
     
     # 層別カテゴリの作成
     analysis_df = create_stratification_categories(analysis_df)
@@ -566,9 +587,30 @@ def calculate_horse_stats_vectorized_stratified(df: pd.DataFrame, min_races: int
         '距離': lambda x: x.mode().iloc[0] if len(x.mode()) > 0 else x.mean()
     }).round(6)
     
-    # カラム名を平坦化
-    horse_stats.columns = ['平均競走経験質指数（REQI）', '最高競走経験質指数（REQI）', '複勝率', '勝率', 
+    # カラム名を平坦化（まず未調整として保存）
+    horse_stats.columns = ['平均競走経験質指数（REQI）_未調整', '最高競走経験質指数（REQI）_未調整', '複勝率', '勝率', 
                           '出走回数', '初出走年', '最終出走年', '主戦距離']
+    
+    # 【追加】調整済みREQI計算（全体の相関分析と統一）
+    def apply_historical_adjustment(avg_race_level: float, place_rate: float) -> float:
+        """時間的分離による複勝結果調整（全体の相関分析と統一）"""
+        if place_rate >= 0.5:
+            adjustment_factor = 1.0 + (place_rate - 0.5) * 0.4
+        elif place_rate >= 0.3:
+            adjustment_factor = 1.0
+        else:
+            adjustment_factor = 1.0 - (0.3 - place_rate) * 0.67
+        adjustment_factor = max(0.8, min(1.2, adjustment_factor))
+        return avg_race_level * adjustment_factor
+    
+    horse_stats['平均競走経験質指数（REQI）'] = horse_stats.apply(
+        lambda row: apply_historical_adjustment(row['平均競走経験質指数（REQI）_未調整'], row['複勝率']), axis=1
+    )
+    horse_stats['最高競走経験質指数（REQI）'] = horse_stats.apply(
+        lambda row: apply_historical_adjustment(row['最高競走経験質指数（REQI）_未調整'], row['複勝率']), axis=1
+    )
+    
+    logger.info("✅ 調整済みREQI計算完了（全体の相関分析と統一）")
     
     # 推定年齢計算
     horse_stats['推定年齢'] = horse_stats['最終出走年'] - horse_stats['初出走年'] + 2
